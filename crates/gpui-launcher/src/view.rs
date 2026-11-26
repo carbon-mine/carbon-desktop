@@ -751,6 +751,14 @@ impl Launcher {
                 )),
             )
         };
+        let visit = self.world_previews.latest(profile.id);
+        let has_map = visit.is_some_and(|visit| {
+            matches!(
+                visit.map,
+                carbon_profiles::world_preview::WorldMap::Drawable { .. }
+            )
+        });
+        let show_world = self.tab == Tab::Overview;
         let main = {
             let task = row()
                 .id("profile-task")
@@ -864,6 +872,9 @@ impl Launcher {
                 .px_5()
                 .py_4()
                 .gap_4()
+                .when(show_world && has_map, |panel| {
+                    panel.child(self.world_preview(profile, p))
+                })
                 .child(self.accessibility.focus_group(
                     task,
                     "instance-task",
@@ -871,6 +882,9 @@ impl Launcher {
                     Role::Group,
                     &self.task_focus,
                 ))
+                .when(show_world && !has_map, |panel| {
+                    panel.child(self.world_preview(profile, p))
+                })
                 .when_some(profile.imported_pack.as_ref(), |panel, pack| {
                     panel.child(
                         col()
@@ -1276,6 +1290,73 @@ impl Launcher {
                     Role::Heading,
                 ),
             )
+    }
+
+    fn world_preview(&self, profile: &Profile, p: Palette) -> AnyElement {
+        use carbon_profiles::world_preview::{Coverage, WorldMap};
+        use gpui::StyledImage;
+
+        let visit = self.world_previews.latest(profile.id);
+        let title = visit
+            .map_or("World map", |visit| visit.display_name.as_str())
+            .to_owned();
+        let message = match visit.map(|visit| &visit.map) {
+            None => "No verified world visit recorded for this instance.",
+            Some(WorldMap::NoCapture) => "No map capture is available for this destination.",
+            Some(WorldMap::Preparing) => "Preparing map…",
+            Some(WorldMap::Unsupported) => "This map format is unsupported.",
+            Some(WorldMap::Unreadable) => "The map data could not be read.",
+            Some(WorldMap::Drawable {
+                coverage: Coverage::Partial,
+                ..
+            }) => "Partial map coverage",
+            Some(WorldMap::Drawable {
+                coverage: Coverage::Complete,
+                ..
+            }) => "",
+        };
+        let mut panel = col()
+            .w_full()
+            .min_w_0()
+            .gap_1()
+            .child(self.accessibility.text(
+                div().font_semibold().child(title.clone()),
+                "world-map-title",
+                title,
+                Role::Heading,
+            ));
+        if let Some(visit) = visit {
+            let dimension = visit.key.dimension.clone();
+            panel = panel.child(self.accessibility.text(
+                div().text_xs().text_color(p.muted).child(dimension.clone()),
+                "world-map-dimension",
+                dimension,
+                Role::Label,
+            ));
+            if let WorldMap::Drawable { image, .. } = &visit.map {
+                let image = gpui::img(image.clone())
+                    .w_full()
+                    .h(px(152.))
+                    .object_fit(gpui::ObjectFit::Contain);
+                panel = panel.child(self.accessibility.text(
+                    image,
+                    "world-map-image",
+                    format!("Map of {}, {}", visit.display_name, visit.key.dimension),
+                    Role::Image,
+                ));
+            }
+        }
+        if !message.is_empty() {
+            panel = panel.child(self.accessibility.text(
+                div().text_sm().text_color(p.muted).child(message),
+                "world-map-status",
+                message,
+                Role::Status,
+            ));
+        }
+        self.accessibility
+            .group(panel, "world-map", "World map", Role::Group)
+            .into_any_element()
     }
 
     fn target_stack(
