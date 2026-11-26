@@ -1,0 +1,9 @@
+{
+  "id": "extra-scenic",
+  "family": "extra",
+  "name": "Additional scenic fixture",
+  "attribution": "Test fixture using the bundled Carbon scene.",
+  "poster": "riverside.jpg",
+  "frames": "riverside.frames",
+  "fps": 8
+}
