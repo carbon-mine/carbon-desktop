@@ -87,6 +87,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
     let (height, minimum_height) = match &kind {
         Kind::Profile(..) => (417., 340.),
         Kind::ImportPack(..) => (425., 340.),
+        Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
         Kind::Account(_) => (430., 280.),
         Kind::Notice { .. } => (190., 156.),
     };
@@ -274,6 +275,10 @@ impl Popup {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep the dialog button and its accessibility binding in sync."
+    )]
     fn control(
         &self,
         element: gpui_component::button::Button,

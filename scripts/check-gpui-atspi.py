@@ -32,7 +32,7 @@ def describe(root, path):
     return len(nodes)
 
 
-def run(executable, evidence, activate_x11):
+def run(executable, evidence, activate_x11, expect_unavailable_account=False):
     evidence.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="carbon-atspi-fixture-") as directory:
         private = Path(directory)
@@ -118,6 +118,22 @@ def run(executable, evidence, activate_x11):
         try:
             main = wait(lambda: window("Carbon Desktop"), "Carbon GPUI did not register a frame.")
             foreground("Carbon Desktop")
+            if expect_unavailable_account:
+                account = wait(lambda: named(main, "Microsoft account", "push button"),
+                               "Missing neutral account button for an unconfigured build.")
+                assert named(main, "Sign in with Microsoft", "push button") is None
+                activate(account)
+                dialog = wait(lambda: window("Minecraft account"), "Account frame missing.")
+                foreground("Minecraft account")
+                wait(lambda: named(dialog, "Microsoft sign-in unavailable", "heading"),
+                     "Account dialog did not explain unavailable sign-in.")
+                assert named(dialog, "Open Microsoft browser") is None
+                close = wait(lambda: named(dialog, "Close", "push button"),
+                             "Unavailable account dialog has no Close action.")
+                activate(close)
+                wait(lambda: window("Minecraft account") is None, "Account dialog did not close.")
+                foreground("Carbon Desktop")
+                print("PASS unconfigured account button, explanation, and Close.")
             search = wait(lambda: named(main, "Find an instance"), "Missing actual GPUI search.")
             main_count = describe(main, evidence / "linux-main-tree.json")
             assert main_count >= 100
@@ -174,6 +190,9 @@ if __name__ == "__main__":
     parser.add_argument("executable", type=Path)
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--activate-x11", action="store_true", help="Activate the disposable X11 fixture with xdotool")
+    parser.add_argument("--expect-unavailable-account", action="store_true",
+                        help="Check the account window in a build without a Microsoft registration")
     args = parser.parse_args()
     Atspi.init()
-    run(args.executable.resolve(), args.evidence.resolve(), args.activate_x11)
+    run(args.executable.resolve(), args.evidence.resolve(), args.activate_x11,
+        args.expect_unavailable_account)

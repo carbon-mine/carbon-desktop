@@ -13,8 +13,16 @@ python design-system/verify_seed.py
 bun install --frozen-lockfile
 bun run check
 bun run build
+cargo fmt --all -- --check
 cargo build --locked -p carbon-desktop -p carbon-desktop-gpui
 cargo test --locked --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 For disposable local review, run `target/debug/carbon-desktop --temporary-review --sample-vanilla --seed-review` or `target/debug/carbon-desktop-gpui --comparison-review`. Use the corresponding `.exe` on Windows. See the [GPUI runbook](gpui.md) for portable Windows shader builds and the [Linux runbook](linux-build.md) for Debian packaging.
+
+## Before merging
+
+Review the final diff and resolve findings on the pull request. A change to player-facing behavior requires a UI and interaction review. Exercise the affected journey in a disposable library at wide and narrow sizes. Inspect layout hierarchy, spacing, typography, active and focus states, native dialogs, keyboard navigation and error recovery. Check supported light and dark appearances where the change affects rendering. Record the build, affected edition, surfaces actually inspected and any unverified platform behavior. Attach representative screenshots when the UI changes. For a backend-only PR, identify which user-visible behavior was checked or why the change has no UI impact.
+
+Address actionable human, automated and independent review findings before merge. Run the required checks on the updated branch. The development workflow builds and tests without publishing packages. Release publication is a separate owner decision.

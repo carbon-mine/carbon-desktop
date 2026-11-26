@@ -12,69 +12,6 @@ pub struct AccountPanel {
     monitoring: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn active_account_identity_controls_verification_and_toolbar() {
-        let root = tempfile::tempdir().unwrap();
-        let mut panel = AccountPanel::new(root.path());
-        let active = Uuid::new_v4();
-        let other = Uuid::new_v4();
-        panel.snapshot.accounts = vec![
-            AccountSummary {
-                id: active,
-                name: "Forest".into(),
-                verified: false,
-            },
-            AccountSummary {
-                id: other,
-                name: "Coast".into(),
-                verified: true,
-            },
-        ];
-        panel.snapshot.active_account = Some(active);
-        panel.snapshot.state = AccountState::Error;
-        assert_eq!(panel.active_account().unwrap().name, "Forest");
-        assert!(
-            !panel.signed_in(),
-            "another saved account cannot verify the active identity"
-        );
-        assert_eq!(panel.toolbar_label(), "Minecraft account");
-        assert!(panel.can_add());
-        assert!(panel.can_check());
-        assert!(!panel.needs_poll());
-
-        panel.snapshot.active_account = Some(other);
-        panel.snapshot.state = AccountState::Starting;
-        assert!(panel.signed_in());
-        assert!(panel.pending());
-        assert!(
-            panel.needs_poll(),
-            "closing the dialog must not hide the eventual completion"
-        );
-        assert!(!panel.can_add());
-        assert!(!panel.can_check());
-
-        panel.snapshot.state = AccountState::Error;
-        panel.snapshot.removal_retry = Some(active);
-        assert!(
-            !panel.can_add(),
-            "an Add command must never stand in for a removal retry"
-        );
-        assert!(!panel.can_check());
-        assert!(panel.can_sign_out(active));
-        assert!(!panel.can_sign_out(other));
-
-        panel.snapshot.state = AccountState::Unavailable;
-        assert!(!panel.can_check());
-        panel.snapshot.active_account = Some(Uuid::new_v4());
-        assert!(panel.active_account().is_none());
-        assert!(!panel.signed_in());
-    }
-}
-
 impl AccountPanel {
     pub fn new(root: &Path) -> Self {
         let service = Accounts::new(root);
@@ -194,8 +131,14 @@ impl AccountPanel {
         )
     }
 
+    pub fn unavailable(&self) -> bool {
+        self.snapshot.state == AccountState::Unavailable
+    }
+
     pub fn toolbar_label(&self) -> &'static str {
-        if !self.snapshot.accounts.is_empty() || self.pending() {
+        if self.unavailable() {
+            "Microsoft account"
+        } else if !self.snapshot.accounts.is_empty() || self.pending() {
             "Minecraft account"
         } else {
             "Sign in with Microsoft"
@@ -211,9 +154,7 @@ impl AccountPanel {
     }
 
     pub fn can_check(&self) -> bool {
-        !self.pending()
-            && self.snapshot.state != AccountState::Unavailable
-            && self.snapshot.removal_retry.is_none()
+        !self.pending() && !self.unavailable() && self.snapshot.removal_retry.is_none()
     }
 
     pub fn can_sign_out(&self, id: Uuid) -> bool {
@@ -223,12 +164,83 @@ impl AccountPanel {
     }
 
     pub fn play_hint(&self) -> &'static str {
-        if self.signed_in() {
+        if self.unavailable() {
+            "Microsoft sign-in is unavailable in this build. Protected game launch is still in development."
+        } else if self.signed_in() {
             "This account is signed in. Protected game launch is still in development."
         } else if self.active_account().is_some() {
             "Verify the active Microsoft account. Protected game launch is still in development."
         } else {
             "Sign in with Microsoft to check this account. Protected game launch is still in development."
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_account_identity_controls_verification_and_toolbar() {
+        let root = tempfile::tempdir().unwrap();
+        let mut panel = AccountPanel::new(root.path());
+        let active = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        panel.snapshot.accounts = vec![
+            AccountSummary {
+                id: active,
+                name: "Forest".into(),
+                verified: false,
+            },
+            AccountSummary {
+                id: other,
+                name: "Coast".into(),
+                verified: true,
+            },
+        ];
+        panel.snapshot.active_account = Some(active);
+        panel.snapshot.state = AccountState::Error;
+        assert_eq!(panel.active_account().unwrap().name, "Forest");
+        assert!(
+            !panel.signed_in(),
+            "another saved account cannot verify the active identity"
+        );
+        assert_eq!(panel.toolbar_label(), "Minecraft account");
+        assert!(panel.can_add());
+        assert!(panel.can_check());
+        assert!(!panel.needs_poll());
+
+        panel.snapshot.active_account = Some(other);
+        panel.snapshot.state = AccountState::Starting;
+        assert!(panel.signed_in());
+        assert!(panel.pending());
+        assert!(
+            panel.needs_poll(),
+            "closing the dialog must not hide the eventual completion"
+        );
+        assert!(!panel.can_add());
+        assert!(!panel.can_check());
+
+        panel.snapshot.state = AccountState::Error;
+        panel.snapshot.removal_retry = Some(active);
+        assert!(
+            !panel.can_add(),
+            "an Add command must never stand in for a removal retry"
+        );
+        assert!(!panel.can_check());
+        assert!(panel.can_sign_out(active));
+        assert!(!panel.can_sign_out(other));
+
+        panel.snapshot.state = AccountState::Unavailable;
+        assert!(!panel.can_check());
+        assert_eq!(panel.toolbar_label(), "Microsoft account");
+        assert!(
+            panel
+                .play_hint()
+                .starts_with("Microsoft sign-in is unavailable")
+        );
+        panel.snapshot.active_account = Some(Uuid::new_v4());
+        assert!(panel.active_account().is_none());
+        assert!(!panel.signed_in());
     }
 }

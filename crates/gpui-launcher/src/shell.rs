@@ -148,10 +148,10 @@ impl Launcher {
             height: b.size.height.into(),
             maximized: matches!(status, WindowBounds::Maximized(_)),
         };
-        if pos.usable(&cx.displays().iter().map(|s| s.bounds()).collect::<Vec<_>>()) {
-            if let Err(error) = write(&self.root.path, "shell-placement.json", &pos) {
-                eprintln!("Could not save window placement: {error}");
-            }
+        if pos.usable(&cx.displays().iter().map(|s| s.bounds()).collect::<Vec<_>>())
+            && let Err(error) = write(&self.root.path, "shell-placement.json", &pos)
+        {
+            eprintln!("Could not save window placement: {error}");
         }
         true
     }

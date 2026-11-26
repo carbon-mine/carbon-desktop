@@ -167,6 +167,10 @@ impl Accessibility {
         Self(state)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep visual identity, accessibility state, and activation on one control."
+    )]
     pub fn button(
         &self,
         element: impl IntoElement,

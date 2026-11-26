@@ -9,3 +9,5 @@ List the commands or workflows exercised, the platform, and any untested behavio
 ## Review
 
 Identify changes to stored data, account handling, execution boundaries, dependencies or licences that deserve attention.
+
+For a player-facing change, summarize the independent visual and keyboard review of the final revision. Include the narrowest affected layout and the return from any native popup. For a backend-only change, identify the UI impact, if any.

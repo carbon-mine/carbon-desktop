@@ -221,12 +221,12 @@ impl Launcher {
         #[cfg(windows)]
         let native_menu = shell::NativeMenu::install(window, cx, preference);
         #[cfg(windows)]
-        let initial_message = native_menu
-            .as_ref()
-            .err()
-            .map(|err| format!("Application menus could not be attached: {err}"));
+        let initial_message = native_menu.as_ref().err().map_or_else(
+            || "No active tasks".to_owned(),
+            |err| format!("Application menus could not be attached: {err}"),
+        );
         #[cfg(not(windows))]
-        let initial_message: Option<String> = None;
+        let initial_message = "No active tasks".to_owned();
         let mut launcher = Self {
             accessibility: accessibility::Accessibility::new(window, cx, "Carbon Desktop".into()),
             root,
@@ -257,7 +257,7 @@ impl Launcher {
             fixture_task: None,
             last_activity: None,
             setup: HashMap::new(),
-            message: initial_message.unwrap_or_else(|| "No active tasks".to_owned()),
+            message: initial_message,
             readiness: Some(readiness),
         };
         if let Some(id) = personal {
@@ -1073,14 +1073,13 @@ impl Launcher {
                 let marker = format!("CARBON_LIBRARY_READY {}\n", began.elapsed().as_millis());
                 print!("{marker}");
                 let _ = std::io::stdout().flush();
-                if let Some(path) = destination {
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                if let Some(path) = destination
+                    && let Ok(mut file) = std::fs::OpenOptions::new()
                         .write(true)
                         .create_new(true)
                         .open(path)
-                    {
-                        let _ = file.write_all(marker.as_bytes());
-                    }
+                {
+                    let _ = file.write_all(marker.as_bytes());
                 }
             });
         }

@@ -33,6 +33,10 @@ fn command_row(p: Palette) -> gpui::Div {
 }
 
 impl Launcher {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A command binds styling, availability, and one action."
+    )]
     fn command<F>(
         &self,
         p: Palette,
@@ -72,6 +76,10 @@ impl Launcher {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The toolbar binds its independent icon, text, and command state in one call."
+    )]
     fn toolbar_command(
         &self,
         p: Palette,
@@ -328,6 +336,10 @@ impl Launcher {
             .into_any_element()
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Each rendered library row has distinct text, selection, icon, and action."
+    )]
     fn entry<F>(
         &self,
         id: String,
@@ -882,6 +894,8 @@ impl Launcher {
             "Pack requirements"
         } else if settled && !jdk_ready {
             "Java required"
+        } else if settled && self.account.read(cx).unavailable() {
+            "Sign-in unavailable"
         } else if settled && self.account.read(cx).signed_in() {
             "Launch unavailable"
         } else if settled && self.account.read(cx).active_account().is_some() {
