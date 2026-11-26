@@ -676,7 +676,7 @@ mod tests {
     }
 
     fn count<F: Fn(&[u8]) -> bool>(img: &[u8], f: F) -> usize {
-        img.chunks_exact(4).filter(|p| f(p)).count()
+        img.as_chunks::<4>().0.iter().filter(|p| f(*p)).count()
     }
 
     fn centroid<F: Fn(&[u8]) -> bool>(img: &[u8], side: usize, f: F) -> Option<(f32, f32)> {
@@ -882,7 +882,12 @@ mod tests {
     fn opaque_skin_has_hard_alpha_edges() {
         let skin = test_skin();
         let out = render(&skin, false, 25.0, 12.0, 192);
-        assert!(out.chunks_exact(4).all(|p| p[3] == 0 || p[3] == 255));
+        assert!(
+            out.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[3] == 0 || p[3] == 255)
+        );
     }
 
     #[test]
@@ -909,7 +914,7 @@ mod tests {
 
         let unique = |img: &[u8]| {
             let mut seen = std::collections::BTreeSet::new();
-            for p in img.chunks_exact(4) {
+            for p in img.as_chunks::<4>().0 {
                 if p[3] > 0 {
                     seen.insert((p[0], p[1], p[2]));
                 }
