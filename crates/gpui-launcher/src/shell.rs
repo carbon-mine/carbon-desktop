@@ -6,11 +6,20 @@ use gpui::{App, Bounds, Context, Window, WindowBounds, actions, point, px, size}
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::Path};
 
+#[cfg(not(windows))]
+mod fixed_platform;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]
 mod windows;
 mod work_area;
+
+pub fn configure_main_window(window: &mut Window) {
+    #[cfg(windows)]
+    windows::configure_fixed_window(window);
+    #[cfg(not(windows))]
+    fixed_platform::configure(window);
+}
 #[cfg(windows)]
 pub use windows::{NativeMenu, apply_frame, configure_renderer};
 #[cfg(not(windows))]
@@ -169,34 +178,53 @@ fn usable_placement(pos: &Placement, cx: &App) -> bool {
     pos.usable(&screens) || work_area::primary(cx).is_some_and(|work| pos.usable(&[work]))
 }
 
-pub fn initial_bounds(root: &Path, cx: &App) -> WindowBounds {
-    if let Some(pos) =
-        read::<Placement>(root, "shell-placement.json").filter(|p| usable_placement(p, cx))
-    {
-        let b = Bounds::new(
-            point(px(pos.x), px(pos.y)),
-            size(px(pos.width), px(pos.height)),
-        );
-        if pos.maximized {
-            WindowBounds::Maximized(b)
-        } else {
-            WindowBounds::Windowed(b)
+fn fixed_bounds(area: Bounds<gpui::Pixels>, saved: Option<&Placement>) -> Bounds<gpui::Pixels> {
+    let mut result = default_window(area);
+    if let Some(saved) = saved {
+        let origin = point(px(saved.x), px(saved.y));
+        if saved.x.is_finite() && saved.y.is_finite() && area.contains(&origin) {
+            let margin_x =
+                ((area.size.width - result.size.width) / 2.).min(px(NATIVE_FRAME_WIDTH / 2.));
+            let margin_y =
+                ((area.size.height - result.size.height) / 2.).min(px(NATIVE_FRAME_HEIGHT / 2.));
+            result.origin = point(
+                origin.x.clamp(
+                    area.left() + margin_x,
+                    area.right() - result.size.width - margin_x,
+                ),
+                origin.y.clamp(
+                    area.top() + margin_y,
+                    area.bottom() - result.size.height - margin_y,
+                ),
+            );
         }
-    } else {
-        // The native work area excludes reserved desktop space where reported.
-        // Compositor-managed sessions can supply only the display bounds.
-        WindowBounds::Windowed(
-            work_area::primary(cx)
-                .or_else(|| cx.primary_display().map(|display| display.bounds()))
-                .map(default_window)
-                .unwrap_or_else(|| {
-                    Bounds::new(
-                        point(px(0.), px(0.)),
-                        size(px(DEFAULT_CLIENT_WIDTH), px(DEFAULT_LAYOUT_HEIGHT)),
-                    )
-                }),
-        )
     }
+    result
+}
+
+pub fn initial_bounds(root: &Path, cx: &App) -> WindowBounds {
+    let saved = read::<Placement>(root, "shell-placement.json");
+    let primary = cx.primary_display().map(|display| display.bounds());
+    let chosen_display = saved.as_ref().and_then(|pos| {
+        cx.displays()
+            .into_iter()
+            .map(|display| display.bounds())
+            .find(|area| area.contains(&point(px(pos.x), px(pos.y))))
+    });
+    let area = if chosen_display.is_some() && chosen_display != primary {
+        chosen_display
+    } else {
+        work_area::primary(cx).or(primary)
+    };
+    let bounds = area
+        .map(|area| fixed_bounds(area, saved.as_ref()))
+        .unwrap_or_else(|| {
+            Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(DEFAULT_CLIENT_WIDTH), px(DEFAULT_LAYOUT_HEIGHT)),
+            )
+        });
+    WindowBounds::Windowed(bounds)
 }
 
 impl Launcher {
@@ -230,13 +258,15 @@ impl Launcher {
             return false;
         }
         let status = window.window_bounds();
-        let b = status.get_bounds();
+        let WindowBounds::Windowed(b) = status else {
+            return true;
+        };
         let pos = Placement {
             x: b.origin.x.into(),
             y: b.origin.y.into(),
             width: b.size.width.into(),
             height: b.size.height.into(),
-            maximized: matches!(status, WindowBounds::Maximized(_)),
+            maximized: false,
         };
         if usable_placement(&pos, cx)
             && let Err(error) = write(&self.root.path, "shell-placement.json", &pos)
@@ -302,6 +332,24 @@ mod tests {
 
     fn area(x: f32, y: f32, width: f32, height: f32) -> Bounds<gpui::Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn legacy_maximize_and_size_are_ignored_while_position_survives() {
+        let saved = Placement {
+            x: 110.,
+            y: 85.,
+            width: 600.,
+            height: 500.,
+            maximized: true,
+        };
+        let b = fixed_bounds(area(0., 0., 2560., 1440.), Some(&saved));
+        assert_eq!(b.origin, point(px(110.), px(85.)));
+        assert_eq!(b.size, size(px(1368.), px(808.)));
+        assert_eq!(
+            fixed_bounds(area(-800., 0., 800., 600.), Some(&saved)),
+            default_window(area(-800., 0., 800., 600.))
+        );
     }
 
     #[test]

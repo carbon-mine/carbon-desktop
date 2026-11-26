@@ -17,7 +17,7 @@ use carbon_vanilla::{GameFilePlan, GameFilesPrepared};
 use data::{Activity, DataRoot, Inspection, size_label};
 use gpui::{
     AnyWindowHandle, App, Application, Context, Entity, FocusHandle, KeyBinding, MouseButton,
-    TitlebarOptions, Window, WindowDecorations, WindowOptions, actions, prelude::*, px, size,
+    TitlebarOptions, Window, WindowDecorations, WindowOptions, actions, prelude::*, px,
 };
 use gpui_component::{Root, input::InputState};
 use std::{
@@ -1521,7 +1521,6 @@ fn main() -> anyhow::Result<()> {
         })
         .detach();
         let initial = shell::initial_bounds(&data.path, cx);
-        let extent = initial.get_bounds().size;
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
@@ -1529,10 +1528,8 @@ fn main() -> anyhow::Result<()> {
                     ..Default::default()
                 }),
                 window_bounds: Some(initial),
-                window_min_size: Some(size(
-                    px(380.).min(extent.width),
-                    px(420.).min(extent.height),
-                )),
+                is_resizable: false,
+                window_min_size: Some(initial.get_bounds().size),
                 window_decorations: Some(WindowDecorations::Server),
                 app_id: Some("dev.carbonmine.gpui".into()),
                 show: !cfg!(windows),
@@ -1540,6 +1537,7 @@ fn main() -> anyhow::Result<()> {
                 ..Default::default()
             },
             |window, cx| {
+                shell::configure_main_window(window);
                 popup::set_app_icon(window);
                 let view = cx.new(|cx| Launcher::new(data, (began, ready_file), window, cx));
                 let weak = view.downgrade();
