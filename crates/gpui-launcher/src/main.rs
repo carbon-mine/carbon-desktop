@@ -187,6 +187,8 @@ struct Launcher {
     tab_focus: [FocusHandle; 3],
     rail_width: f32,
     rail_drag: Option<RailDrag>,
+    world_previews:
+        carbon_profiles::world_preview::WorldPreviews<std::sync::Arc<gpui::RenderImage>>,
     targets: HashMap<Uuid, TargetsState>,
     search_back_to_detail: bool,
     review: bool,
@@ -325,6 +327,7 @@ impl Launcher {
             tab_focus: std::array::from_fn(|_| cx.focus_handle()),
             rail_width: RAIL_DEFAULT_WIDTH,
             rail_drag: None,
+            world_previews: Default::default(),
             targets: HashMap::new(),
             search_back_to_detail: false,
             review: false,
