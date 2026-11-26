@@ -42,3 +42,5 @@ Prism documents local icon packs and distinguishes icon themes from widget theme
 [Compact launch design](https://carbonpanel.atlassian.net/browse/CDESK-93) · [Local appearance packs](https://carbonpanel.atlassian.net/browse/CDESK-94) · [Icon source and picker](https://github.com/carbon-mine/carbon-desktop/pull/13)
 
 The owner selects the surface and controls at visual review. Production changes follow in separate reviewed native PRs.
+
+[Compare the current library, bounded library rail and Resume dashboard at two widths](layout-review.md).

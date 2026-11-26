@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Carbon Desktop — Layout Study</title>
+  <link rel="stylesheet" href="layout.css">
+</head>
+<body>
+  <svg class="icon-defs" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <symbol id="i-search" viewBox="0 0 16 16">
+        <circle cx="6.75" cy="6.75" r="4.15" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <path d="m10 10 3.25 3.25" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-play" viewBox="0 0 16 16">
+        <path d="M5 3.4 12.2 8 5 12.6Z" fill="currentColor"/>
+      </symbol>
+      <symbol id="i-pin" viewBox="0 0 16 16">
+        <path d="M6.2 2.5h3.6l-.4 3 1.7 1.6v.9H4.9v-.9l1.7-1.6Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        <path d="M8 8.1v5.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-pin-filled" viewBox="0 0 16 16">
+        <path d="M6.2 2.5h3.6l-.4 3 1.7 1.6v.9H4.9v-.9l1.7-1.6Z" fill="currentColor"/>
+        <path d="M8 8.1v5.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-x" viewBox="0 0 16 16">
+        <path d="m4.2 4.2 7.6 7.6M11.8 4.2l-7.6 7.6" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-map" viewBox="0 0 16 16">
+        <path d="M2.2 3.5 6 2l4 1.5L13.8 2v10.5L10 14l-4-1.5-3.8 1.5Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
+        <path d="M6 2v10.5M10 3.5V14" fill="none" stroke="currentColor" stroke-width="1.25"/>
+      </symbol>
+      <symbol id="i-folder" viewBox="0 0 16 16">
+        <path d="M2.4 4.4h4l1.2 1.5h5.9v5.8H2.4Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="i-server" viewBox="0 0 16 16">
+        <rect x="2.5" y="3" width="11" height="4.2" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <rect x="2.5" y="8.8" width="11" height="4.2" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M5 5.1h.01M5 10.9h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-expand" viewBox="0 0 16 16">
+        <path d="M6.2 2.5H2.5v3.7M9.8 2.5h3.7v3.7M6.2 13.5H2.5V9.8M9.8 13.5h3.7V9.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      </symbol>
+      <symbol id="i-person" viewBox="0 0 16 16">
+        <circle cx="8" cy="5.4" r="2.6" fill="none" stroke="currentColor" stroke-width="1.25"/>
+        <path d="M3.4 13c.5-2.5 2.2-4 4.6-4s4.1 1.5 4.6 4" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <header class="study-bar">
+    <div class="study-title">
+      <span class="study-mark" aria-hidden="true"></span>
+      <div>
+        <h1>Carbon Desktop</h1>
+        <p>Layout study · local simulation only</p>
+      </div>
+    </div>
+    <div class="study-controls">
+      <div class="control-group">
+        <span class="control-label">Layout</span>
+        <div class="segmented" role="group" aria-label="Layout proposal">
+          <button type="button" data-layout-option="a" aria-pressed="true">A · Left rail</button>
+          <button type="button" data-layout-option="b" aria-pressed="false">B · Resume</button>
+          <button type="button" data-layout-option="both" aria-pressed="false">Compare</button>
+        </div>
+      </div>
+      <div class="control-group">
+        <span class="control-label">Viewport</span>
+        <div class="segmented" role="group" aria-label="Study viewport">
+          <button type="button" data-width-option="1040" aria-pressed="true">1040 × 760</button>
+          <button type="button" data-width-option="735" aria-pressed="false">735 × 760</button>
+        </div>
+      </div>
+      <button type="button" class="study-reset" data-reset>Reset</button>
+    </div>
+  </header>
+
+  <main class="study-stage" id="study-stage">
+    <div class="storyboard" data-storyboard>
+      <section class="story-frame" data-concept="a" data-active="true">
+        <div class="frame-caption">
+          <span class="frame-name">A · Left rail</span>
+          <span class="frame-size" data-frame-size="a">1040 × 760</span>
+        </div>
+        <div class="frame-viewport" data-frame-viewport="a">
+          <div class="app-frame" data-variant="a" data-pane="instances" tabindex="-1" style="width:1040px;height:760px">
+            <div class="app-shell" data-shell="a">
+              <header class="titlebar">
+                <div class="brand">
+                  <span class="app-mark" aria-hidden="true">C</span>
+                  <span class="app-name">Carbon Desktop</span>
+                </div>
+                <div class="titlebar-tail">
+                  <div class="account" title="Local account">
+                    <span class="avatar" aria-hidden="true">AR</span>
+                    <span class="account-name">A. Rowan</span>
+                  </div>
+                  <div class="window-controls" aria-hidden="true">
+                    <span class="window-button window-minimize"></span>
+                    <span class="window-button window-maximize"></span>
+                    <span class="window-button window-close"></span>
+                  </div>
+                </div>
+              </header>
+
+              <div class="pane-switch" data-pane-switch="a">
+                <div class="pane-tabs" role="group" aria-label="Window pane">
+                  <button type="button" data-pane-choice="instances" aria-pressed="true">Instances</button>
+                  <button type="button" data-pane-choice="detail" aria-pressed="false">Detail</button>
+                </div>
+                <span class="pane-context" data-pane-context="a">Timberline Trail</span>
+              </div>
+
+              <div class="workspace">
+                <aside class="rail" data-rail="a" aria-label="Instance library">
+                  <div class="rail-head">
+                    <div class="rail-heading">
+                      <h2>Local instances</h2>
+                      <span class="count" data-rail-count="a" aria-live="polite">100</span>
+                    </div>
+                    <div class="search-field" data-search-wrap="a">
+                      <svg class="icon search-icon" aria-hidden="true"><use href="#i-search"></use></svg>
+                      <input type="search" data-search="a" placeholder="Find an instance" aria-label="Find an instance" aria-keyshortcuts="Control+F" autocomplete="off" spellcheck="false">
+                      <span class="key-hint" data-key-hint="a">Ctrl F</span>
+                      <button type="button" class="search-clear" data-clear="a" aria-label="Clear instance search" hidden>
+                        <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="rail-scroll" data-list-scroll="a">
+                    <ul class="instance-list" data-list="a" id="a-instance-list" aria-label="Instances"></ul>
+                  </div>
+                  <div class="rail-resizer" data-resizer="a" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize instance library" aria-controls="a-instance-list" aria-valuemin="190" aria-valuemax="290" aria-valuenow="236" title="Drag or use arrow keys to resize"></div>
+                </aside>
+
+                <main class="detail" data-detail="a">
+                  <header class="detail-head">
+                    <span class="art-tile art-large" data-art-tile="a">
+                      <img data-art-img="a" alt="" draggable="false">
+                    </span>
+                    <div class="detail-identity">
+                      <h2 data-instance-name="a" tabindex="-1">Timberline Trail</h2>
+                      <p data-instance-meta="a"></p>
+                    </div>
+                    <div class="detail-actions">
+                      <button type="button" class="icon-btn pin-button" data-pin="a" aria-pressed="true" aria-label="Unpin Timberline Trail" title="Unpin Timberline Trail">
+                        <svg class="icon" aria-hidden="true"><use href="#i-pin-filled"></use></svg>
+                      </button>
+                      <button type="button" class="btn-primary play-button" data-play="a">
+                        <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>
+                        <span>Play</span>
+                      </button>
+                    </div>
+                  </header>
+
+                  <div class="detail-body">
+                    <section class="panel map-panel">
+                      <header class="panel-head map-head">
+                        <div class="panel-title-group">
+                          <span class="section-label">Latest world</span>
+                          <h3 data-map-title="a">Alder Reach</h3>
+                        </div>
+                        <button type="button" class="btn-quiet map-open" data-open-map="a">
+                          <svg class="icon" aria-hidden="true"><use href="#i-map"></use></svg>
+                          <span>Open map</span>
+                        </button>
+                      </header>
+                      <div class="map-stage" data-map-stage="a">
+                        <img class="map-image" data-map-img="a" alt="" hidden draggable="false">
+                        <div class="map-empty" data-map-empty="a" hidden>
+                          <svg class="icon empty-icon" aria-hidden="true"><use href="#i-map"></use></svg>
+                          <p data-map-empty-title="a">No map captured</p>
+                          <span data-map-empty-sub="a">World maps appear after a local session.</span>
+                        </div>
+                        <div class="map-shade" aria-hidden="true"></div>
+                        <div class="map-caption" data-map-caption="a">
+                          <span data-map-recent="a">Last played 2h ago</span>
+                          <span class="dot" aria-hidden="true">·</span>
+                          <span data-map-size="a">418 MB</span>
+                        </div>
+                      </div>
+                    </section>
+
+                    <aside class="side-stack">
+                      <section class="panel worlds-panel">
+                        <header class="panel-head">
+                          <h3>Local worlds</h3>
+                          <span class="count" data-world-count="a">4</span>
+                        </header>
+                        <ul class="world-list" data-worlds="a"></ul>
+                      </section>
+
+                      <section class="panel servers-panel">
+                        <header class="panel-head">
+                          <h3>Saved servers</h3>
+                          <span class="count" data-server-count="a">1</span>
+                        </header>
+                        <ul class="server-list" data-servers="a"></ul>
+                      </section>
+
+                      <section class="panel meta-panel">
+                        <header class="panel-head">
+                          <h3>Instance</h3>
+                        </header>
+                        <dl class="meta-list">
+                          <div><dt>Runtime</dt><dd data-runtime="a"></dd></div>
+                          <div><dt>Last played</dt><dd data-last-played="a"></dd></div>
+                        </dl>
+                      </section>
+                    </aside>
+                  </div>
+                </main>
+              </div>
+
+              <footer class="statusbar">
+                <span class="status-left"><span class="status-dot" aria-hidden="true"></span>Ready</span>
+                <span class="status-note">No active tasks</span>
+                <span class="status-right" data-status="a">100 instances · 4 pinned</span>
+              </footer>
+            </div>
+
+            <div class="modal-layer" data-modal="map" hidden>
+              <div class="modal-backdrop" data-modal-dismiss></div>
+              <section class="modal map-modal" role="dialog" aria-modal="true" aria-labelledby="a-map-dialog-title">
+                <header class="modal-head">
+                  <div class="modal-heading">
+                    <span class="modal-kicker">Map preview · no launch</span>
+                    <h2 id="a-map-dialog-title" data-map-dialog-title>Alder Reach</h2>
+                    <p data-map-dialog-sub>Timberline Trail</p>
+                  </div>
+                  <button type="button" class="icon-btn" data-modal-dismiss aria-label="Close map preview">
+                    <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+                  </button>
+                </header>
+                <div class="modal-map">
+                  <img data-map-dialog-img alt="World map preview">
+                </div>
+                <footer class="modal-foot">
+                  <p>Preview only. The game is not started.</p>
+                  <button type="button" class="btn-secondary" data-modal-return>Return to latest world</button>
+                </footer>
+              </section>
+            </div>
+
+            <div class="modal-layer" data-modal="action" hidden>
+              <div class="modal-backdrop" data-modal-dismiss></div>
+              <section class="modal action-modal" role="dialog" aria-modal="true" aria-labelledby="a-action-dialog-title">
+                <header class="modal-head">
+                  <div class="modal-heading">
+                    <span class="modal-kicker">Simulation only</span>
+                    <h2 id="a-action-dialog-title" data-action-title>Play requested</h2>
+                    <p data-action-sub>No process starts in this layout study.</p>
+                  </div>
+                  <button type="button" class="icon-btn" data-modal-dismiss aria-label="Close result">
+                    <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+                  </button>
+                </header>
+                <div class="action-body">
+                  <dl class="target-list" data-target-list></dl>
+                </div>
+                <footer class="modal-foot modal-foot-end">
+                  <button type="button" class="btn-primary" data-modal-return data-action-return>Return to instance</button>
+                </footer>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="story-frame" data-concept="b" data-active="false" hidden>
+        <div class="frame-caption">
+          <span class="frame-name">B · Resume</span>
+          <span class="frame-size" data-frame-size="b">1040 × 760</span>
+        </div>
+        <div class="frame-viewport" data-frame-viewport="b">
+          <div class="app-frame" data-variant="b" data-pane="home" tabindex="-1" style="width:1040px;height:760px">
+            <div class="app-shell" data-shell="b">
+              <header class="titlebar">
+                <div class="brand">
+                  <span class="app-mark" aria-hidden="true">C</span>
+                  <span class="app-name">Carbon Desktop</span>
+                </div>
+                <div class="titlebar-tail">
+                  <div class="account" title="Local account">
+                    <span class="avatar" aria-hidden="true">AR</span>
+                    <span class="account-name">A. Rowan</span>
+                  </div>
+                  <div class="window-controls" aria-hidden="true">
+                    <span class="window-button window-minimize"></span>
+                    <span class="window-button window-maximize"></span>
+                    <span class="window-button window-close"></span>
+                  </div>
+                </div>
+              </header>
+
+              <div class="pane-switch" data-pane-switch="b">
+                <div class="pane-tabs" role="group" aria-label="Window pane">
+                  <button type="button" data-pane-choice="home" aria-pressed="true">Resume</button>
+                  <button type="button" data-pane-choice="library" aria-pressed="false">Library</button>
+                </div>
+                <span class="pane-context" data-pane-context="b">Timberline Trail</span>
+              </div>
+
+              <div class="resume-page">
+                <div class="resume-grid">
+                  <div class="resume-stack">
+                    <header class="page-head">
+                      <h1>Resume</h1>
+                    </header>
+
+                    <section class="panel hero" data-hero="b">
+                      <div class="hero-copy">
+                        <div class="hero-top">
+                          <span class="art-tile art-hero" data-art-tile="b">
+                            <img data-art-img="b" alt="" draggable="false">
+                          </span>
+                          <span class="hero-instance" data-hero-instance="b">Timberline Trail</span>
+                          <button type="button" class="icon-btn pin-button" data-pin="b" aria-pressed="true" aria-label="Unpin Timberline Trail" title="Unpin Timberline Trail">
+                            <svg class="icon" aria-hidden="true"><use href="#i-pin-filled"></use></svg>
+                          </button>
+                        </div>
+                        <div class="hero-title">
+                          <span class="section-label">Latest world</span>
+                          <h2 data-hero-world="b">Alder Reach</h2>
+                        </div>
+                        <p class="hero-meta" data-hero-meta="b"></p>
+                        <div class="hero-actions">
+                          <button type="button" class="btn-primary resume-button" data-play="b">
+                            <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>
+                            <span data-play-label="b">Resume</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div class="hero-map">
+                        <img class="hero-map-image" data-hero-map-img="b" alt="" hidden draggable="false">
+                        <div class="hero-map-empty" data-hero-map-empty="b" hidden>
+                          <svg class="icon" aria-hidden="true"><use href="#i-map"></use></svg>
+                          <p data-hero-map-empty-title="b">No map captured</p>
+                          <span data-hero-map-empty-sub="b">The world is available without a captured map.</span>
+                        </div>
+                        <div class="hero-map-shade" aria-hidden="true"></div>
+                        <button type="button" class="map-chip" data-open-map="b">
+                          <svg class="icon" aria-hidden="true"><use href="#i-expand"></use></svg>
+                          <span>Map preview</span>
+                        </button>
+                      </div>
+                    </section>
+
+                    <section class="panel pins-panel">
+                      <header class="panel-head">
+                        <h3>Pinned</h3>
+                        <span class="count" data-pin-count="b">4</span>
+                      </header>
+                      <ul class="pin-list" data-pins="b"></ul>
+                    </section>
+                  </div>
+
+                  <aside class="panel library-panel" aria-label="Instance library">
+                    <header class="library-head">
+                      <div class="rail-heading">
+                        <h2>Library</h2>
+                        <span class="count" data-library-total="b">100</span>
+                      </div>
+                      <div class="search-field" data-search-wrap="b">
+                        <svg class="icon search-icon" aria-hidden="true"><use href="#i-search"></use></svg>
+                        <input type="search" data-search="b" placeholder="Search the library" aria-label="Search the library" aria-keyshortcuts="Control+F" autocomplete="off" spellcheck="false">
+                        <span class="key-hint" data-key-hint="b">Ctrl F</span>
+                        <button type="button" class="search-clear" data-clear="b" aria-label="Clear library search" hidden>
+                          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+                        </button>
+                      </div>
+                    </header>
+                    <div class="library-scroll" data-list-scroll="b">
+                      <ul class="library-list" data-list="b" id="b-library-list" aria-label="Library instances"></ul>
+                    </div>
+                    <footer class="library-foot">
+                      <span data-library-count="b" aria-live="polite">100 instances</span>
+                    </footer>
+                  </aside>
+                </div>
+              </div>
+
+              <footer class="statusbar">
+                <span class="status-left"><span class="status-dot" aria-hidden="true"></span>Ready</span>
+                <span class="status-note">No active tasks</span>
+                <span class="status-right" data-status="b">4 pinned · 100 instances</span>
+              </footer>
+            </div>
+
+            <div class="modal-layer" data-modal="map" hidden>
+              <div class="modal-backdrop" data-modal-dismiss></div>
+              <section class="modal map-modal" role="dialog" aria-modal="true" aria-labelledby="b-map-dialog-title">
+                <header class="modal-head">
+                  <div class="modal-heading">
+                    <span class="modal-kicker">Map preview · no launch</span>
+                    <h2 id="b-map-dialog-title" data-map-dialog-title>Alder Reach</h2>
+                    <p data-map-dialog-sub>Timberline Trail</p>
+                  </div>
+                  <button type="button" class="icon-btn" data-modal-dismiss aria-label="Close map preview">
+                    <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+                  </button>
+                </header>
+                <div class="modal-map">
+                  <img data-map-dialog-img alt="World map preview">
+                </div>
+                <footer class="modal-foot">
+                  <p>Preview only. The game is not started.</p>
+                  <button type="button" class="btn-secondary" data-modal-return>Return to latest world</button>
+                </footer>
+              </section>
+            </div>
+
+            <div class="modal-layer" data-modal="action" hidden>
+              <div class="modal-backdrop" data-modal-dismiss></div>
+              <section class="modal action-modal" role="dialog" aria-modal="true" aria-labelledby="b-action-dialog-title">
+                <header class="modal-head">
+                  <div class="modal-heading">
+                    <span class="modal-kicker">Simulation only</span>
+                    <h2 id="b-action-dialog-title" data-action-title>Resume requested</h2>
+                    <p data-action-sub>No process starts in this layout study.</p>
+                  </div>
+                  <button type="button" class="icon-btn" data-modal-dismiss aria-label="Close result">
+                    <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+                  </button>
+                </header>
+                <div class="action-body">
+                  <dl class="target-list" data-target-list></dl>
+                </div>
+                <footer class="modal-foot modal-foot-end">
+                  <button type="button" class="btn-primary" data-modal-return data-action-return>Return to dashboard</button>
+                </footer>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="study-foot">
+    <span>Viewports are study probes, not official product dimensions.</span>
+    <span><kbd>Ctrl F</kbd> full library · <kbd>Esc</kbd> returns focus · no network or launch.</span>
+  </footer>
+
+  <script src="layout.js"></script>
+</body>
+</html>
