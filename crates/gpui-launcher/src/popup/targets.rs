@@ -181,11 +181,6 @@ impl Popup {
         let Some(dialog) = &mut self.targets else {
             return;
         };
-        if let TargetAction::Select(key) = &action
-            && key == &dialog.snapshot.selected
-        {
-            return;
-        }
         self.error = None;
         dialog.message = None;
         let restore = dialog.cancel_edit() || matches!(&action, TargetAction::RemoveDestination(_));
@@ -371,7 +366,7 @@ impl Popup {
                             .child(self.target_command(
                                 SharedString::from(format!("edit-{id}")),
                                 "Edit",
-                                &format!("Edit {}", server.name),
+                                &format!("Edit {} at {address}", server.name),
                                 false,
                                 cx,
                                 move |this, window, cx| this.edit_destination(Some(id), window, cx),
@@ -379,7 +374,7 @@ impl Popup {
                             .child(self.target_command(
                                 SharedString::from(format!("copy-{id}")),
                                 "Copy address",
-                                &format!("Copy address for {}", server.name),
+                                &format!("Copy address for {} at {address}", server.name),
                                 false,
                                 cx,
                                 move |this, _, cx| this.copy_destination(id, cx),
@@ -387,7 +382,7 @@ impl Popup {
                             .child(self.target_command(
                                 SharedString::from(format!("remove-{id}")),
                                 "Remove",
-                                &format!("Remove {}", server.name),
+                                &format!("Remove {} at {address}", server.name),
                                 false,
                                 cx,
                                 move |this, window, cx| {

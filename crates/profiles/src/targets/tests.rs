@@ -72,6 +72,18 @@ fn mixed_targets_and_selection_remain_private_across_reloads_and_binding_changes
     let first_server = both.destinations[0].id;
     let second_server = both.destinations[1].id;
     assert_ne!(first_server, second_server);
+    // A selection that looked unchanged in a stale chooser must still check the revision.
+    assert!(change_instance_targets(
+        &root,
+        first,
+        first_entry.revision,
+        TargetAction::Select(None)
+    )
+    .is_err());
+    let confirmed =
+        change_instance_targets(&root, first, both.revision, TargetAction::Select(None)).unwrap();
+    assert_eq!(confirmed.revision, both.revision);
+
     assert!(change_instance_targets(
         &root,
         first,
