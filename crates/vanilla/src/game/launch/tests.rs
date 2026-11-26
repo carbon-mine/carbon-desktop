@@ -21,6 +21,7 @@ fn profile(version: VanillaVersion) -> Profile {
         window_width: 1280,
         window_height: 720,
         imported_pack: None,
+        server_address: None,
     }
 }
 

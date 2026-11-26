@@ -1,7 +1,11 @@
 //! Personal vanilla launch preferences. Profile display names never become paths.
 mod folder;
+mod server;
 mod storage;
 pub use folder::open_game_folder;
+pub use server::{
+    server_profile, set_server_address, ServerAddress, ServerBindingUpdate, ServerJoinReadiness,
+};
 #[cfg(test)]
 mod tests;
 
@@ -58,6 +62,8 @@ pub struct ImportedPack {
 pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_pack: Option<ImportedPack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_address: Option<ServerAddress>,
     pub id: Uuid,
     pub name: String,
     pub version: VanillaVersion,
@@ -173,6 +179,7 @@ impl Library {
                 window_height,
             } => Profile {
                 imported_pack: None,
+                server_address: None,
                 id: Uuid::new_v4(),
                 name,
                 version,
@@ -188,6 +195,7 @@ impl Library {
             ProfileAction::Clone { id, name } => Profile {
                 id: Uuid::new_v4(),
                 name,
+                server_address: None,
                 ..self.profiles[self.position(id)?].clone()
             },
             ProfileAction::Edit(mut edited) => {
@@ -200,6 +208,7 @@ impl Library {
                     );
                 }
                 edited.imported_pack.clone_from(&original.imported_pack);
+                edited.server_address.clone_from(&original.server_address);
                 edited.normalize_input()?;
                 self.profiles[index] = edited;
                 return Ok(());
@@ -244,6 +253,7 @@ pub fn seed_review_library(root: &Path, comparison: bool) -> Result<(), String> 
         };
         library.profiles.push(Profile {
             imported_pack: None,
+            server_address: None,
             id,
             name: if index == 0 {
                 "Vanilla survival".into()
@@ -314,6 +324,7 @@ pub fn import_instance(
         id,
         name: pack.name.clone(),
         imported_pack: Some(pack),
+        server_address: None,
         version,
         memory_mib: 2048,
         window_width: 1280,

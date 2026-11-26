@@ -1085,6 +1085,71 @@ impl Launcher {
         popup::open(self, popup::Kind::Profile(mode, profile), window, cx);
     }
 
+    fn server_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy() || self.popup.is_some() || self.profile_issue.is_some() {
+            return;
+        }
+        let Some(id) = self.selected_profile().map(|profile| profile.id) else {
+            return;
+        };
+        match carbon_profiles::server_profile(&self.root.path, id) {
+            Ok(profile) => popup::open(self, popup::Kind::Server(profile), window, cx),
+            Err(error) => {
+                self.message = error;
+                self.last_activity = Some(ActivityTarget::Personal(id));
+                cx.notify();
+            }
+        }
+    }
+
+    fn refresh_server_binding(&mut self, updated: Profile) {
+        if let Some(current) = self
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == updated.id)
+        {
+            current.server_address = updated.server_address;
+        }
+    }
+
+    fn server_saved(
+        &mut self,
+        updated: carbon_profiles::ServerBindingUpdate,
+        cx: &mut Context<Self>,
+    ) {
+        self.message = updated.message().into();
+        self.last_activity = Some(ActivityTarget::Personal(updated.profile.id));
+        self.refresh_server_binding(updated.profile);
+        cx.notify();
+    }
+
+    fn copy_server(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_profile() else {
+            return;
+        };
+        let id = profile.id;
+        let Some(address) = profile.server_address.clone() else {
+            return;
+        };
+        match carbon_profiles::server_profile(&self.root.path, id) {
+            Ok(profile) if profile.server_address.as_ref() == Some(&address) => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(address.to_string()));
+                self.message = "Server address copy requested.".into();
+            }
+            Ok(profile) => {
+                self.message = if profile.server_address.is_some() {
+                    "The server address changed. Review the updated address before copying.".into()
+                } else {
+                    "The server address was removed in another window.".into()
+                };
+                self.refresh_server_binding(profile);
+            }
+            Err(error) => self.message = error,
+        }
+        self.last_activity = Some(ActivityTarget::Personal(id));
+        cx.notify();
+    }
+
     fn set_profiles(&mut self, profiles: Vec<Profile>, id: Uuid, cx: &mut Context<Self>) {
         self.setup.remove(&id);
         self.profiles = profiles;
