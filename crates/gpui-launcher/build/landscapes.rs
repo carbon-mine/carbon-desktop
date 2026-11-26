@@ -110,11 +110,11 @@ pub fn generate(root: &Path, output: PathBuf, fixture: Option<&Path>) -> Result<
         }
         let poster = asset(root, &view.poster)?;
         let (motion, rate) = match (&view.frames, view.fps) {
-            (Some(file), Some(fps @ 1..=30)) => (format!("Some({})", asset(root, file)?), fps),
+            (Some(file), Some(fps @ 1..=60)) => (format!("Some({})", asset(root, file)?), fps),
             (None, None) => ("None".to_owned(), 0),
             _ => {
                 return Err(format!(
-                    "Expected motion frames with 1-30 fps, or a still poster, for {}",
+                    "Expected motion frames with 1-60 fps, or a still poster, for {}",
                     view.id
                 ));
             }
