@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Process and low-box helpers follow the repository-owned M1 isolation probe.
+mod job;
+
 use std::{
     ffi::{OsStr, OsString},
     io::{self, Error},
@@ -325,18 +327,7 @@ pub(super) fn launch(
     ])?;
     let env = environment(own)?;
     unsafe {
-        let job = Handle(CreateJobObjectW(null(), null()));
-        win(i32::from(!job.0.is_null()))?;
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags =
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-        limits.BasicLimitInformation.ActiveProcessLimit = 1;
-        win(SetInformationJobObject(
-            job.0,
-            JobObjectExtendedLimitInformation,
-            std::ptr::from_ref(&limits).cast(),
-            size_of_val(&limits) as u32,
-        ))?;
+        let job = job::create(1)?;
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid,
             ..Default::default()
@@ -378,16 +369,30 @@ pub(super) fn launch(
         });
         if let Err(error) = verified {
             // Terminate the suspended process explicitly if any pre-resume check fails.
-            TerminateProcess(process.0, 1);
+            win(TerminateProcess(process.0, 1))?;
+            job::stop_and_drain(&job)?;
             return Err(error);
         }
         if ResumeThread(thread.0) == u32::MAX {
-            return Err(Error::last_os_error());
+            let error = Error::last_os_error();
+            job::stop_and_drain(&job)?;
+            return Err(error);
         }
         let deadline = if smoke { 30_000 } else { 30 * 60_000 };
-        if WaitForSingleObject(process.0, deadline) != WAIT_OBJECT_0 {
-            return Err(Error::other("The fixed Java session did not exit in time"));
+        let wait = WaitForSingleObject(process.0, deadline);
+        if wait != WAIT_OBJECT_0 {
+            let error = if wait == WAIT_TIMEOUT {
+                Error::new(
+                    io::ErrorKind::TimedOut,
+                    "The fixed Java session did not exit in time",
+                )
+            } else {
+                Error::last_os_error()
+            };
+            job::stop_and_drain(&job)?;
+            return Err(error);
         }
+        job::wait_empty(&job, job::DRAIN_TIMEOUT)?;
         let mut exit = 0;
         win(GetExitCodeProcess(process.0, &mut exit))?;
         if exit != 0 {
