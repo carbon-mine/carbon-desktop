@@ -4,6 +4,8 @@ The current Windows development candidate opens personal instances in a split de
 
 ## Current standalone setup candidate
 
+The Windows x64 Java sample now checks its private job's active process count before reporting completion. The native regression test starts two independent process trees with fixed test programs. Both parents exit while their children remain alive. Stopping the first job twice leaves the second child running, and allowing the second child to finish drains its job. Run `cargo test --locked -p carbon-session` on Windows x64 to repeat the check. The Java sample retains its one-process limit. Production game supervision, recovery after launcher failure, and interactive close handling remain open. [Windows job accounting](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information)
+
 Local app commit `f1bf9a2` includes the profile compatibility checkpoint `a5e6551` and content preparation checkpoint `fe039f0`. These are unsigned development packages using the Rust debug profile and production Svelte bundle. From the checkout, launch the Windows review copy with an independent temporary library:
 
 ```powershell
