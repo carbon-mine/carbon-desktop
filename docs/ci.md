@@ -1,6 +1,6 @@
 # Desktop CI
 
-The [Desktop CI workflow](../.github/workflows/desktop-ci.yml) builds and tests Svelte/Tauri and GPUI for pull requests targeting `main` and pushes to `main`. **Desktop CI Gate** is the single branch protection check. It requires every native platform job to succeed. [Standard GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+The [Desktop CI workflow](../.github/workflows/desktop-ci.yml) builds and tests GPUI and the shared Rust services for pull requests targeting `main` and pushes to `main`. **Desktop CI Gate** is the single branch protection check. It requires every native platform job to succeed. [Standard GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 
 | Platform | Native runner | Rust target |
 | --- | --- | --- |
@@ -11,36 +11,20 @@ The [Desktop CI workflow](../.github/workflows/desktop-ci.yml) builds and tests 
 | macOS Intel | `macos-15-intel` | `x86_64-apple-darwin` |
 | macOS Apple Silicon | `macos-15` | `aarch64-apple-darwin` |
 
-Each job verifies the runner, Rust host, Node and Bun architectures. It checks the inherited design seed, installs from `bun.lock`, checks and builds the renderer, builds both native executables with `Cargo.lock` and runs the workspace tests, formatting and strict Clippy. Tauri embeds the freshly built `dist/`. CI runs both editions without a Microsoft application registration. Opt-in provider and vault tests, graphical walkthroughs, signed packaging and native play have separate verification.
+Each job verifies the runner and Rust host architecture, the design seed and Cargo.lock. It builds GPUI, runs the workspace tests and checks formatting and strict Clippy. Windows jobs install a matching fixture JDK. macOS uses Xcode with the Metal compiler. Linux installs the native window, font, Vulkan and desktop service libraries listed in the workflow.
 
-## Reproduce locally
+## Local checks
 
-The Windows x64 job also runs the built Svelte interface in headless Microsoft Edge. A disposable bridge fixture exercises install review, cancellation and retry, offline file verification, native-dialog requests, keyboard focus and narrow-window reflow in both themes. Native dialog contents, GPUI rendering and game execution require their own checks. To repeat this renderer check on Windows x64, build the frontend, install the pinned wheels in a Python virtual environment, and run:
-
-```powershell
-python -m pip install --only-binary=:all: --require-hashes -r scripts/renderer-ci-requirements.txt
-python scripts/test-profile-renderer.py --directory dist --channel msedge
-python scripts/check-tauri-account-renderer.py --channel msedge
-```
-
-Use the native Rust, Node and Bun versions in the workflow. Python 3 runs the design seed verifier. CI verifies the SHA-256 for each architecture’s Bun archive. [Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
-
-- **Windows** requires the MSVC build tools for the host architecture and the Windows SDK. The Windows fixture compiler requires a native JDK capable of `javac --release 17`. CI uses Temurin for x64 and a checksum-pinned Microsoft Build of OpenJDK for ARM64. Tauri also uses WebView2. [Microsoft OpenJDK](https://learn.microsoft.com/en-us/java/openjdk/download) · [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-- **Ubuntu** requires the development packages in the workflow, including GTK, WebKitGTK, OpenSSL, D-Bus, Wayland, XKB, XCB and Vulkan. Running GPUI interactively also requires a suitable graphical session.
-- **macOS** requires full Xcode, the selected macOS SDK, Clang and Metal command-line tools, and CMake. CI uses Xcode 16.4 on both architectures. For local Xcode versions that ship Metal separately, install the Metal toolchain before building GPUI. [Apple Metal toolchain setup](https://developer.apple.com/documentation/xcode/downloading-and-installing-additional-xcode-components)
-
-```text
+```sh
 python design-system/verify_seed.py
-bun install --frozen-lockfile
-bun run check
-bun run build
 cargo fmt --all -- --check
-cargo build --locked -p carbon-desktop -p carbon-desktop-gpui
+cargo build --locked -p carbon-desktop-gpui
 cargo test --locked --workspace
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo run --locked -p carbon-desktop-gpui -- --comparison-review
 ```
 
-For disposable local review, run `target/debug/carbon-desktop --temporary-review --sample-vanilla --seed-review` or `target/debug/carbon-desktop-gpui --comparison-review`. Use the corresponding `.exe` on Windows. See the [GPUI runbook](gpui.md) for portable Windows shader builds and the [Linux runbook](linux-build.md) for Debian packaging.
+Use the disposable library for visual and keyboard checks. Native play, OS credential stores and interactive accessibility require their own verification. The [GPUI guide](gpui.md) documents host setup and development runs.
 
 ## Before merging
 
