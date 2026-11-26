@@ -256,7 +256,6 @@ dd { overflow-wrap: anywhere }
 .readiness { margin-block-start: 0.45rem; padding-inline-start: 0.9rem; border-inline-start: 2px solid var(--desktop-control-line) }
 .readiness h4 { width: fit-content; font-size: 1.02rem; font-weight: 650 }
 .task-error { color: var(--foreground); border-inline-start: 3px solid; padding-inline-start: 0.7rem }
-.task-copy progress { display: block; width: 100%; max-width: 28rem; margin-block: 0.65rem 0.25rem; accent-color: var(--desktop-action) }
 .task-copy .technical { font-size: 0.8rem }
 .advanced-setup { margin-block-start: 0.65rem }
 .advanced-setup summary { width: fit-content; min-block-size: 2.25rem; padding-block: 0.4rem; color: var(--desktop-muted); font-size: 0.91rem; font-weight: 500 }
