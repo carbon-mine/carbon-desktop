@@ -30,7 +30,13 @@ On an Intel Core i9-12900HK, a release build using rustc 1.99.1 decoded the firs
 | Zune RGBA output, swap red/blue in place | 210 | 2.168 ms | 3.555 ms |
 | Zune BGRA output | 210 | 2.590 ms | 3.883 ms |
 
-Repeat with the exact pinned dependencies and `cargo run --release`. Open each `.frames` file, take frames zero and `count / 2` from its offset table, and decode them in sorted filename order. For the Zune paths use `JpegDecoder::new_with_options(ZCursor::new(bytes), DecoderOptions::default().jpeg_set_out_colorspace(mode)).decode()`. Swap channels zero and two for each RGBA pixel. Rotate path order by `(path + repetition + frame_index) % 3`. Measure allocation, decode and swizzle with `Instant`; consume the output with `black_box` after stopping the timer. Repeat on ARM64 before choosing a common default.
+From the repository root, run the three-path comparison in [scenery.rs](../../crates/gpui-launcher/src/scenery.rs) against the bundled sequences for that checkout.
+
+```sh
+cargo test --release --locked -p carbon-desktop-gpui --lib scenery::tests::compare_bundled_decode_paths -- --exact --ignored --nocapture
+```
+
+The test checks matching pixels and opaque alpha during warmup, then prints the sample count, median and 95th percentile for each decoder path. The hosted `report_bundled_decode_timing` test separately measures the launcher’s selected decoder across more frames per sequence.
 
 ## Evidence for an animation change
 

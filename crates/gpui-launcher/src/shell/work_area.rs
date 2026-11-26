@@ -1,0 +1,202 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Authoritative monitor work areas in GPUI logical pixels.
+//!
+//! GPUI 0.2 reports a display's full rectangle. Windows keeps the usable area
+//! separately in `MONITORINFO::rcWork`, macOS exposes `NSScreen::visibleFrame`,
+//! and X11 publishes `_NET_WORKAREA`. Query those here so the launcher geometry
+//! in `shell` stays platform independent.
+
+#[cfg(windows)]
+pub(super) fn primary(_cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+    use windows::Win32::{
+        Foundation::POINT,
+        Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint},
+        UI::{
+            HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
+            WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI,
+        },
+    };
+
+    // Match GPUI's monitor choice for a window that has no display id.
+    let monitor = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
+    if monitor.is_invalid() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, std::ptr::from_mut(&mut info)) }.as_bool() {
+        return None;
+    }
+    let (mut dpi_x, mut dpi_y) = (0, 0);
+    unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }.ok()?;
+    if dpi_x == 0 || dpi_x != dpi_y {
+        return None;
+    }
+    let scale = dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32;
+    super::windows_placement_area(
+        (info.rcMonitor.left, info.rcMonitor.top),
+        [
+            info.rcWork.left,
+            info.rcWork.top,
+            info.rcWork.right,
+            info.rcWork.bottom,
+        ],
+        scale,
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+    use gpui::{Bounds, point, px, size};
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSScreen;
+
+    // NSScreen is main-thread-only. AppKit uses a bottom-left origin while
+    // GPUI display coordinates start at the top-left, so flip the Y axis.
+    let mtm = MainThreadMarker::new()?;
+    let screen = NSScreen::screens(mtm).firstObject()?;
+    let frame = screen.frame();
+    let visible = screen.visibleFrame();
+    let display = cx.primary_display()?.bounds();
+
+    let left = visible.origin.x - frame.origin.x;
+    let top = frame.size.height - (visible.origin.y - frame.origin.y) - visible.size.height;
+    let width = visible.size.width;
+    let height = visible.size.height;
+    if !(left.is_finite() && top.is_finite() && width.is_finite() && height.is_finite())
+        || width <= 0.0
+        || height <= 0.0
+    {
+        return None;
+    }
+
+    let work_area = Bounds::new(
+        point(px(left as f32), px(top as f32)),
+        size(px(width as f32), px(height as f32)),
+    );
+    intersect(work_area, display)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+    use gpui::{Bounds, point, px, size};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::randr::ConnectionExt;
+
+    // On Wayland the X root may belong to XWayland and describe a layout that
+    // does not match the compositor's logical coordinates. Fall back instead.
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|kind| kind.eq_ignore_ascii_case("wayland"))
+    {
+        return None;
+    }
+
+    let display = cx.primary_display()?.bounds();
+    let display_width = f32::from(display.size.width);
+    let display_height = f32::from(display.size.height);
+    if display_width <= 0.0 || display_height <= 0.0 {
+        return None;
+    }
+
+    let (connection, screen_num) = x11rb::connect(None).ok()?;
+    let screen = connection.setup().roots.get(screen_num)?;
+    let screen_width = screen.width_in_pixels;
+    let screen_height = screen.height_in_pixels;
+
+    // GPUI 0.2's X11 display is the whole root window divided by one scale
+    // factor. Recover that factor from the same rectangle instead of guessing
+    // from Xft.dpi, RandR or the environment.
+    let scale = screen_width as f32 / display_width;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    if ((screen_height as f32 / display_height) - scale).abs() > 0.01 {
+        return None;
+    }
+
+    // A single X root can span several outputs. Prefer the primary RandR
+    // monitor, or the first active monitor if the WM has not named a primary.
+    let root = screen.root;
+    let monitors = connection
+        .randr_get_monitors(root, true)
+        .ok()
+        .and_then(|r| r.reply().ok());
+    let monitor = monitors
+        .as_ref()
+        .and_then(|r| {
+            r.monitors
+                .iter()
+                .filter(|m| m.width > 0 && m.height > 0)
+                .max_by_key(|m| (m.primary, m.x == 0 && m.y == 0))
+        })
+        .and_then(|m| {
+            intersect(
+                Bounds::new(
+                    point(px(f32::from(m.x) / scale), px(f32::from(m.y) / scale)),
+                    size(
+                        px(f32::from(m.width) / scale),
+                        px(f32::from(m.height) / scale),
+                    ),
+                ),
+                display,
+            )
+        })
+        .unwrap_or(display);
+    let work_area = x11_desktop_area(&connection, root, scale);
+    Some(
+        work_area
+            .and_then(|area| intersect(area, monitor))
+            .unwrap_or(monitor),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn x11_desktop_area(
+    connection: &x11rb::rust_connection::RustConnection,
+    root: u32,
+    scale: f32,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    use gpui::{Bounds, point, px, size};
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+
+    let cardinals = |name: &[u8], offset: u32, len: u32| -> Option<Vec<u32>> {
+        let atom = connection.intern_atom(true, name).ok()?.reply().ok()?.atom;
+        if atom == 0 {
+            return None;
+        }
+        let prop = connection
+            .get_property(false, root, atom, AtomEnum::CARDINAL, offset, len)
+            .ok()?
+            .reply()
+            .ok()?;
+        if prop.type_ != u32::from(AtomEnum::CARDINAL) {
+            return None;
+        }
+        Some(prop.value32()?.collect())
+    };
+    let desktop = *cardinals(b"_NET_CURRENT_DESKTOP", 0, 1)?.first()?;
+    let rect: [u32; 4] = cardinals(b"_NET_WORKAREA", desktop.checked_mul(4)?, 4)?
+        .try_into()
+        .ok()?;
+    Some(Bounds::new(
+        point(px(rect[0] as f32 / scale), px(rect[1] as f32 / scale)),
+        size(px(rect[2] as f32 / scale), px(rect[3] as f32 / scale)),
+    ))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn intersect(
+    a: gpui::Bounds<gpui::Pixels>,
+    b: gpui::Bounds<gpui::Pixels>,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    a.intersects(&b).then(|| a.intersect(&b))
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+pub(super) fn primary(_cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+    // GPUI exposes no work area on other platforms. The caller falls back to
+    // the primary display rectangle with a conservative frame inset.
+    None
+}
