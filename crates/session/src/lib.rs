@@ -4,8 +4,13 @@ use serde::Serialize;
 use std::{fmt, io, path::Path};
 use uuid::Uuid;
 
+#[cfg(any(test, all(windows, target_arch = "x86_64")))]
+mod reservation;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod windows;
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub mod windows_state;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +24,7 @@ pub enum SessionError {
     Unsupported,
     RuntimeNotReady,
     Busy,
+    RecoveryRequired,
     InvalidProfile,
     Data(io::Error),
     Isolation(io::Error),
@@ -30,6 +36,7 @@ impl fmt::Display for SessionError {
             Self::Unsupported => "This build does not include the protected Java test window.",
             Self::RuntimeNotReady => "Prepare the matching managed Java before opening the protected test window.",
             Self::Busy => "This profile already has a protected test or Java preparation in progress.",
+            Self::RecoveryRequired => "A previous protected test could not confirm its processes stopped. This profile cannot start another protected test until recovery confirms it.",
             Self::InvalidProfile => "The profile cannot store a disposable test save.",
             Self::Data(_) => "Could not read or write the disposable test save. Check local app storage.",
             Self::Isolation(_) => "Carbon could not complete the protected Java test. No unprotected session was opened.",

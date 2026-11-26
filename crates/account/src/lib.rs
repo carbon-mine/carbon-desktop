@@ -1,6 +1,7 @@
 //! Microsoft account verification and independent synthetic entitlement fixtures.
 pub mod desktop;
 mod device;
+pub mod play;
 mod transport;
 mod vault;
 

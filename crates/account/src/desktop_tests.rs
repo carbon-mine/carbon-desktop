@@ -9,6 +9,8 @@ const CLIENT: Uuid = Uuid::from_u128(1);
 fn isolated() -> Accounts {
     Accounts {
         owner: Arc::new(Owner(Arc::new(Core {
+            subject: Arc::new(()),
+            registration: Some(CLIENT),
             state: Mutex::new(State::new()),
             changed: Condvar::new(),
         }))),
@@ -308,7 +310,7 @@ fn retry_removal_is_explicit_and_signout_has_no_cancel_action() {
     );
     {
         let mut state = core.state();
-        state.retry_remove = Some(FOREST);
+        state.retry_removals.insert(FOREST);
         state.finish(AccountState::Error, "secure storage unavailable");
     }
     assert_eq!(accounts.snapshot().removal_retry, Some(FOREST));
@@ -321,4 +323,125 @@ fn retry_removal_is_explicit_and_signout_has_no_cancel_action() {
     assert!(!accounts.snapshot().cancellable);
     remove(core, removing, FOREST, None);
     assert!(accounts.snapshot().removal_retry.is_none());
+}
+
+#[test]
+fn failed_vault_removals_preserve_denials_and_block_only_affected_slots() {
+    let root = tempfile::tempdir().unwrap();
+    let credentials = MemoryCredentials::default();
+    let vault = credentials.vault(root.path(), CLIENT);
+    let accounts = isolated();
+    let core = &accounts.owner.0;
+    let mode = PlayMode::OfflineSinglePlayer;
+    for id in [COAST, FOREST] {
+        accounts.begin();
+        add(
+            core,
+            ticket(&accounts, Job::Add),
+            synthetic(id, "fixture"),
+            Some(&vault),
+        );
+    }
+    accounts.refresh_selected();
+    verify(
+        core,
+        ticket(&accounts, Job::Refresh(FOREST)),
+        FOREST,
+        Some(&vault),
+        |_| Err(AccountError::NotEntitled),
+    );
+    accounts.sign_out_account(FOREST);
+    remove(core, ticket(&accounts, Job::Remove(FOREST)), FOREST, None);
+    assert_eq!(accounts.play_blocker(mode), PlayBlocker::EntitlementDenied);
+
+    accounts.switch(COAST);
+    select_current(
+        core,
+        ticket(&accounts, Job::Switch(COAST)),
+        COAST,
+        Some(&vault),
+    );
+    assert_eq!(
+        accounts.play_blocker(mode),
+        PlayBlocker::OfflinePolicyUnavailable
+    );
+    accounts.sign_out_account(COAST);
+    remove(core, ticket(&accounts, Job::Remove(COAST)), COAST, None);
+    assert_eq!(
+        accounts.play_blocker(mode),
+        PlayBlocker::AccountRemovalPending
+    );
+    assert_eq!(accounts.snapshot().removal_retry, Some(COAST));
+    accounts.sign_out_account(COAST);
+    remove(
+        core,
+        ticket(&accounts, Job::Remove(COAST)),
+        COAST,
+        Some(&vault),
+    );
+    assert_eq!(accounts.snapshot().removal_retry, Some(FOREST));
+    assert_eq!(accounts.play_blocker(mode), PlayBlocker::EntitlementDenied);
+}
+
+#[test]
+fn play_blocker_uses_real_service_state_and_remembers_definitive_entitlement_denial() {
+    let accounts = isolated();
+    let core = &accounts.owner.0;
+    let mode = PlayMode::OfflineSinglePlayer;
+    assert_eq!(
+        accounts.play_blocker(mode),
+        PlayBlocker::AccountSelectionRequired
+    );
+
+    accounts.begin();
+    assert_eq!(
+        accounts.play_blocker(mode),
+        PlayBlocker::AccountChangePending
+    );
+    add(
+        core,
+        ticket(&accounts, Job::Add),
+        synthetic(FOREST, "forest"),
+        None,
+    );
+    assert_eq!(
+        accounts.play_blocker(mode),
+        PlayBlocker::OfflinePolicyUnavailable
+    );
+    assert_eq!(
+        accounts.prepare_launch(mode, None).err(),
+        Some(PlayBlocker::OfflinePolicyUnavailable)
+    );
+
+    accounts.refresh_selected();
+    verify(
+        core,
+        ticket(&accounts, Job::Refresh(FOREST)),
+        FOREST,
+        None,
+        |_| Err(AccountError::NotEntitled),
+    );
+    assert_eq!(accounts.play_blocker(mode), PlayBlocker::EntitlementDenied);
+    accounts.refresh_selected();
+    verify(
+        core,
+        ticket(&accounts, Job::Refresh(FOREST)),
+        FOREST,
+        None,
+        |_| Err(AccountError::TemporarilyUnavailable),
+    );
+    assert_eq!(accounts.play_blocker(mode), PlayBlocker::EntitlementDenied);
+
+    accounts.refresh_selected();
+    verify(
+        core,
+        ticket(&accounts, Job::Refresh(FOREST)),
+        FOREST,
+        None,
+        |_| Ok(synthetic(FOREST, "updated")),
+    );
+    assert_eq!(
+        accounts.play_blocker(mode),
+        PlayBlocker::OfflinePolicyUnavailable
+    );
 }
