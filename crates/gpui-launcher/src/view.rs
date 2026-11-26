@@ -1300,9 +1300,27 @@ impl Launcher {
                 // The native target chooser exposes the complete lists. Keep the
                 // overview inexpensive during resizes even for a full saves directory.
                 const PREVIEW_ROWS: usize = 3;
-                let panel = |title, total, empty, rows: Vec<(String, String, String)>| {
-                    let mut panel = self.side_panel(p, title, Some(total));
-                    if total == 0 {
+                let panel = |title,
+                             total,
+                             empty,
+                             issue: Option<&String>,
+                             rows: Vec<(String, String, String)>| {
+                    let mut panel = self.side_panel(p, title, issue.is_none().then_some(total));
+                    if let Some(issue) = issue {
+                        panel = panel.child(
+                            self.accessibility.text(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_sm()
+                                    .text_color(p.muted)
+                                    .child(issue.clone()),
+                                format!("issue-{title}"),
+                                issue.clone(),
+                                Role::Label,
+                            ),
+                        );
+                    } else if total == 0 {
                         panel = panel.child(
                             self.accessibility.text(
                                 div()
@@ -1372,6 +1390,7 @@ impl Launcher {
                     "Local worlds",
                     snapshot.worlds.len(),
                     "No local worlds yet.",
+                    snapshot.world_issue.as_ref(),
                     snapshot
                         .worlds
                         .iter()
@@ -1397,6 +1416,7 @@ impl Launcher {
                     "Saved servers",
                     snapshot.destinations.len(),
                     "No saved servers yet.",
+                    None,
                     snapshot
                         .destinations
                         .iter()
