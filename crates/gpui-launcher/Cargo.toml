@@ -18,6 +18,7 @@ carbon-setup = { path = "../setup" }
 carbon-runtime = { path = "../runtime" }
 carbon-vanilla = { path = "../vanilla" }
 gpui = "=0.2.2"
+image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }
 gpui-component = "=0.5.1"
 tempfile = "3"
 uuid = "1"
@@ -44,4 +45,6 @@ futures = "0.3"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
 
 [build-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 embed-resource = "3"
