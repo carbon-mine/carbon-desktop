@@ -40,6 +40,8 @@
 
 Use a stable Rust toolchain. On Windows, install the MSVC C++ build tools and Windows SDK. A JDK with `javac` is optional at build time and enables the protected Java sample. On Linux, use a graphical session with Vulkan support and install the C toolchain, `pkg-config`, and OpenSSL, fontconfig, FreeType, XCB, and XKB development libraries.
 
+On macOS, install Xcode with its Metal compiler and CMake. The [CI guide](docs/ci.md) lists the native prerequisites and toolchain versions for each target.
+
 From this repository, run:
 
 ```sh
@@ -63,7 +65,7 @@ bun run tauri dev
 
 Carbon Desktop is a development preview. Vanilla setup and offline verification are available. The Play action leads to setup and account requirements. Protected Minecraft launch, authenticated multiplayer, and full mod-loader installation are still in development. Microsoft sign-in requires an approved application registration.
 
-The project targets x64 and ARM64 on all three operating systems. Native gameplay, account storage, and installer behavior require separate checks for each target.
+The project targets x64 and ARM64 on all three operating systems. The current managed JDKs and private game installations support Windows x64 and Linux x64. macOS and ARM64 are build targets while their runtime setup and gameplay are in development. See the [CI matrix](docs/ci.md) and [runtime qualification](docs/runtime.md).
 
 The [GPUI application](crates/gpui-launcher) is the primary desktop frontend. The [Svelte interface](src) and [Tauri shell](src-tauri) remain available for comparison. Shared Rust code owns [profiles](crates/profiles), [Java runtime preparation](crates/runtime), [vanilla installation](crates/vanilla), and [pack import](crates/pack).
 
