@@ -1659,7 +1659,7 @@ fn detail_row(label: &'static str, status: String, p: Palette) -> gpui::Div {
         .border_t_1()
         .border_color(p.stroke)
         .text_sm()
-        .child(div().w(px(112.)).flex_none().font_semibold().child(label))
+        .child(div().w(px(132.)).flex_none().font_semibold().child(label))
         .child(div().min_w_0().flex_1().text_color(p.muted).child(status))
 }
 
