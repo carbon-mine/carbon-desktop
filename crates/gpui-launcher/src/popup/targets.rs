@@ -13,6 +13,7 @@ pub(super) struct TargetDialog {
 }
 
 struct TargetForm {
+    revision: Option<Uuid>,
     name: Entity<InputState>,
     kind: EditKind,
 }
@@ -74,6 +75,7 @@ impl Popup {
         }
         name.update(cx, |input, cx| input.focus(window, cx));
         targets.form = Some(TargetForm {
+            revision: targets.snapshot.revision,
             name,
             kind: EditKind::Destination(id, address),
         });
@@ -113,6 +115,7 @@ impl Popup {
         .detach();
         name.update(cx, |input, cx| input.focus(window, cx));
         targets.form = Some(TargetForm {
+            revision: targets.snapshot.revision,
             name,
             kind: EditKind::WorldLabel(directory.to_owned()),
         });
@@ -163,7 +166,9 @@ impl Popup {
             }
         };
         match result {
-            Ok((action, message)) => self.change_targets(action, message, window, cx),
+            Ok((action, message)) => {
+                self.change_targets(form.revision, action, message, window, cx)
+            }
             Err(error) => {
                 self.error = Some(error);
                 cx.notify();
@@ -173,6 +178,7 @@ impl Popup {
 
     fn change_targets(
         &mut self,
+        revision: Option<Uuid>,
         action: TargetAction,
         message: &'static str,
         window: &mut Window,
@@ -181,15 +187,20 @@ impl Popup {
         let Some(dialog) = &mut self.targets else {
             return;
         };
+        if dialog.editing()
+            && matches!(
+                action,
+                TargetAction::Select(_)
+                    | TargetAction::RemoveDestination(_)
+                    | TargetAction::ForgetMissingLabel(_)
+            )
+        {
+            return;
+        }
         self.error = None;
         dialog.message = None;
         let removing = matches!(&action, TargetAction::RemoveDestination(_));
-        match change_instance_targets(
-            &self.root_path,
-            dialog.instance,
-            dialog.snapshot.revision,
-            action,
-        ) {
+        match change_instance_targets(&self.root_path, dialog.instance, revision, action) {
             Ok(snapshot) => {
                 dialog.snapshot = snapshot;
                 dialog.message = Some(message);
@@ -229,18 +240,10 @@ impl Popup {
         cx.notify();
     }
 
-    fn copy_destination(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let expected = self
-            .targets
-            .as_ref()
-            .and_then(|dialog| {
-                dialog
-                    .snapshot
-                    .destinations
-                    .iter()
-                    .find(|server| server.id == id)
-            })
-            .map(|server| server.address.clone());
+    fn copy_destination(&mut self, id: Uuid, expected: &ServerAddress, cx: &mut Context<Self>) {
+        if self.targets.as_ref().is_none_or(TargetDialog::editing) {
+            return;
+        }
         self.refresh_targets(cx);
         let Some(dialog) = &mut self.targets else {
             return;
@@ -248,19 +251,18 @@ impl Popup {
         if self.error.is_some() {
             return;
         }
-        let Some(address) = expected.filter(|address| {
-            dialog
-                .snapshot
-                .destinations
-                .iter()
-                .any(|server| server.id == id && &server.address == address)
-        }) else {
+        if !dialog
+            .snapshot
+            .destinations
+            .iter()
+            .any(|server| server.id == id && &server.address == expected)
+        {
             self.error =
                 Some("This destination changed. Review the current address before copying.".into());
             cx.notify();
             return;
-        };
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(address.to_string()));
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(expected.to_string()));
         dialog.message = Some("Server address copy requested.");
         cx.notify();
     }
@@ -294,24 +296,29 @@ impl Popup {
                     .child(input("Server address", address))
                     .child(div().text_sm().text_color(p.muted)
                         .child("Use a hostname or IP address, with an optional port.")),
-                EditKind::WorldLabel(_) => col
+                EditKind::WorldLabel(directory) => col
+                    .child(self.accessibility.text(
+                        div().w_full().min_w_0().text_sm().whitespace_normal()
+                            .child(format!("Folder: {directory}")),
+                        "edit-world-folder",
+                        format!("Folder: {directory}"),
+                        Role::Label,
+                    ))
                     .child(input("World label", &form.name))
                     .child(div().text_sm().text_color(p.muted)
                         .child("Leave the label blank to show the folder name. This only changes the launcher label.")),
             };
         }
 
+        let revision = dialog.snapshot.revision;
         let list = || div().flex().flex_col().gap_2();
         let world_list = list()
             .children(dialog.snapshot.worlds.iter().filter_map(|world| {
                 let TargetKey::World(directory) = &world.key else {
                     return None;
                 };
-                let name = if world.name == *directory {
-                    world.name.clone()
-                } else {
-                    format!("{} · {directory}", world.name)
-                };
+                let detail = (world.name != *directory).then(|| format!("Folder: {directory}"));
+                let spoken = option_name(&world.name, detail.as_deref());
                 let key = directory.clone();
                 Some(
                     div()
@@ -321,7 +328,8 @@ impl Popup {
                         .min_w_0()
                         .child(div().flex_1().min_w_0().child(self.target_option(
                             SharedString::from(format!("world:{directory}")),
-                            &name,
+                            &world.name,
+                            detail.as_deref(),
                             Some(world.key.clone()),
                             dialog,
                             cx,
@@ -329,78 +337,162 @@ impl Popup {
                         .child(self.target_command(
                             SharedString::from(format!("label:{directory}")),
                             "Label…",
-                            &format!("Label save {name}"),
+                            &format!("Label save {spoken}"),
                             false,
                             cx,
                             move |this, window, cx| this.label_world(&key, window, cx),
                         )),
                 )
             }))
-            .when(dialog.snapshot.worlds.is_empty(), |list| {
-                list.child(
-                    div()
-                        .text_sm()
-                        .text_color(p.muted)
-                        .child("No local saves found."),
-                )
-            });
-        let server_list = list()
-            .children(dialog.snapshot.destinations.iter().map(|server| {
-                let id = server.id;
-                let address = server.address.to_string();
+            .when_some(dialog.snapshot.world_issue.as_ref(), |list, issue| {
+                list.child(self.accessibility.text(
+                    div().text_sm().child(issue.clone()),
+                    "world-scan-issue",
+                    issue.clone(),
+                    Role::Status,
+                ))
+            })
+            .when(
+                dialog.snapshot.worlds.is_empty() && dialog.snapshot.world_issue.is_none(),
+                |list| {
+                    list.child(
+                        div()
+                            .text_sm()
+                            .text_color(p.muted)
+                            .child("No local saves found."),
+                    )
+                },
+            );
+        let missing = &dialog.snapshot.missing_labels;
+        let world_list = world_list.when(!missing.is_empty(), |list| {
+            list.child(self.accessibility.text(
+                div().font_semibold().child("Labels for missing saves"),
+                "missing-labels-heading",
+                "Labels for missing saves",
+                Role::Heading,
+            ))
+            .children(missing.iter().map(|(directory, label)| {
+                let detail = format!("Folder: {directory}");
+                let spoken = option_name(label, Some(&detail));
+                let key = directory.clone();
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex()
                     .flex_col()
+                    .items_start()
                     .gap_1()
-                    .min_w_0()
-                    .border_b_1()
-                    .border_color(p.stroke)
-                    .pb_2()
-                    .child(self.target_option(
-                        SharedString::from(format!("destination-{id}")),
-                        &format!("{} · {address}", server.name),
-                        Some(TargetKey::Server(id)),
-                        dialog,
-                        cx,
-                    ))
                     .child(
+                        self.accessibility.text(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(div().w_full().text_sm().child(label.clone()))
+                                .child(div().w_full().text_xs().text_color(p.muted).child(detail)),
+                            format!("missing-label:{directory}"),
+                            spoken.clone(),
+                            Role::Label,
+                        ),
+                    )
+                    .child(self.target_command(
+                        SharedString::from(format!("forget-label:{directory}")),
+                        "Forget label",
+                        &format!("Forget label {spoken}"),
+                        false,
+                        cx,
+                        move |this, window, cx| {
+                            this.change_targets(
+                                revision,
+                                TargetAction::ForgetMissingLabel(key.clone()),
+                                "Missing save label removed.",
+                                window,
+                                cx,
+                            )
+                        },
+                    ))
+            }))
+        });
+        let server_list = list()
+            .children(
+                dialog
+                    .snapshot
+                    .destinations
+                    .iter()
+                    .enumerate()
+                    .map(|(index, server)| {
+                        let id = server.id;
+                        let expected = server.address.clone();
+                        let duplicate = dialog.snapshot.destinations.iter().any(|other| {
+                            other.id != id
+                                && other.name == server.name
+                                && other.address == server.address
+                        });
+                        let detail = if duplicate {
+                            format!("Entry {} · Address: {}", index + 1, server.address)
+                        } else {
+                            format!("Address: {}", server.address)
+                        };
+                        let spoken = option_name(&server.name, Some(&detail));
                         div()
                             .flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(self.target_command(
-                                SharedString::from(format!("edit-{id}")),
-                                "Edit",
-                                &format!("Edit {} at {address}", server.name),
-                                false,
+                            .flex_col()
+                            .gap_1()
+                            .min_w_0()
+                            .border_b_1()
+                            .border_color(p.stroke)
+                            .pb_2()
+                            .child(self.target_option(
+                                SharedString::from(format!("destination-{id}")),
+                                &server.name,
+                                Some(&detail),
+                                Some(TargetKey::Server(id)),
+                                dialog,
                                 cx,
-                                move |this, window, cx| this.edit_destination(Some(id), window, cx),
                             ))
-                            .child(self.target_command(
-                                SharedString::from(format!("copy-{id}")),
-                                "Copy address",
-                                &format!("Copy address for {} at {address}", server.name),
-                                false,
-                                cx,
-                                move |this, _, cx| this.copy_destination(id, cx),
-                            ))
-                            .child(self.target_command(
-                                SharedString::from(format!("remove-{id}")),
-                                "Remove",
-                                &format!("Remove {} at {address}", server.name),
-                                false,
-                                cx,
-                                move |this, window, cx| {
-                                    this.change_targets(
-                                        TargetAction::RemoveDestination(id),
-                                        "Destination removed.",
-                                        window,
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(self.target_command(
+                                        SharedString::from(format!("edit-{id}")),
+                                        "Edit",
+                                        &format!("Edit {spoken}"),
+                                        false,
                                         cx,
-                                    )
-                                },
-                            )),
-                    )
-            }))
+                                        move |this, window, cx| {
+                                            this.edit_destination(Some(id), window, cx)
+                                        },
+                                    ))
+                                    .child(self.target_command(
+                                        SharedString::from(format!("copy-{id}")),
+                                        "Copy address",
+                                        &format!("Copy address for {spoken}"),
+                                        false,
+                                        cx,
+                                        move |this, _, cx| this.copy_destination(id, &expected, cx),
+                                    ))
+                                    .child(self.target_command(
+                                        SharedString::from(format!("remove-{id}")),
+                                        "Remove",
+                                        &format!("Remove {spoken}"),
+                                        false,
+                                        cx,
+                                        move |this, window, cx| {
+                                            this.change_targets(
+                                                revision,
+                                                TargetAction::RemoveDestination(id),
+                                                "Destination removed.",
+                                                window,
+                                                cx,
+                                            )
+                                        },
+                                    )),
+                            )
+                    }),
+            )
             .when(dialog.snapshot.destinations.is_empty(), |list| {
                 list.child(
                     div()
@@ -418,7 +510,7 @@ impl Popup {
                 "target-status", message, Role::Status,
             ))
         })
-        .child(self.target_option("general-target", "No specific target", None, dialog, cx))
+        .child(self.target_option("general-target", "No specific target", None, None, dialog, cx))
         .child(self.accessibility.text(
             div().font_semibold().pt_2().child("Local saves"), "worlds-heading", "Local saves", Role::Heading,
         ))
@@ -471,6 +563,7 @@ impl Popup {
         &self,
         id: impl Into<ElementId> + Clone,
         name: &str,
+        detail: Option<&str>,
         key: Option<TargetKey>,
         dialog: &TargetDialog,
         cx: &Context<Self>,
@@ -482,22 +575,50 @@ impl Popup {
         } else {
             Partition::Neutral
         };
-        let visual = format!("{} {name}", if selected { "●" } else { "○" });
+        let revision = dialog.snapshot.revision;
+        let spoken = option_name(name, detail);
+        let label = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .items_start()
+            .child(
+                div()
+                    .w_full()
+                    .text_sm()
+                    .truncate()
+                    .child(format!("{} {name}", if selected { "●" } else { "○" })),
+            )
+            .when_some(detail, |label, detail| {
+                label.child(
+                    div()
+                        .w_full()
+                        .text_xs()
+                        .whitespace_normal()
+                        .text_color(p.muted)
+                        .child(detail.to_owned()),
+                )
+            });
         self.control(
             compact_action(id.clone(), p, treatment, false, cx)
                 .justify_start()
-                .border_color(if selected { p.accent } else { p.stroke })
-                .max_w_full()
+                .w_full()
+                .h_auto()
+                .min_h(px(32.))
                 .overflow_hidden()
-                .child(div().min_w_0().truncate().text_color(p.ink).child(visual)),
+                .py_1()
+                .border_color(if selected { p.accent } else { p.stroke })
+                .child(label),
             id,
-            name,
+            &spoken,
             Role::RadioButton,
             false,
             Some(selected),
             cx,
             move |this, window, cx| {
                 this.change_targets(
+                    revision,
                     TargetAction::Select(key.clone()),
                     "Target choice saved.",
                     window,
@@ -538,5 +659,12 @@ impl Popup {
             cx,
             f,
         )
+    }
+}
+
+fn option_name(name: &str, detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) => format!("{name}\n{detail}"),
+        None => name.to_owned(),
     }
 }

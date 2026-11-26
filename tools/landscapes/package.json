@@ -1,0 +1,16 @@
+{
+  "name": "carbon-landscape-baker",
+  "scripts": {
+    "bake": "node bake.mjs"
+  },
+  "type": "module",
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright-core": "1.65.1"
+  },
+  "license": "MPL-2.0",
+  "private": true
+}

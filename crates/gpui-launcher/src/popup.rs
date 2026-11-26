@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
+mod icon;
 
 use super::theme::{Partition, compact_action, label};
 use super::{Launcher, account_panel::AccountPanel};
@@ -32,6 +33,7 @@ pub enum Mode {
 
 pub enum Kind {
     Profile(Mode, Option<Profile>),
+    Icon(Profile),
     Server(Profile),
     Targets(Uuid, carbon_profiles::InstanceTargets),
     ImportPack(PathBuf, PackReview),
@@ -64,6 +66,7 @@ struct Popup {
     root_path: PathBuf,
     palette: super::theme::Palette,
     focus: FocusHandle,
+    icon: Option<icon::Picker>,
     form: Option<Form>,
     server: Option<ServerForm>,
     targets: Option<TargetDialog>,
@@ -83,6 +86,7 @@ fn title(kind: &Kind) -> &'static str {
         Kind::Server(_) => "Edit server address",
         Kind::Targets(..) => "Launch targets",
         Kind::ImportPack(..) => "Import modpack",
+        Kind::Icon(_) => "Choose instance icon",
         Kind::Account(_) => "Minecraft account",
         Kind::Notice { title, .. } => title,
     }
@@ -100,6 +104,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
     let result = attached.clone();
     let width = px(480.);
     let (height, minimum_height) = match &kind {
+        Kind::Icon(_) => (466., 330.),
         Kind::Profile(..) => (417., 340.),
         Kind::Server(..) => (262., 220.),
         Kind::Targets(..) => (460., 300.),
@@ -187,9 +192,14 @@ impl Popup {
         let accessibility =
             super::accessibility::Accessibility::new(window, cx, title(&kind).into());
         let focus = cx.focus_handle();
+        let mut icon = None;
         let mut server = None;
         let mut targets = None;
         let (form, pack, notice, account) = match kind {
+            Kind::Icon(profile) => {
+                icon = Some(icon::Picker::new(&profile, window, cx));
+                (None, None, None, None)
+            }
             Kind::Profile(mode, original) => {
                 let name = original
                     .as_ref()
@@ -313,6 +323,7 @@ impl Popup {
             root_path,
             palette,
             focus,
+            icon,
             form,
             server,
             targets,
@@ -425,6 +436,7 @@ impl Popup {
                 |(memory_mib, window_width, window_height)| match form.mode {
                     Mode::Edit => ProfileAction::Edit(Profile {
                         id: form.original.as_ref().expect("edit source").id,
+                        icon_id: form.original.as_ref().and_then(|p| p.icon_id.clone()),
                         imported_pack: form
                             .original
                             .as_ref()
@@ -546,7 +558,9 @@ impl Render for Popup {
                 }
             }))
             .on_action(cx.listener(|this, _: &Save, window, cx| {
-                if this.form.is_some() || this.server.is_some() {
+                if this.icon.is_some() {
+                    this.save_icon(window, cx);
+                } else if this.form.is_some() || this.server.is_some() {
                     this.commit(window, cx);
                 } else if this.targets.as_ref().is_some_and(TargetDialog::editing) {
                     this.save_target(window, cx);
@@ -577,6 +591,9 @@ impl Render for Popup {
             .flex_1()
             .min_h_0()
             .id("popup-content")
+            .when_some(self.icon.as_ref(), |content, picker| {
+                content.track_scroll(&picker.scroll)
+            })
             .overflow_y_scroll()
             .p_5()
             .gap_3();
@@ -697,6 +714,9 @@ impl Render for Popup {
         }
         if let Some(account) = &self.account {
             content = content.child(self.account_content(account, cx));
+        }
+        if let Some(draft) = &self.icon {
+            content = content.child(self.icon_content(draft, cx));
         }
         if let Some(message) = self.notice {
             content = content.child(self.accessibility.text(
@@ -819,7 +839,25 @@ impl Render for Popup {
                     |this, window, cx| this.import(window, cx),
                 ))
             });
-        let bar = if let Some(account) = &self.account {
+        let bar = if let Some(draft) = &self.icon {
+            let disabled = !draft.draft.changed();
+            bar.child(self.control(
+                label(
+                    compact_action("save-icon", p, Partition::Primary, disabled, cx),
+                    "Save icon",
+                    p,
+                    Partition::Primary,
+                    disabled,
+                ),
+                "save-icon",
+                "Save icon",
+                Role::Button,
+                disabled,
+                None,
+                cx,
+                |this, window, cx| this.save_icon(window, cx),
+            ))
+        } else if let Some(account) = &self.account {
             self.account_actions(account, bar, cx)
         } else if let Some(targets) = &self.targets {
             self.target_actions(targets, bar, cx)
