@@ -958,11 +958,17 @@ mod tests {
         let alias = temp.path().join("alias");
         std::os::unix::fs::symlink(&real, &alias).unwrap();
         let root = alias.join("default");
+        // macOS temp roots live below /private/var reached through /var.
+        let expected = fs::canonicalize(&real).unwrap().join("default");
         let (resolved, _) = prepare(&root, Set::Empty, false).unwrap();
-        assert_eq!(resolved, real.join("default"));
+        assert_eq!(resolved, expected);
         assert!(resolved.exists());
+        // Reset replaces the tree and re-seeds the named set through the alias.
         prepare(&root, Set::Empty, true).unwrap();
-        assert!(!real.join("default").exists());
+        assert!(expected.exists());
+        let marker = read_marker(&expected).unwrap().unwrap();
+        assert_eq!(marker.set, Set::Empty);
+        assert!(marker.complete);
     }
 
     #[cfg(unix)]
