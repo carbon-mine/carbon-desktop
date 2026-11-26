@@ -19,6 +19,7 @@ pub enum PlayMode {
 pub enum PlayBlocker {
     RegistrationRequired,
     AccountChangePending,
+    AccountRemovalPending,
     AccountSelectionRequired,
     AccountVerificationRequired,
     EntitlementDenied,
@@ -39,6 +40,7 @@ impl fmt::Display for PlayBlocker {
         formatter.write_str(match self {
             Self::RegistrationRequired => "Play requires Carbon's approved Microsoft application registration.",
             Self::AccountChangePending => "Wait for the current Microsoft account change to finish.",
+            Self::AccountRemovalPending => "Finish removing the selected Microsoft account before trying to play.",
             Self::AccountSelectionRequired => "Select your Microsoft account for Minecraft: Java Edition.",
             Self::AccountVerificationRequired => "Verify the selected account's Java Edition entitlement.",
             Self::EntitlementDenied => "Minecraft Services did not confirm the selected account has Java Edition.",
@@ -114,6 +116,7 @@ pub(super) struct Selection<'a> {
     pub online_verified: bool,
     pub entitlement_denied: bool,
     pub pending: bool,
+    pub removal_pending: bool,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -174,6 +177,9 @@ fn selected(selection: Selection<'_>) -> Result<(Uuid, Uuid), PlayBlocker> {
     if selection.entitlement_denied {
         return Err(EntitlementDenied);
     }
+    if selection.removal_pending {
+        return Err(AccountRemovalPending);
+    }
     Ok((registration, profile))
 }
 
@@ -218,7 +224,16 @@ pub(super) fn issue(
     if now.wall < evidence.observed.wall || now.monotonic < evidence.observed.monotonic {
         return Err(ClockUntrusted);
     }
-    if now.wall >= expires_wall || now.monotonic >= evidence.expires_monotonic {
+    let validity = expires_wall
+        .duration_since(evidence.observed.wall)
+        .map_err(|_| EvidenceExpired)?;
+    let expires_monotonic = evidence
+        .observed
+        .monotonic
+        .checked_add(validity)
+        .ok_or(ClockUntrusted)?
+        .min(evidence.expires_monotonic);
+    if now.wall >= expires_wall || now.monotonic >= expires_monotonic {
         return Err(EvidenceExpired);
     }
 
@@ -254,7 +269,7 @@ pub(super) fn issue(
         },
         issued: now,
         expires_wall,
-        expires_monotonic: evidence.expires_monotonic,
+        expires_monotonic,
     })
 }
 

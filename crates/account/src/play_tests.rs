@@ -39,6 +39,7 @@ impl Fixture {
             online_verified: true,
             entitlement_denied: false,
             pending: false,
+            removal_pending: false,
         }
     }
 
@@ -179,6 +180,76 @@ fn synthetic_offline_evidence_requires_the_native_install_saves_and_egress_bound
         ),
         Ok("synthetic admission")
     );
+}
+
+#[test]
+fn subscription_expiry_holds_when_the_wall_clock_stops_advancing() {
+    let fixture = Fixture::new();
+    let mode = PlayMode::OfflineSinglePlayer;
+    let selected = fixture.selection();
+    let mut evidence = fixture.evidence(mode);
+    evidence.subscription_ends = Some(fixture.after(50).wall);
+    let install = Some(installation(mode));
+    let before = fixture.after(49);
+    let decision = issue(selected, mode, install, Some(&evidence), before).unwrap();
+    let at_expiry = Clock {
+        wall: before.wall,
+        monotonic: fixture.after(50).monotonic,
+    };
+    assert_eq!(
+        admit(
+            decision,
+            selected,
+            install,
+            Some(&evidence),
+            at_expiry,
+            || ()
+        ),
+        Err(PlayBlocker::EvidenceExpired)
+    );
+    assert_eq!(
+        issue(selected, mode, install, Some(&evidence), at_expiry).err(),
+        Some(PlayBlocker::EvidenceExpired)
+    );
+}
+
+#[test]
+fn failed_removal_never_admits_a_previously_verified_slot() {
+    let fixture = Fixture::new();
+    let mode = PlayMode::OfflineSinglePlayer;
+    let evidence = fixture.evidence(mode);
+    let selected = fixture.selection();
+    let install = Some(installation(mode));
+    let started = Cell::new(false);
+    for denied in [true, false] {
+        let permit = issue(selected, mode, install, Some(&evidence), fixture.at).unwrap();
+        let removing = Selection {
+            entitlement_denied: denied,
+            removal_pending: true,
+            ..selected
+        };
+        let expected = if denied {
+            PlayBlocker::EntitlementDenied
+        } else {
+            PlayBlocker::AccountRemovalPending
+        };
+        assert_eq!(
+            issue(removing, mode, install, Some(&evidence), fixture.at).err(),
+            Some(expected)
+        );
+        assert_eq!(
+            admit(
+                permit,
+                removing,
+                install,
+                Some(&evidence),
+                fixture.at,
+                || started.set(true)
+            ),
+            Err(expected)
+        );
+    }
+    assert!(!started.get());
 }
 
 #[test]

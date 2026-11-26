@@ -96,7 +96,7 @@ struct State {
     generation: u64,
     stopping: bool,
     committing: bool,
-    retry_remove: Option<Uuid>,
+    retry_removals: BTreeSet<Uuid>,
     browser: Option<BrowserPage>,
     saved: SavedAccounts,
     active: Option<Uuid>,
@@ -126,7 +126,7 @@ impl State {
             generation: 0,
             stopping: false,
             committing: false,
-            retry_remove: None,
+            retry_removals: BTreeSet::new(),
             browser: None,
             saved: SavedAccounts::default(),
             active: None,
@@ -242,7 +242,10 @@ impl State {
             accounts,
             active_account: self.active,
             cancellable: self.cancellable(),
-            removal_retry: self.retry_remove,
+            removal_retry: self
+                .active
+                .filter(|id| self.retry_removals.contains(id))
+                .or_else(|| self.retry_removals.first().copied()),
         }
     }
 }
@@ -265,6 +268,9 @@ impl Core {
                 .active
                 .is_some_and(|id| state.entitlement_denials.contains(&id)),
             pending: state.ticket.is_some() || state.stopping,
+            removal_pending: state
+                .active
+                .is_some_and(|id| state.retry_removals.contains(&id)),
         }
     }
 
@@ -792,12 +798,10 @@ fn remove(core: &Core, ticket: Ticket, id: Uuid, vault: Option<&Vault>) {
         return;
     }
     state.live.remove(&id);
-    state.entitlement_denials.remove(&id);
     match saved {
         Ok(saved) => {
-            if state.retry_remove == Some(id) {
-                state.retry_remove = None;
-            }
+            state.entitlement_denials.remove(&id);
+            state.retry_removals.remove(&id);
             if let Some(saved) = saved {
                 state.replace_saved(saved);
             }
@@ -811,7 +815,7 @@ fn remove(core: &Core, ticket: Ticket, id: Uuid, vault: Option<&Vault>) {
             state.finish(status, ACCOUNT_REMOVED);
         }
         Err(()) => {
-            state.retry_remove = Some(id);
+            state.retry_removals.insert(id);
             state.finish(
                 AccountState::Error,
                 "Secure storage could not remove this account. Try again.",
