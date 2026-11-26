@@ -1,0 +1,28 @@
+{
+  "identifier": "local-review",
+  "description": "The bundled main window operates the local library, vanilla setup and review fixtures.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-personal-library",
+    "allow-open-game-folder",
+    "allow-apply-desktop-theme",
+    "allow-edit-profile-dialog",
+    "allow-fixture-library",
+    "allow-fixture-action",
+    "allow-play-readiness",
+    "allow-import-pack",
+    "allow-inspect-vanilla-profile",
+    "allow-import-vanilla-client",
+    "allow-select-profile-java",
+    "allow-install-profile-java",
+    "allow-cancel-java-install",
+    "allow-plan-game-files",
+    "allow-prepare-game-files",
+    "allow-cancel-game-files",
+    "allow-run-sandbox-session",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

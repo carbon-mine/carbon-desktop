@@ -1,0 +1,160 @@
+name: Desktop CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows x64
+            runner: windows-2025
+            bun-archive: bun-windows-x64
+            bun-sha256: ce4c17497b2f29712a99d3d53f028de28cd42e3bacb8589599e7f000e49b6405
+          - platform: Linux x64
+            runner: ubuntu-24.04
+            bun-archive: bun-linux-x64
+            bun-sha256: 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUN_VERSION: '1.4.2'
+      RUSTUP_TOOLCHAIN: '1.99.1'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26.13.1'
+          package-manager-cache: false
+
+      - name: Set up JDK for the Windows sandbox fixture
+        if: runner.os == 'Windows'
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21.0.13.1+2'
+          overwrite-settings: false
+
+      - name: Check Windows fixture compiler
+        if: runner.os == 'Windows'
+        run: javac -version
+
+      - name: Install Linux native development dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+            libfontconfig1-dev libvulkan-dev
+          pkg-config --modversion gtk+-3.0 webkit2gtk-4.1 openssl dbus-1 \
+            wayland-client xkbcommon xkbcommon-x11 xcb fontconfig vulkan
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+          rustc --version --verbose
+          cargo --version
+
+      - name: Verify the inherited design seed
+        run: python design-system/verify_seed.py
+
+      - name: Set up Bun from the verified upstream archive
+        env:
+          BUN_ARCHIVE: ${{ matrix.bun-archive }}
+          BUN_SHA256: ${{ matrix.bun-sha256 }}
+        run: |
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' \
+            --output "$RUNNER_TEMP/$BUN_ARCHIVE.zip" \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$BUN_ARCHIVE.zip"
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import shutil
+          import zipfile
+
+          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          archive_name = os.environ["BUN_ARCHIVE"]
+          archive = runner_temp / f"{archive_name}.zip"
+          with archive.open("rb") as source:
+              if hashlib.file_digest(source, "sha256").hexdigest() != os.environ["BUN_SHA256"]:
+                  raise SystemExit("Bun release archive SHA-256 mismatch")
+
+          executable = "bun.exe" if os.name == "nt" else "bun"
+          destination = runner_temp / "carbon-bun"
+          destination.mkdir(exist_ok=True)
+          binary = destination / executable
+          with zipfile.ZipFile(archive) as bundle:
+              with bundle.open(f"{archive_name}/{executable}") as source, binary.open("wb") as target:
+                  shutil.copyfileobj(source, target)
+          binary.chmod(0o755)
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as paths:
+              print(destination, file=paths)
+          PY
+
+      - name: Install locked frontend dependencies
+        run: |
+          test "$(bun --version)" = "$BUN_VERSION"
+          bun install --frozen-lockfile
+
+      - name: Check and build the Svelte frontend
+        run: |
+          bun run check
+          bun run build
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Build both desktop editions
+        run: cargo build --locked -p carbon-desktop -p carbon-desktop-gpui
+
+      - name: Test the locked Rust workspace
+        run: cargo test --locked --workspace
+
+      - name: Lint the Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Verify build inputs stayed unchanged
+        run: git diff --exit-code -- bun.lock Cargo.lock design-system
+
+  required:
+    name: Desktop CI Gate
+    needs: build
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require both platform jobs to pass
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          if [[ "$BUILD_RESULT" != success ]]; then
+            echo "::error::Desktop CI matrix result: $BUILD_RESULT"
+            exit 1
+          fi

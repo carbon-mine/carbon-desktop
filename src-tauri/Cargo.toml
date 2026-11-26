@@ -1,0 +1,37 @@
+[package]
+name = "carbon-desktop"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+carbon-setup = { path = "../crates/setup" }
+carbon-profiles = { path = "../crates/profiles" }
+carbon-runtime = { path = "../crates/runtime" }
+carbon-session = { path = "../crates/session" }
+carbon-vanilla = { path = "../crates/vanilla" }
+uuid = { version = "1", features = ["serde", "v4"] }
+tempfile = "3"
+carbon-account = { path = "../crates/account" }
+carbon-store = { path = "../crates/store" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+rfd = "0.17"
+serde_json = "1"
+carbon-pack = { path = "../crates/pack" }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[target."cfg(unix)".dependencies]
+libc = "0.2"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell"] }
+
+[target."cfg(target_os = \"linux\")".dependencies]
+gtk = "0.18"

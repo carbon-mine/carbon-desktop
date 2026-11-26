@@ -1,0 +1,317 @@
+/* SPDX-License-Identifier: MPL-2.0 */
+
+:root {
+  font: 0.875rem/1.45 var(--desktop-ui-font);
+  color: var(--foreground);
+  background: var(--desktop-frame);
+  font-optical-sizing: auto;
+}
+* { box-sizing: border-box }
+[hidden] { display: none !important }
+body { margin: 0 }
+h1, h2, h3, h4, p, dl, dd { margin: 0 }
+p { color: var(--desktop-muted); max-inline-size: 70ch }
+h1, h2, h3, h4 { line-height: 1.25; font-weight: 600; overflow-wrap: anywhere }
+h1, h4 { font-size: 0.875rem }
+h2 { font-size: clamp(1.45rem, 3vw, 1.9rem) }
+h3 { font-size: 1.06rem }
+button, input, summary { font: inherit }
+button, input {
+  min-block-size: 2rem;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  border-radius: var(--desktop-radius-control);
+  border: 1px solid var(--desktop-control-line);
+  background: var(--desktop-surface);
+  color: var(--foreground);
+  padding: 0.35rem 0.7rem;
+}
+button, summary { cursor: pointer }
+button { line-height: 1.25; text-align: start; overflow-wrap: anywhere }
+button:hover:enabled { background: var(--desktop-hover) }
+button.primary { background: var(--desktop-action); color: var(--desktop-action-ink); border-color: var(--desktop-action); font-weight: 600 }
+button.primary:hover:enabled { background: var(--desktop-action-hover) }
+button:disabled { opacity: 0.6; cursor: default }
+:focus-visible { outline: 2px solid var(--desktop-focus); outline-offset: 2px }
+button.primary:focus-visible { outline-color: var(--desktop-action-ink); outline-offset: -3px }
+
+.desktop { block-size: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto }
+.app-header, .command-bar, .app-options, .library-header, .instance-header, .actions, .section-heading, .activity-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.app-header {
+  min-block-size: 2.9rem;
+  display: grid;
+  grid-template-columns: clamp(13rem, 24vw, 16.5rem) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
+  background: var(--desktop-frame);
+  border-block-end: 1px solid var(--desktop-line);
+}
+.command-bar { display: grid; align-items: stretch; gap: 0 }
+.toolbar-button, .quiet-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.46rem;
+  border-color: transparent;
+  background: transparent;
+  white-space: nowrap;
+}
+.toolbar-button { justify-content: start; padding-inline: 1rem; border: 0; border-inline-end: 1px solid var(--desktop-line); border-radius: 0; font-weight: 500 }
+#new-profile { background: transparent }
+#new-profile:hover:enabled { background: var(--desktop-hover) }
+#new-profile .desktop-icon { color: var(--desktop-focus) }
+.app-options { justify-content: end; padding-inline: 1rem; font-size: 0.82rem }
+.account { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--desktop-muted); white-space: nowrap }
+.account .desktop-icon { inline-size: 0.9rem; block-size: 0.9rem }
+
+.split { min-block-size: 0; display: grid; grid-template-columns: clamp(13rem, 24vw, 16.5rem) minmax(0, 1fr) }
+.library-pane {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  min-block-size: 0;
+  background: var(--desktop-frame);
+  border-inline-end: 1px solid var(--desktop-line);
+}
+.library-header { justify-content: space-between; margin: 1rem 0.9rem 0.66rem }
+.counter, .technical { font: 0.81rem/1.45 var(--desktop-code-font) }
+.counter { color: var(--desktop-muted) }
+.search-wrap { position: relative; margin: 0 0.82rem; color: var(--desktop-muted) }
+.search-wrap > .desktop-icon { position: absolute; inset-block-start: 0.48rem; inset-inline-start: 0.55rem; pointer-events: none }
+#search { inline-size: 100%; padding-inline-start: 1.95rem; font-size: 0.85rem }
+#search::placeholder { color: var(--desktop-muted) }
+.instances { min-block-size: 0; overflow: auto; list-style: none; margin: 0.48rem 0 0; padding: 0 }
+.instances li { border-block-end: 1px solid var(--desktop-line) }
+.instance-entry {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.63rem;
+  inline-size: 100%;
+  min-block-size: 3.25rem;
+  border: 0;
+  border-radius: 0;
+  padding-inline: 0.9rem;
+  background: transparent;
+}
+.instance-entry[aria-current="true"] { background: var(--desktop-selected) }
+.instance-entry[aria-current="true"]::before {
+  content: "";
+  position: absolute;
+  block-size: 1.08rem;
+  inline-size: 0.18rem;
+  border-radius: 1rem;
+  background: var(--desktop-focus);
+  inset-inline-start: 0;
+  inset-block-start: calc(50% - 0.54rem);
+}
+.entry-label { min-inline-size: 0 }
+.instance-entry strong, .instance-entry small { display: block }
+.instance-entry strong { font-size: 0.9rem; font-weight: 600 }
+.instance-entry small { color: var(--desktop-muted); font-size: 0.79rem; margin-block-start: 0.1rem }
+.instance-mark {
+  display: grid;
+  place-items: center;
+  inline-size: 1.68rem;
+  block-size: 1.68rem;
+  border-radius: var(--desktop-radius-control);
+  background: var(--desktop-instance);
+  color: var(--desktop-instance-ink);
+  flex: none;
+}
+.instance-mark i {
+  inline-size: 52%;
+  block-size: 52%;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  box-shadow: inset 0 -0.16em 0 currentColor;
+}
+.personal-mark { background: var(--desktop-instance); color: var(--desktop-instance-ink) }
+.fixture-mark.repeat i { border-style: double; border-width: 3px }
+.fixture-mark.coast i { transform: rotate(45deg) }
+.empty-results { color: var(--desktop-muted); padding: 0.65rem 0.4rem; font-size: 0.83rem }
+.view-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-block-start: auto;
+  border-block-start: 1px solid var(--desktop-line);
+}
+.view-switcher button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  min-block-size: 2.9rem;
+  padding-inline: 0.42rem;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.82rem;
+}
+.view-switcher button + button, .instance-tabs button + button { border-inline-start: 1px solid var(--desktop-line) }
+.view-switcher button[aria-current="page"] { background: var(--desktop-selected); font-weight: 600 }
+
+.detail-pane { min-inline-size: 0; min-block-size: 0; overflow: auto; background: var(--desktop-surface) }
+.instance-header {
+  padding: 1.45rem clamp(1rem, 3vw, 2rem) 1.05rem;
+  gap: 0.85rem;
+  background: var(--desktop-layer);
+}
+.large-mark { inline-size: 3rem; block-size: 3rem; border-radius: var(--desktop-radius-surface); font-size: 1.2rem }
+.instance-identity { flex: 1 1 11rem; min-inline-size: 0 }
+.instance-identity h2 { font-size: clamp(22px, 2.3vw, 26px); font-weight: 650; inline-size: fit-content; max-inline-size: 100% }
+.instance-identity p { margin-block-start: 0.32rem; font-size: 0.96rem }
+.version-label { display: inline-block }
+.launch-control { display: grid; justify-items: end; text-align: end; gap: 0.2rem }
+.launch-control p { font-size: 0.76rem }
+.play-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.48rem;
+  border-radius: 0;
+  min-block-size: 2.15rem;
+  inline-size: auto;
+  font-weight: 500;
+  background: transparent;
+  color: var(--foreground);
+  border-color: var(--desktop-control-line);
+}
+.tag { color: var(--desktop-instance-ink); background: var(--desktop-instance); padding: 0.22rem 0.45rem; font-size: 0.8rem; border-radius: var(--desktop-radius-control) }
+.tag.warning { color: var(--foreground); background: var(--desktop-selected) }
+.instance-tabs {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  border-block-end: 1px solid var(--desktop-line);
+  background: var(--desktop-layer);
+}
+.instance-tabs button {
+  position: relative;
+  min-block-size: 2.65rem;
+  padding-inline: 0.6rem;
+  text-align: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--desktop-muted);
+}
+.instance-tabs button[aria-selected="true"] { color: var(--foreground); font-weight: 600 }
+.instance-tabs button[aria-selected="true"]::after {
+  position: absolute;
+  content: "";
+  inset-inline: 0;
+  inset-block-end: 0;
+  height: 2px;
+  border-radius: 1rem;
+  background: var(--desktop-focus);
+}
+.tab-content { max-inline-size: 57rem; padding: 1.15rem clamp(0.95rem, 3vw, 2rem) 1.65rem }
+.tab-content:focus-visible { outline-offset: -0.25rem }
+.section-heading { display: grid; grid-template-columns: minmax(0, 2fr) minmax(8rem, 1fr); align-items: stretch; gap: 0; background: var(--desktop-layer); border-block: 1px solid var(--desktop-line) }
+.section-heading h3 { padding: 0.65rem }
+.section-help { margin-block: 0.68rem }
+.actions { align-items: stretch; gap: 1px; border: 1px solid var(--desktop-control-line); background: var(--desktop-control-line); margin-block: 0.65rem }
+.actions button { flex: 1 1 8rem; text-align: center; border: 0; border-radius: 0; min-block-size: 2.65rem }
+.section-heading button { inline-size: 100%; min-block-size: 2.65rem; text-align: center; border-radius: 0 }
+.separated { border-block-start: 1px solid var(--desktop-line); padding-block-start: 0.85rem; margin-block-start: 1.1rem }
+.section-heading.separated { padding-block-start: 0 }
+:is(.command-bar, .instance-tabs, .view-switcher, .instances, .actions) button:focus-visible { outline-offset: -3px }
+.property-list { margin-block: 0.63rem }
+.property-list > div {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 43%) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.48rem 0;
+  border-block-end: 1px solid var(--desktop-line);
+}
+dt { color: var(--desktop-muted); font-size: 0.82rem }
+dd { overflow-wrap: anywhere }
+.instance-task {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.7rem 1.3rem;
+  padding: 0.55rem 0 1.25rem;
+  border-block-end: 1px solid var(--desktop-line);
+}
+.instance-task:focus-visible { outline-offset: 0.25rem }
+.task-copy { min-inline-size: 0 }
+.task-copy h3 { width: fit-content; font-size: 1.38rem; line-height: 1.3; font-weight: 650 }
+.task-copy > p, .readiness > p { margin-block-start: 0.3rem; font-size: 0.94rem }
+.instance-task > button { justify-self: end; align-self: start; min-block-size: 2.5rem; padding-inline: 1.05rem; text-align: center }
+.instance-task > button:not(.primary) { background: transparent }
+.instance-task > button:not(.primary):hover:enabled { background: var(--desktop-hover) }
+.review-sizes, .readiness, .task-error { grid-column: 1 / -1 }
+.review-sizes { display: grid; gap: 0.38rem; margin-block-start: 0.15rem }
+.review-sizes > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.12rem 1rem }
+.review-sizes dt, .review-sizes dd { font-size: 0.9rem }
+.review-sizes dd { font-weight: 600 }
+.readiness { margin-block-start: 0.45rem; padding-inline-start: 0.9rem; border-inline-start: 2px solid var(--desktop-control-line) }
+.readiness h4 { width: fit-content; font-size: 1.02rem; font-weight: 650 }
+.task-error { color: var(--foreground); border-inline-start: 3px solid; padding-inline-start: 0.7rem }
+.task-copy progress { display: block; width: 100%; max-width: 28rem; margin-block: 0.65rem 0.25rem; accent-color: var(--desktop-action) }
+.task-copy .technical { font-size: 0.8rem }
+.advanced-setup { margin-block-start: 0.65rem }
+.advanced-setup summary { width: fit-content; min-block-size: 2.25rem; padding-block: 0.4rem; color: var(--desktop-muted); font-size: 0.91rem; font-weight: 500 }
+.advanced-setup[open] > summary { color: var(--foreground) }
+.diagnostic-actions { display: flex; flex-wrap: wrap; gap: 0.42rem; margin-block: 0.85rem }
+.diagnostic-actions button { min-block-size: 2.25rem; font-size: 0.9rem }
+.empty-workspace { max-inline-size: 32rem; padding: clamp(1.5rem, 7vw, 4.7rem) clamp(1.1rem, 3vw, 2rem); margin-inline: auto }
+.welcome-mark { inline-size: 3.2rem; block-size: 3.2rem; border-radius: var(--desktop-radius-surface); margin-block-end: 1rem }
+.welcome-mark img { inline-size: 1.55rem; block-size: auto }
+.empty-workspace p { margin-block: 0.63rem 0.94rem }
+.waiting { padding: 1.25rem }
+.narrow-back { display: none }
+.error { border-inline-start: 3px solid var(--foreground); background: var(--desktop-layer); padding: 0.65rem 0.78rem; margin: 0.8rem }
+.tab-content .error { margin-inline: 0 }
+.error h2 { font-size: 1rem }
+.error p, .error button { margin-block-start: 0.3rem }
+.notices { max-block-size: 24dvh; overflow: auto }
+.notices .error { margin: 0.46rem 0.75rem }
+
+.activity {
+  border-block-start: 1px solid var(--desktop-line);
+  background: var(--desktop-frame);
+  padding: 0.32rem 0.75rem;
+  max-block-size: 25dvh;
+  overflow: auto;
+}
+.activity-top h2 { font-size: 0.81rem; padding-block: 0.22rem }
+.activity-top > span { color: var(--desktop-muted); font-size: 0.79rem }
+.task { min-block-size: 1.72rem; display: flex; flex-wrap: wrap; gap: 0.22rem 0.45rem; font-size: 0.79rem }
+.notice { margin-block-start: 0.14rem; font-size: 0.79rem; max-inline-size: none; overflow-wrap: anywhere }
+.notice:empty { margin: 0 }
+
+@media (max-width: 46rem) {
+  .split { display: flex; flex-direction: column; overflow: auto }
+  .library-pane { flex: 1; border-inline-end: 0; border-block-end: 1px solid var(--desktop-line) }
+  .instances { max-block-size: 45dvh }
+  .detail-pane { min-block-size: 2.5rem }
+  .split.has-instances .detail-pane { display: none }
+  .split.has-instances.detail-open .library-pane { display: none }
+  .split.has-instances.detail-open .detail-pane { display: block; flex: 1 }
+  .narrow-back { display: inline-flex; margin: 0.42rem 0.6rem 0 }
+}
+@media (max-width: 31rem) {
+  .instance-header { padding-block-start: 0.85rem }
+  .property-list > div { grid-template-columns: minmax(6rem, 42%) minmax(0, 1fr) }
+  .instance-task { grid-template-columns: minmax(0, 1fr); gap: 0.55rem }
+  .instance-task > button { justify-self: start; min-block-size: 2.65rem }
+  .review-sizes { grid-row: 2 }
+  .review-sizes > div { display: grid; gap: 0.1rem }
+  .instance-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.6rem; align-items: center }
+  .instance-header .large-mark { inline-size: 2.55rem; block-size: 2.55rem }
+  .launch-control { min-inline-size: 0; max-inline-size: 6.8rem }
+
+}
+@media (forced-colors: active) {
+  button.primary, .instance-entry[aria-current="true"], .instance-tabs button[aria-selected="true"] { border-color: ButtonText }
+  .instance-entry[aria-current="true"]::before, .instance-tabs button[aria-selected="true"]::after { background: Highlight }
+  button.primary:focus-visible, :focus-visible { outline-color: Highlight }
+}

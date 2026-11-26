@@ -1,0 +1,10 @@
+[workspace]
+members = ["src-tauri", "crates/*"]
+resolver = "2"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[patch.crates-io]
+xattr = { path = "third_party/xattr-0.2.3" }

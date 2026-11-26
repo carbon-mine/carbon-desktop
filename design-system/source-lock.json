@@ -1,0 +1,122 @@
+{
+  "panel": {
+    "repository": "https://github.com/athNdev/carbon-panel",
+    "commit": "38cfd2263d20ac97bc9051be461201598ca932ad",
+    "files": {
+      "inherited/tokens.css": {
+        "path": "web/carbon-panel/src/lib/design-system/tokens.css",
+        "sha256": "2d5a5da25ce65b8e3545baf73227c0af5150627c38fa73a6aaf50e6ce6c0abf8"
+      },
+      "inherited/components/CarbonButton.svelte": {
+        "path": "web/carbon-panel/src/lib/components/carbon/CarbonButton.svelte",
+        "sha256": "994c521117fd01a7cbefeffbcd54271e48e75ae247848c9bc6b6d25b321e4b30"
+      },
+      "inherited/brand/mark-dark.svg": {
+        "path": "assets/branding/mark-dark.svg",
+        "sha256": "6baddb2c7cbcc1d19d3221df51f11c1774d0683b703269535fac40e59a1fb130"
+      },
+      "inherited/brand/mark-light.svg": {
+        "path": "assets/branding/mark-light.svg",
+        "sha256": "e9a2f5e8bc7a9c1d0be0b53a9042d20115eddbf4c2a37866449b83ffa352d582"
+      },
+      "inherited/brand/README.panel.md": {
+        "path": "assets/branding/README.md",
+        "sha256": "eb6166c2c533de07a9a52f80d848987ef58e359dba121c84bc467a235bdaca07"
+      },
+      "inherited/LICENSE.MPL-2.0": {
+        "path": "LICENSE.MPL-2.0",
+        "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+      },
+      "inherited/LICENSE.DiscoPanel-MIT": {
+        "path": "LICENSE",
+        "sha256": "52fd259bfbc578673620c0845c65cd5d0d93cd8f59f574366744a0672a583a94"
+      }
+    }
+  },
+  "fontsource": {
+    "@fontsource-variable/ibm-plex-sans": {
+      "version": "5.3.0",
+      "integrity": "sha512-agG8tXFEo0hD9+J7npa4vbbWult52eMLVaQ6WQRlhs/iCAojrMAoejru85W9HTVXHfyUj96KM7gp/KGAS87XaQ==",
+      "files": {
+        "inherited/fonts/ibm-plex-sans/LICENSE": {
+          "path": "LICENSE",
+          "sha256": "d0283623ef57e722fd0eb688a8041589670c608ab780cd3612d06ba6f153d3fd"
+        },
+        "inherited/fonts/ibm-plex-sans/wght.css": {
+          "path": "wght.css",
+          "sha256": "c10c5be20da047104a63777df4fb430f065ad8ce65e26e4ff69558b41abfbe59"
+        },
+        "inherited/fonts/ibm-plex-sans/files/ibm-plex-sans-cyrillic-ext-wght-normal.woff2": {
+          "path": "files/ibm-plex-sans-cyrillic-ext-wght-normal.woff2",
+          "sha256": "7d0037a170882a49e65a45c38ef195237bb07b1cc791d078379f0ac0d7ae1935"
+        },
+        "inherited/fonts/ibm-plex-sans/files/ibm-plex-sans-cyrillic-wght-normal.woff2": {
+          "path": "files/ibm-plex-sans-cyrillic-wght-normal.woff2",
+          "sha256": "9409ee21811f0f5272b7e1d828fe8838005b0573481ef906e7e55b63f6610ab0"
+        },
+        "inherited/fonts/ibm-plex-sans/files/ibm-plex-sans-greek-wght-normal.woff2": {
+          "path": "files/ibm-plex-sans-greek-wght-normal.woff2",
+          "sha256": "f598dd0700f155e2facfaa8ecfacace397d4c2c153e9ce37ab7ad310e8505bc2"
+        },
+        "inherited/fonts/ibm-plex-sans/files/ibm-plex-sans-latin-ext-wght-normal.woff2": {
+          "path": "files/ibm-plex-sans-latin-ext-wght-normal.woff2",
+          "sha256": "d160e20920ae4d6556518d352d3af27a74e9b0de3d8fe17b1c1044fc75aa2f81"
+        },
+        "inherited/fonts/ibm-plex-sans/files/ibm-plex-sans-latin-wght-normal.woff2": {
+          "path": "files/ibm-plex-sans-latin-wght-normal.woff2",
+          "sha256": "e2291e842cf5af167122a22881a740c7f2dda7716f1e8cd76680264f4a859470"
+        },
+        "inherited/fonts/ibm-plex-sans/files/ibm-plex-sans-vietnamese-wght-normal.woff2": {
+          "path": "files/ibm-plex-sans-vietnamese-wght-normal.woff2",
+          "sha256": "73e7f7b1c980416ae0c2461268b14c7cfcce0668e683dc43fbb11a82a227b9f2"
+        }
+      }
+    },
+    "@fontsource/ibm-plex-mono": {
+      "version": "5.3.0",
+      "integrity": "sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q==",
+      "files": {
+        "inherited/fonts/ibm-plex-mono/LICENSE": {
+          "path": "LICENSE",
+          "sha256": "23b0a9d0c6d3f140a0b77e483c5cfa6bba574325ef5cb189ed9f2fec4884533f"
+        },
+        "inherited/fonts/ibm-plex-mono/latin-400.css": {
+          "path": "latin-400.css",
+          "sha256": "57893c593213e96ff6ba7b3b60d3731c1ec5754ae055607c848ef611d8879614"
+        },
+        "inherited/fonts/ibm-plex-mono/latin-500.css": {
+          "path": "latin-500.css",
+          "sha256": "91d821a261dd4ffe65a7622b1d61efca5a3d71863f09278fa92f9f8e09830e6e"
+        },
+        "inherited/fonts/ibm-plex-mono/latin-600.css": {
+          "path": "latin-600.css",
+          "sha256": "4ee57a1be040202a982f1e32b66900784d85969c668eac50311a9e32d82d4c0a"
+        },
+        "inherited/fonts/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff": {
+          "path": "files/ibm-plex-mono-latin-400-normal.woff",
+          "sha256": "328d50b6ece9ca25c46eea3e885ba497f6237f2fb84ef7b92f88e14a1a25e381"
+        },
+        "inherited/fonts/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2": {
+          "path": "files/ibm-plex-mono-latin-400-normal.woff2",
+          "sha256": "08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7"
+        },
+        "inherited/fonts/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff": {
+          "path": "files/ibm-plex-mono-latin-500-normal.woff",
+          "sha256": "09f018c58556e5801ecc49d5b5275dcff4c73311c2af6b88e31c51d76d076a9d"
+        },
+        "inherited/fonts/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2": {
+          "path": "files/ibm-plex-mono-latin-500-normal.woff2",
+          "sha256": "01d285447409c8a588692162439a038b8cbd7871309ee20267b0d2d91c6e8e22"
+        },
+        "inherited/fonts/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff": {
+          "path": "files/ibm-plex-mono-latin-600-normal.woff",
+          "sha256": "cb96282f22c6f19112856fd6e0b34e2baefaf4ca6551e851d58c5ab0aabcd2be"
+        },
+        "inherited/fonts/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2": {
+          "path": "files/ibm-plex-mono-latin-600-normal.woff2",
+          "sha256": "0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83"
+        }
+      }
+    }
+  }
+}
