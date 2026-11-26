@@ -6,6 +6,27 @@ use zip::write::SimpleFileOptions;
 
 const RELEASE: &str = "17.0.test+1";
 
+fn fixture_root() -> tempfile::TempDir {
+    // A host's temp path can enter through an alias, such as /var on macOS.
+    // Start synthetic fixtures in the named directory without relaxing storage checks.
+    let temp_parent = std::env::temp_dir().canonicalize().unwrap();
+    tempfile::tempdir_in(temp_parent).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_storage_rejects_a_linked_parent() {
+    let temporary = fixture_root();
+    let physical = temporary.path().join("physical");
+    let alias = temporary.path().join("alias");
+    fs::create_dir(&physical).unwrap();
+    std::os::unix::fs::symlink(&physical, &alias).unwrap();
+    assert!(matches!(
+        storage::check_root(&alias.join("runtime")),
+        Err(RuntimeError::UnsafeStorage)
+    ));
+}
+
 fn required(exe: &'static str) -> [(&'static str, &'static [u8]); 6] {
     [
         (exe, b"inert java witness"),
@@ -80,7 +101,7 @@ fn install(root: &Path, bytes: &[u8], spec: &Artifact) -> RuntimeStatus {
 
 #[test]
 fn verified_cache_reuses_without_network_and_repairs_modified_or_added_files() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     let root = tmp.path().join("runtime");
     let bytes = fixture_zip(&[]);
     let spec = spec(&bytes, Format::Zip);
@@ -121,7 +142,7 @@ fn verified_cache_reuses_without_network_and_repairs_modified_or_added_files() {
 
 #[test]
 fn rejects_unpinned_download_and_leaves_cancelled_cache_absent() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     let bytes = fixture_zip(&[]);
     let spec = spec(&bytes, Format::Zip);
     let mut changed = bytes.clone();
@@ -162,7 +183,7 @@ fn rejects_unpinned_download_and_leaves_cancelled_cache_absent() {
 
 #[test]
 fn rejects_extra_links_and_unsafe_zip_paths_without_publication() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     for bad in &[
         &[("bin/../escape", b"bad".as_slice())][..],
         &[("BIN/Other", b"bad".as_slice())],
@@ -192,7 +213,7 @@ fn rejects_extra_links_and_unsafe_zip_paths_without_publication() {
 
 #[test]
 fn linux_legal_link_is_recreated_as_a_private_file() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     let bytes = fixture_tar(&[("legal/java.sql/LICENSE", "../java.base/LICENSE")]);
     let layout = spec(&bytes, Format::TarGz);
     let current = install(tmp.path(), &bytes, &layout);
@@ -211,7 +232,7 @@ fn linux_legal_link_is_recreated_as_a_private_file() {
 
 #[test]
 fn stale_stage_is_discarded_and_a_competing_installer_is_refused() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     let bytes = fixture_zip(&[]);
     let spec = spec(&bytes, Format::Zip);
     let abandoned = tmp.path().join(".stage-java-17-AAAAAAAAAAAA");
@@ -251,7 +272,7 @@ fn transport_accepts_only_approved_https_asset_hosts() {
 #[test]
 #[ignore = "downloads three pinned public runtimes into a disposable directory"]
 fn live_native_temurin_preparation() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     for major in [17, 21, 25] {
         let ready = prepare(tmp.path(), major).unwrap();
         let home = ready.java_home().unwrap();
@@ -275,7 +296,7 @@ fn live_native_temurin_preparation() {
 #[cfg(not(all(target_arch = "x86_64", any(windows, target_os = "linux"))))]
 #[test]
 fn managed_runtime_remains_unavailable_without_a_native_pin() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     assert!(matches!(
         inspect(tmp.path(), 17).unwrap(),
         RuntimeStatus::Unsupported { major: 17 }

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
-use super::{Launcher, Picker, Preference, popup};
+#[cfg(any(windows, target_os = "linux"))]
+use super::Picker;
+use super::{Launcher, Preference, popup};
 use gpui::{App, Bounds, Context, Window, WindowBounds, actions, point, px, size};
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::Path};
@@ -24,6 +26,7 @@ pub enum Page {
     File,
     View,
 }
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Clone, Copy)]
 pub enum Command {
     New,
@@ -156,6 +159,13 @@ impl Launcher {
         true
     }
 
+    pub(super) fn close_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_none() && !self.picker_open && self.allow_close(window, cx) {
+            window.remove_window();
+        }
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
     pub(super) fn shell_command(
         &mut self,
         command: Command,
@@ -168,11 +178,7 @@ impl Launcher {
         match command {
             Command::New => self.editor(popup::Mode::Create, window, cx),
             Command::Import => self.pick(Picker::Pack, window, cx),
-            Command::Close => {
-                if self.allow_close(window, cx) {
-                    window.remove_window();
-                }
-            }
+            Command::Close => self.close_from_menu(window, cx),
             Command::Find => self.find(window, cx),
             Command::Activity => self.activity_focus.focus(window),
             Command::Appearance(preference) => {

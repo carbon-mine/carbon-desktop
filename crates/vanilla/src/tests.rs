@@ -351,9 +351,12 @@ fn imported_packs_cannot_bypass_loader_and_file_requirements_via_vanilla_command
         .unwrap();
         assert_eq!(selected(temp.path(), profile.id).is_err(), blocked);
         if blocked {
-            assert!(game_file_plan(temp.path(), profile.id, true)
-                .unwrap_err()
-                .contains("pack"));
+            let reason = game_file_plan(temp.path(), profile.id, true).unwrap_err();
+            if cfg!(any(windows, target_os = "linux")) {
+                assert!(reason.contains("pack"));
+            } else {
+                assert!(reason.contains("unsupported"));
+            }
         }
     }
 }

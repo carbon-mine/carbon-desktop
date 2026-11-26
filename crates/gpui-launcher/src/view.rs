@@ -1435,7 +1435,8 @@ impl Render for Launcher {
                     .capture_any_mouse_up(|_, _, cx| cx.stop_propagation())
             })
             .on_action(cx.listener(|this, _: &shell::CloseLauncher, win, cx| {
-                this.shell_command(shell::Command::Close, win, cx)
+                // Share the close guard with native menu commands.
+                this.close_from_menu(win, cx)
             }))
             .on_action(cx.listener(|this, _: &shell::OpenFile, win, cx| {
                 this.open_shell_menu(shell::Page::File, win, cx)
