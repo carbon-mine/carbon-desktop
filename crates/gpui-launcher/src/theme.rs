@@ -137,7 +137,6 @@ pub struct Palette {
     pub accent: Rgba,
     pub selected: Rgba,
     pub warning: Rgba,
-    pub success: Rgba,
 }
 
 impl Palette {
@@ -153,12 +152,12 @@ impl Palette {
         let values = if dark {
             [
                 0x202020, 0x262626, 0x2c2c2c, 0x424242, 0xbdbdbd, 0xf4f4f4, 0xd7d7d7, 0x404040,
-                0xf4f4f4, 0xd7d7d7,
+                0xf4f4f4,
             ]
         } else {
             [
                 0xf2f2f2, 0xffffff, 0xf8f8f8, 0xd2d2d2, 0x525252, 0x161616, 0x353535, 0xdedede,
-                0x161616, 0x353535,
+                0x161616,
             ]
         }
         .map(rgb);
@@ -172,7 +171,6 @@ impl Palette {
             accent,
             selected,
             warning,
-            success,
         ] = values;
         Self {
             dark,
@@ -186,7 +184,6 @@ impl Palette {
             accent,
             selected,
             warning,
-            success,
         }
     }
 
