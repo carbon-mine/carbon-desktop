@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
+mod targets;
 
 use super::theme::{Partition, compact_action, label, partition, partition_strip};
 use super::{Launcher, account_panel::AccountPanel};
@@ -16,6 +17,8 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
 };
 use std::{cell::Cell, path::PathBuf, rc::Rc};
+use targets::TargetDialog;
+use uuid::Uuid;
 
 actions!(popup, [Close, Save]);
 
@@ -29,6 +32,7 @@ pub enum Mode {
 pub enum Kind {
     Profile(Mode, Option<Profile>),
     Server(Profile),
+    Targets(Uuid, carbon_profiles::InstanceTargets),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
     Notice {
@@ -61,6 +65,7 @@ struct Popup {
     focus: FocusHandle,
     form: Option<Form>,
     server: Option<ServerForm>,
+    targets: Option<TargetDialog>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
     account: Option<AccountDialog>,
@@ -75,6 +80,7 @@ fn title(kind: &Kind) -> &'static str {
         Kind::Profile(Mode::Edit, _) => "Edit instance",
         Kind::Profile(Mode::Clone, _) => "Clone instance",
         Kind::Server(_) => "Edit server address",
+        Kind::Targets(..) => "Launch targets",
         Kind::ImportPack(..) => "Import modpack",
         Kind::Account(_) => "Minecraft account",
         Kind::Notice { title, .. } => title,
@@ -95,6 +101,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
     let (height, minimum_height) = match &kind {
         Kind::Profile(..) => (417., 340.),
         Kind::Server(..) => (262., 220.),
+        Kind::Targets(..) => (460., 300.),
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
         Kind::Account(_) => (430., 280.),
@@ -180,6 +187,7 @@ impl Popup {
             super::accessibility::Accessibility::new(window, cx, title(&kind).into());
         let focus = cx.focus_handle();
         let mut server = None;
+        let mut targets = None;
         let (form, pack, notice, account) = match kind {
             Kind::Profile(mode, original) => {
                 let name = original
@@ -256,6 +264,11 @@ impl Popup {
                 server = Some(ServerForm { original, input });
                 (None, None, None, None)
             }
+            Kind::Targets(id, snapshot) => {
+                focus.focus(window);
+                targets = Some(TargetDialog::new(id, snapshot));
+                (None, None, None, None)
+            }
             Kind::ImportPack(path, review) => {
                 focus.focus(window);
                 (None, Some((path, review)), None, None)
@@ -297,6 +310,7 @@ impl Popup {
             focus,
             form,
             server,
+            targets,
             pack,
             notice,
             account,
@@ -337,6 +351,18 @@ impl Popup {
                 let _ = weak.update(cx, |this, cx| f(this, window, cx));
             },
         )
+    }
+
+    fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(targets) = self.targets.as_mut()
+            && targets.cancel_edit()
+        {
+            self.error = None;
+            self.focus.focus(window);
+            cx.notify();
+            return;
+        }
+        self.account_dismiss(window, cx);
     }
 
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -511,12 +537,14 @@ impl Render for Popup {
             .key_context("CarbonPopup")
             .on_action(cx.listener(|this, _: &Close, window, cx| {
                 if !this.importing {
-                    this.account_dismiss(window, cx);
+                    this.dismiss(window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &Save, window, cx| {
                 if this.form.is_some() || this.server.is_some() {
                     this.commit(window, cx);
+                } else if this.targets.as_ref().is_some_and(TargetDialog::editing) {
+                    this.save_target(window, cx);
                 } else if this.notice.is_some() {
                     window.remove_window();
                 } else {
@@ -662,6 +690,9 @@ impl Render for Popup {
                             .child("Import copies these overrides into a separate local instance."),
                     );
         }
+        if let Some(targets) = &self.targets {
+            content = content.child(self.target_content(targets, cx));
+        }
         if let Some(account) = &self.account {
             content = content.child(self.account_content(account, cx));
         }
@@ -676,7 +707,7 @@ impl Render for Popup {
         if let Some(error) = &self.error {
             let reason = if self.pack.is_some() {
                 format!("Could not import this pack. {error}")
-            } else if self.server.is_some() {
+            } else if self.server.is_some() || self.targets.is_some() {
                 error.clone()
             } else {
                 format!("Could not save this instance. {error}")
@@ -705,6 +736,12 @@ impl Render for Popup {
                 "Close"
             };
             (dismiss, Partition::Neutral)
+        } else if self
+            .targets
+            .as_ref()
+            .is_some_and(|targets| !targets.editing())
+        {
+            ("Close", Partition::Neutral)
         } else {
             ("Cancel", Partition::Neutral)
         };
@@ -732,7 +769,7 @@ impl Render for Popup {
                 self.importing,
                 None,
                 cx,
-                |this, window, cx| this.account_dismiss(window, cx),
+                Self::dismiss,
             ))
             .when(self.form.is_some() || self.server.is_some(), |bar| {
                 let name = match self.form.as_ref().map(|form| form.mode) {
@@ -782,6 +819,8 @@ impl Render for Popup {
             });
         let bar = if let Some(account) = &self.account {
             self.account_actions(account, bar, cx)
+        } else if let Some(targets) = &self.targets {
+            self.target_actions(targets, bar, cx)
         } else {
             bar
         };
