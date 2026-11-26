@@ -926,21 +926,23 @@ impl Launcher {
             "Setup required"
         };
         let play = theme::launch_action("Play", p, self.popup.is_some(), cx);
-        let play = self.control(
-            play,
-            "play",
-            "Play",
-            Role::Button,
-            self.popup.is_some(),
-            None,
-            cx,
-            |this, window, cx| {
-                this.tab = Tab::Overview;
-                let focus = this.task_focus.clone();
-                window.on_next_frame(move |window, _| focus.focus(window));
-                cx.notify();
-            },
-        );
+        let play = self
+            .control(
+                play,
+                "play",
+                "Play",
+                Role::Button,
+                self.popup.is_some(),
+                None,
+                cx,
+                |this, window, cx| {
+                    this.tab = Tab::Overview;
+                    let focus = this.task_focus.clone();
+                    window.on_next_frame(move |window, _| focus.focus(window));
+                    cx.notify();
+                },
+            )
+            .with_focus_outline(p.ink());
         col()
             .child(
                 div()

@@ -333,6 +333,7 @@ impl Accessibility {
             id,
             node,
             binding,
+            focus_outline: None,
         }
     }
 }
@@ -352,9 +353,15 @@ pub struct Semantic {
     id: String,
     node: Node,
     binding: Binding,
+    focus_outline: Option<gpui::Hsla>,
 }
 
 impl Semantic {
+    pub fn with_focus_outline(mut self, color: gpui::Hsla) -> Self {
+        self.focus_outline = Some(color);
+        self
+    }
+
     pub fn with_focus(mut self, handle: FocusHandle) -> Self {
         if let Binding::Button(_, callback) = &self.binding {
             self.binding = Binding::TrackedControl(handle, callback.clone());
@@ -514,6 +521,15 @@ impl Element for Semantic {
         };
 
         self.element.paint(window, cx);
+        if let Some(color) = self.focus_outline
+            && focus
+                .as_ref()
+                .is_some_and(|handle| handle.is_focused(window))
+        {
+            let mut ring = gpui::outline(bounds.dilate(px(4.)), color, gpui::BorderStyle::Solid);
+            ring.border_widths = px(2.).into();
+            window.paint_quad(ring);
+        }
         if matches!(self.binding, Binding::Group(_)) {
             let parent = self.state.frame.borrow_mut().parents.pop();
             debug_assert_eq!(parent, Some(node_id));
