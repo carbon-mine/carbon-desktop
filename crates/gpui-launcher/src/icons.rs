@@ -8,6 +8,7 @@ pub enum Icon {
     Builtin(&'static InstanceIcon),
     Add,
     Account,
+    ChevronDown,
     Play,
     Instance,
     Pack,
@@ -17,6 +18,7 @@ impl Icon {
     fn path(self) -> SharedString {
         match self {
             Self::Builtin(icon) => return format!("instances/{}.png", icon.id).into(),
+            Self::ChevronDown => "icons/chevron-down.svg",
             Self::Add => "icons/add.svg",
             Self::Account => "icons/account.svg",
             Self::Play => "icons/play.svg",
@@ -70,7 +72,11 @@ const BRAND: [(&str, &[u8]); 3] = [
 
 pub struct Assets;
 
-const ICONS: [(Icon, &[u8]); 5] = [
+const ICONS: [(Icon, &[u8]); 6] = [
+    (
+        Icon::ChevronDown,
+        include_bytes!("../assets/icons/chevron-down.svg"),
+    ),
     (Icon::Add, include_bytes!("../assets/icons/add.svg")),
     (Icon::Account, include_bytes!("../assets/icons/account.svg")),
     (Icon::Play, include_bytes!("../assets/icons/play.svg")),
