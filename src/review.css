@@ -124,9 +124,6 @@ button.primary:focus-visible { outline-color: var(--desktop-action-ink); outline
   color: var(--desktop-instance-ink);
   flex: none;
 }
-.personal-mark .instance-sprite { inline-size: 88%; block-size: 88%; object-fit: contain; image-rendering: pixelated }
-.icon-opener { padding: 0; border: 1px solid var(--desktop-line); cursor: pointer }
-.icon-opener:hover { border-color: currentColor }
 .instance-mark i {
   inline-size: 52%;
   block-size: 52%;

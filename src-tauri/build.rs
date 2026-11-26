@@ -1,7 +1,6 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
         "edit_profile_dialog",
-        "choose_instance_icon",
         "apply_desktop_theme",
         "personal_library",
         "open_game_folder",

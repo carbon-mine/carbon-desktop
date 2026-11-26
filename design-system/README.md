@@ -118,7 +118,7 @@ keyboard paths, theme checks and the packaged-app verification still required.
 
 ## Instance icons
 
-The 16 illustrations in `instance-icons/` are original Carbon Desktop artwork licensed under MPL-2.0. Each PNG preserves a 16-by-16 pixel drawing at six times its original size. Creature portraits, tools and magical or mechanical objects share a dark outline, upper-left light and cool shadow. Both libraries, detail headers and native pickers display the same colored artwork in light and dark appearances. Command glyphs retain the shell foreground color.
+The 16 illustrations in `instance-icons/` are original Carbon Desktop artwork licensed under MPL-2.0. Each PNG preserves a 16-by-16 pixel drawing at six times its original size. Creature portraits, tools and magical or mechanical objects share a dark outline, upper-left light and cool shadow. The GPUI library, detail header and native picker display the same colored artwork in light and dark appearances. Command glyphs retain the shell foreground color.
 
 Store the chosen built-in ID in the profile. Keep these IDs stable across releases. If a newer ID is unavailable, display the automatic icon and preserve the stored preference until the player changes it.
 

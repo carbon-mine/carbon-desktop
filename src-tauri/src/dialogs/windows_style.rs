@@ -57,14 +57,6 @@ impl Style {
         }
     }
 
-    pub(super) unsafe fn preview_background(self) -> u32 {
-        if self.native {
-            GetSysColor(COLOR_WINDOW)
-        } else {
-            self.surface
-        }
-    }
-
     pub unsafe fn init(
         self,
         hwnd: HWND,
@@ -191,16 +183,8 @@ impl Style {
                 let focus = GetFocus();
                 if !focus.is_null()
                     && GetParent(focus) == hwnd
-                    && [
-                        NAME,
-                        VERSION,
-                        NUMBERS[0],
-                        NUMBERS[1],
-                        NUMBERS[2],
-                        ACCOUNTS,
-                        super::icon::CHOICE,
-                    ]
-                    .contains(&GetDlgCtrlID(focus))
+                    && [NAME, VERSION, NUMBERS[0], NUMBERS[1], NUMBERS[2], ACCOUNTS]
+                        .contains(&GetDlgCtrlID(focus))
                 {
                     let mut rect = RECT::default();
                     GetWindowRect(focus, &mut rect);
@@ -316,7 +300,7 @@ impl Style {
 }
 
 fn combo_control(id: i32) -> bool {
-    [VERSION, ACCOUNTS, super::icon::CHOICE].contains(&id)
+    [VERSION, ACCOUNTS].contains(&id)
 }
 
 unsafe fn combo_text(hwnd: HWND, index: isize) -> Option<Vec<u16>> {

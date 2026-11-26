@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Original Carbon instance artwork shared by both desktop editions.
+//! Original Carbon instance artwork for the desktop launcher.
 use super::{storage, Profile};
 use std::path::Path;
 use uuid::Uuid;

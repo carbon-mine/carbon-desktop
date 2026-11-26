@@ -896,11 +896,7 @@ impl Launcher {
                         ))
                         .child(self.command(
                             p, "change-icon", "Change icon", false, self.busy() || self.popup.is_some(), cx,
-                            |this, win, cx| {
-                                if let Some(profile) = this.selected_profile().cloned() {
-                                    popup::open(this, popup::Kind::Icon(profile), win, cx);
-                                }
-                            },
+                            |this, win, cx| this.open_icon_picker(win, cx),
                         ))
                         .when(profile.imported_pack.is_none(), |row| row.child(self.command(
                             p,

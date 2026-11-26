@@ -7,7 +7,6 @@
   import type { PersonalProfile, ProfileMode, SetupReport, GameFilesPlan, GameFilesReceipt, GameFilesProgress } from './personal'
   import markLight from '../design-system/inherited/brand/mark-light.svg'
   import markDark from '../design-system/inherited/brand/mark-dark.svg'
-  import InstanceIcon from './InstanceIcon.svelte'
   import DesktopIcon from '../design-system/DesktopIcon.svelte'
   import '../design-system/inherited/tokens.css'
   import '../design-system/workspace.css'
@@ -721,25 +720,6 @@
     void editProfile('create', document.getElementById('new-profile'))
   }
 
-  async function chooseIcon(profile: PersonalProfile, opener: HTMLElement) {
-    if (personalDisabled) return
-    busy = true
-    personalFailure = ''
-    try {
-      const saved = await invoke<PersonalProfile | null>('choose_instance_icon', {profileId: profile.id})
-      if (saved && saved.id === profile.id) {
-        profiles = profiles.map(item => item.id === saved.id ? {...item, iconId: saved.iconId} : item)
-      }
-    } catch (e) {
-      personalFailure = errorText(e)
-      personalNeedsReload = true
-    } finally {
-      busy = false
-      await tick()
-      if (opener.isConnected) opener.focus()
-    }
-  }
-
   async function editProfile(mode: ProfileMode, opener: HTMLElement | null) {
     if (personalDisabled) return
     busy = true
@@ -830,7 +810,7 @@
         {#if view === 'library'}
           {#each personalMatches as item (item.id)}
             <li><button id={'instance-' + item.id} class="instance-entry" aria-current={item.id === personalId ? 'true' : undefined} onclick={() => selectPersonal(item.id)}>
-              <span class="instance-mark personal-mark" aria-hidden="true"><InstanceIcon profile={item} /></span>
+              <span class="instance-mark personal-mark" aria-hidden="true"><i></i></span>
               <span class="entry-label"><strong>{item.name}</strong><small>{profileSource(item)} {item.version}</small></span>
             </button></li>
           {:else}
@@ -864,7 +844,7 @@
       {#if view === 'library'}
         {#if personal}
           <div class="instance-header">
-            <button class="instance-mark personal-mark large-mark icon-opener" aria-label="Change instance icon" title="Change instance icon" disabled={personalDisabled} onclick={e => chooseIcon(personal!, e.currentTarget)}><InstanceIcon profile={personal} /></button>
+            <span class="instance-mark personal-mark large-mark" aria-hidden="true"><i></i></span>
             <div class="instance-identity"><h2 bind:this={heading} tabindex="-1">{personal.name}</h2><p>Minecraft Java Edition · <span class="version-label">{profileSource(personal)} {personal.version}</span></p></div>
             <div class="launch-control">
               <button class="play-action" aria-describedby="play-hint" onclick={showReadiness}><DesktopIcon name="play" /> Play</button>

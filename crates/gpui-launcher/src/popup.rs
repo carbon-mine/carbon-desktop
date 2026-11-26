@@ -55,7 +55,7 @@ struct Popup {
     root_path: PathBuf,
     palette: super::theme::Palette,
     focus: FocusHandle,
-    icon: Option<carbon_profiles::icons::IconDraft>,
+    icon: Option<icon::Picker>,
     form: Option<Form>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
@@ -178,8 +178,7 @@ impl Popup {
         let mut icon = None;
         let (form, pack, notice, account) = match kind {
             Kind::Icon(profile) => {
-                icon = Some(carbon_profiles::icons::IconDraft::new(&profile));
-                focus.focus(window);
+                icon = Some(icon::Picker::new(&profile, window, cx));
                 (None, None, None, None)
             }
             Kind::Profile(mode, original) => {
@@ -462,22 +461,6 @@ impl Render for Popup {
             .text_color(self.palette.ink())
             .track_focus(&self.focus)
             .key_context("CarbonPopup")
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if let Some(draft) = this.icon.as_mut() {
-                    let last = carbon_profiles::icons::catalog().len();
-                    let current = draft.selected_index();
-                    let index = match event.keystroke.key.as_str() {
-                        "left" | "up" => current.checked_sub(1).unwrap_or(last),
-                        "right" | "down" => (current + 1) % (last + 1),
-                        "home" => 0,
-                        "end" => last,
-                        _ => return,
-                    };
-                    draft.choose(index);
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }))
             .on_action(cx.listener(|this, _: &Close, window, cx| {
                 if !this.importing {
                     this.account_dismiss(window, cx);
@@ -515,6 +498,9 @@ impl Render for Popup {
             .flex_1()
             .min_h_0()
             .id("popup-content")
+            .when_some(self.icon.as_ref(), |content, picker| {
+                content.track_scroll(&picker.scroll)
+            })
             .overflow_y_scroll()
             .p_5()
             .gap_3();
@@ -734,7 +720,7 @@ impl Render for Popup {
                 ))
             });
         let bar = if let Some(draft) = &self.icon {
-            let disabled = !draft.changed();
+            let disabled = !draft.draft.changed();
             bar.child(self.control(
                 label(
                     compact_action("save-icon", p, Partition::Primary, disabled, cx),
