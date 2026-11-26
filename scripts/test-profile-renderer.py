@@ -284,89 +284,6 @@ def test_diagnostic_recovery(browser, address):
     page.close()
 
 
-def test_transfer_motion(browser, address):
-    page = open_case(browser, address)
-    page.clock.install(time="2030-01-01T00:00:00Z")
-    page.get_by_role("button", name="Review install").click()
-    page.get_by_role("button", name="Install instance").click()
-    meter = page.get_by_role("progressbar", name="Managed Java download")
-    counter = page.locator(".transfer .technical")
-    expect(meter).to_have_attribute("value", "2048")
-    expect(counter).to_have_text("2 KiB / 4 KiB")
-    page.clock.pause_at("2030-01-01T00:10:00Z")
-
-    def receive(count):
-        page.evaluate("""count => reviewTest.emit('java-progress', {
-            profileId:'0ddfed53-76d4-47f4-ab31-8cd392aa4a03', receivedBytes:count, totalBytes:4096
-        })""", count)
-
-    receive(3584)
-    expect(meter).to_have_attribute("aria-valuetext", "3.5 KiB / 4 KiB")
-    page.clock.run_for(48)
-    intermediate = float(counter.inner_text().split()[0])
-    assert 2 < intermediate < 3.5, intermediate
-    page.clock.run_for(200)
-    expect(counter).to_have_text("3.5 KiB / 4 KiB")
-
-    receive(3840)
-    page.emulate_media(reduced_motion="reduce")
-    page.clock.run_for(16)
-    expect(counter).to_have_text("3.8 KiB / 4 KiB")
-    receive(1024)
-    expect(counter).to_have_text("1 KiB / 4 KiB")
-    page.clock.run_for(200)
-    expect(counter).to_have_text("1 KiB / 4 KiB")
-
-    receive(4096)
-    busy = page.get_by_role("progressbar", name="Verifying and preparing Java…")
-    expect(busy).to_have_count(1)
-    assert busy.get_attribute("value") is None
-    assert page.locator(".busy span").evaluate("el => getComputedStyle(el).animationName") == "none"
-    page.emulate_media(reduced_motion="no-preference")
-    motion_seconds = page.locator(".busy span").evaluate("""el => {
-        const style = getComputedStyle(el);
-        return parseFloat(style.animationDuration) * Number(style.animationIterationCount);
-    }""")
-    assert 0 < motion_seconds <= 5
-    page.close()
-
-
-def test_file_progress_resets_on_new_phase(browser, address):
-    page = open_case(browser, address)
-    page.clock.install(time="2030-01-01T00:00:00Z")
-    page.evaluate("""() => {
-        const bridge = window.__TAURI_INTERNALS__;
-        const invoke = bridge.invoke.bind(bridge);
-        reviewTest.installReject = () => {};
-        bridge.invoke = (cmd, args) => {
-            if (cmd !== 'prepare_game_files') return invoke(cmd, args);
-            reviewTest.files = (phase, completedFiles) => reviewTest.emit('game-files-progress', {
-                profileId:args.profileId, phase, completedFiles, totalFiles:100,
-                verifiedBytes:completedFiles * 1024, totalBytes:102400
-            });
-            reviewTest.files('downloading', 10);
-            return new Promise(() => {});
-        };
-    }""")
-    page.get_by_role("button", name="Review install").click()
-    page.get_by_role("button", name="Install instance").click()
-    counter = page.locator(".transfer .technical")
-    meter = page.get_by_role("progressbar", name="Minecraft game files")
-    expect(counter).to_have_text("10 / 100 files · 10 KiB / 100 KiB")
-    page.clock.pause_at("2030-01-01T00:10:00Z")
-    page.evaluate("reviewTest.files('downloading', 70)")
-    expect(meter).to_have_attribute("value", "70")
-    page.clock.run_for(48)
-    assert 10 < int(counter.inner_text().split()[0]) < 70
-    page.evaluate("reviewTest.files('copyingView', 5)")
-    expect(counter).to_have_text("5 / 100 files · 5 KiB / 100 KiB")
-    page.clock.run_for(200)
-    expect(counter).to_have_text("5 / 100 files · 5 KiB / 100 KiB")
-    page.evaluate("reviewTest.files('copyingView', 100)")
-    expect(counter).to_have_text("100 / 100 files · 100 KiB / 100 KiB")
-    page.close()
-
-
 def test_navigation(browser, address, captures):
     page = open_case(browser, address)
     overview = page.get_by_role("tab", name="Overview")
@@ -451,8 +368,6 @@ def main():
                 test_profile_dialog_return(browser, address)
                 test_pack_import(browser, address)
                 test_install(browser, address)
-                test_transfer_motion(browser, address)
-                test_file_progress_resets_on_new_phase(browser, address)
                 test_diagnostic_recovery(browser, address)
                 test_navigation(browser, address, args.captures)
                 test_appearance_keeps_search_selection(browser, address)

@@ -39,7 +39,6 @@ export function activityLabel(instance: Instance): string {
     interrupted: 'Resume or cancel'
   }[instance.phase]
 }
-const kibibytes = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
 export function kib(bytes: number | null) {
-  return bytes === null ? 'Unavailable' : kibibytes.format(bytes / 1024) + ' KiB'
+  return bytes === null ? 'Unavailable' : new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(bytes / 1024) + ' KiB'
 }

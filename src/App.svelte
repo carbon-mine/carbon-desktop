@@ -8,7 +8,6 @@
   import markLight from '../design-system/inherited/brand/mark-light.svg'
   import markDark from '../design-system/inherited/brand/mark-dark.svg'
   import DesktopIcon from '../design-system/DesktopIcon.svelte'
-  import TransferProgress from './TransferProgress.svelte'
   import '../design-system/inherited/tokens.css'
   import '../design-system/workspace.css'
   import './review.css'
@@ -866,23 +865,15 @@
                   <div class="task-copy"><h3>Pack preparation pending</h3>
                     <p>{personal.importedPack?.name} requires additional pack content before it can play.</p></div>
                 {:else if setupWork?.key === setupKey(personal) && setupWork.action !== 'launchReview'}
-                  {@const progressLabel = cancelRequested ? 'Cancellation requested…'
-                    : javaProgress && javaProgress.receivedBytes === javaProgress.totalBytes ? 'Verifying and preparing Java…'
-                    : (fileProgress && filePhases[fileProgress.phase]) || workingLabels[setupWork.action]}
                   <div class="task-copy">
-                    <h3>{progressLabel}</h3>
-                    {#key setupWork.key + ':' + setupWork.action + ':' + (fileProgress?.phase ?? '')}
-                      {#if javaProgress && javaProgress.receivedBytes < javaProgress.totalBytes}
-                        <TransferProgress mode="bytes" label="Managed Java download"
-                          done={javaProgress.receivedBytes} total={javaProgress.totalBytes} frozen={cancelRequested} />
-                      {:else if fileProgress && fileProgress.totalFiles > 0}
-                        <TransferProgress mode="files" label="Minecraft game files"
-                          done={fileProgress.completedFiles} total={fileProgress.totalFiles}
-                          bytes={fileProgress.verifiedBytes} totalBytes={fileProgress.totalBytes} frozen={cancelRequested} />
-                      {:else}
-                        <TransferProgress mode="busy" label={progressLabel} frozen={cancelRequested} />
-                      {/if}
-                    {/key}
+                    <h3>{cancelRequested ? 'Cancellation requested…' : javaProgress && javaProgress.receivedBytes === javaProgress.totalBytes ? 'Verifying and preparing Java…' : fileProgress ? (filePhases[fileProgress.phase] ?? workingLabels[setupWork.action]) : workingLabels[setupWork.action]}</h3>
+                    {#if javaProgress && javaProgress.receivedBytes < javaProgress.totalBytes}
+                      <progress value={javaProgress.receivedBytes} max={javaProgress.totalBytes} aria-label="Managed Java download"></progress>
+                      <p class="technical">{kib(javaProgress.receivedBytes)} / {kib(javaProgress.totalBytes)}</p>
+                    {:else if fileProgress && fileProgress.totalFiles > 0}
+                      <progress value={fileProgress.completedFiles} max={fileProgress.totalFiles} aria-label="Minecraft game files"></progress>
+                      <p class="technical">{fileProgress.completedFiles} / {fileProgress.totalFiles} files · {kib(fileProgress.verifiedBytes)} / {kib(fileProgress.totalBytes)}</p>
+                    {/if}
                     {#if cancelError}<p role="alert">{cancelError}</p>{/if}
                   </div>
                   {#if setupWork.action === 'install' || setupWork.action === 'games' || setupWork.action === 'verify'}
