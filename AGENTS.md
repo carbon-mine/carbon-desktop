@@ -1,6 +1,6 @@
 # Carbon Desktop contributors
 
-Carbon Desktop is a standalone Minecraft Java launcher for Windows and Linux. GPUI is the primary interface. The secondary Svelte/Tauri edition uses the same Rust services and its own application data root. Keep install, account, execution and storage decisions in those services. Expose named operations to each interface.
+Carbon Desktop targets Windows, Linux, and macOS on x64 and ARM64. GPUI is the primary interface. The secondary Svelte/Tauri edition uses the same Rust services and its own application data root. Keep install, account, execution and storage decisions in those services. Expose named operations to each interface.
 
 Work on a branch and open a pull request against main. Build the Svelte frontend before checking the Rust workspace so that Tauri embeds current assets. Use the pinned Bun and Cargo lockfiles, verify the local design seed, and fix CI failures on the PR branch. The required aggregate check is **Desktop CI Gate**. Use a separate approval for release publication.
 

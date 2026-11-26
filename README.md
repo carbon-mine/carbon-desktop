@@ -2,7 +2,7 @@
 
 <div align="center">
   <h1>Carbon Desktop</h1>
-  <p><strong>A native Minecraft Java launcher in development for Windows and Linux.</strong></p>
+  <p><strong>A native Minecraft Java launcher in development for Windows, Linux, and macOS.</strong></p>
   <p>Organize local instances, review what each version needs, and prepare its game files and Java runtime from one desktop workspace.</p>
   <p>
     <a href="#quick-start">Quick start</a> ·
@@ -62,6 +62,8 @@ bun run tauri dev
 ## Project status
 
 Carbon Desktop is a development preview. Vanilla setup and offline verification are available. The Play action leads to setup and account requirements. Protected Minecraft launch, authenticated multiplayer, and full mod-loader installation are still in development. Microsoft sign-in requires an approved application registration.
+
+The project targets x64 and ARM64 on all three operating systems. Native gameplay, account storage, and installer behavior require separate checks for each target.
 
 The [GPUI application](crates/gpui-launcher) is the primary desktop frontend. The [Svelte interface](src) and [Tauri shell](src-tauri) remain available for comparison. Shared Rust code owns [profiles](crates/profiles), [Java runtime preparation](crates/runtime), [vanilla installation](crates/vanilla), and [pack import](crates/pack).
 

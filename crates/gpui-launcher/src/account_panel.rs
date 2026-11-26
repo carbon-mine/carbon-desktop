@@ -165,7 +165,7 @@ impl AccountPanel {
 
     pub fn play_hint(&self) -> &'static str {
         if self.unavailable() {
-            "Microsoft sign-in is unavailable in this build. Protected game launch is still in development."
+            "Microsoft sign-in is unavailable. Protected game launch is still in development."
         } else if self.signed_in() {
             "This account is signed in. Protected game launch is still in development."
         } else if self.active_account().is_some() {
