@@ -3,7 +3,7 @@
 use super::view::{col, row};
 use super::*;
 use accesskit::Role;
-use carbon_profiles::{Profile, TargetAction, TargetKey};
+use carbon_profiles::{Profile, TargetKey};
 use gpui::SharedString;
 use gpui::{AnyElement, div, img, px};
 use gpui_component::StyledExt;
@@ -626,59 +626,6 @@ impl Launcher {
             self.select_personal(id, cx);
             cx.notify();
         }
-    }
-
-    pub(super) fn home_select_target(&mut self, id: Uuid, key: TargetKey, cx: &mut Context<Self>) {
-        if self.personal == Some(id)
-            && self
-                .selected_profile()
-                .is_some_and(|p| p.server_address.is_none())
-        {
-            self.select_target(id, key, cx);
-        }
-    }
-
-    /// Select a saved world or destination through the shared profile service.
-    /// Selecting is deliberately separate from launch: the protected launch
-    /// path is still unavailable, so Home never presents a fake Play.
-    fn select_target(&mut self, id: Uuid, key: TargetKey, cx: &mut Context<Self>) {
-        let Some(TargetsState::Ready(snapshot)) = self.targets.get(&id) else {
-            return;
-        };
-        let revision = snapshot.revision;
-        let request = Uuid::new_v4();
-        self.targets.insert(id, TargetsState::Loading(request));
-        self.message = "Selecting destination…".to_owned();
-        let path = self.root.path.clone();
-        let work = cx.background_executor().spawn(async move {
-            carbon_profiles::change_instance_targets(
-                &path,
-                id,
-                revision,
-                TargetAction::Select(Some(key)),
-            )
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            this.update(cx, |this, cx| {
-                let message = result
-                    .as_ref()
-                    .map_or_else(Clone::clone, |_| "Destination selected.".to_owned());
-                if this
-                    .targets
-                    .get_mut(&id)
-                    .is_some_and(|entry| entry.complete(request, result))
-                {
-                    if this.personal == Some(id) {
-                        this.message = message;
-                    }
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
     }
 
     fn open_selected_from_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
