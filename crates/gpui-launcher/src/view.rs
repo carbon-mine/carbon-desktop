@@ -187,11 +187,7 @@ impl Launcher {
                             profile.version.id()
                         ),
                         Some(id) == self.personal,
-                        if profile.imported_pack.is_some() {
-                            Icon::Pack
-                        } else {
-                            Icon::Instance
-                        },
+                        Icon::Builtin(carbon_profiles::icons::displayed(profile)),
                         p,
                         cx,
                         move |this, _, cx| this.choose_personal(id, cx),
@@ -888,6 +884,10 @@ impl Launcher {
                             cx,
                             |this, win, cx| this.editor(popup::Mode::Edit, win, cx),
                         ))
+                        .child(self.command(
+                            p, "change-icon", "Change icon", false, self.busy() || self.popup.is_some(), cx,
+                            |this, win, cx| this.open_icon_picker(win, cx),
+                        ))
                         .when(profile.imported_pack.is_none(), |row| row.child(self.command(
                             p,
                             "clone-profile",
@@ -966,11 +966,7 @@ impl Launcher {
                             .gap_3()
                             .child(mark(
                                 p,
-                                if profile.imported_pack.is_some() {
-                                    Icon::Pack
-                                } else {
-                                    Icon::Instance
-                                },
+                                Icon::Builtin(carbon_profiles::icons::displayed(profile)),
                                 !narrow,
                             ))
                             .child(
@@ -1796,7 +1792,15 @@ fn mark(p: Palette, icon: Icon, large: bool) -> gpui::Div {
         .flex()
         .items_center()
         .justify_center()
-        .child(icon.render(px(if large { 22. } else { 15. }), p.ink))
+        .child(icon.render(
+            px(match (icon, large) {
+                (Icon::Builtin(_), true) => 32.,
+                (Icon::Builtin(_), false) => 24.,
+                (_, true) => 22.,
+                (_, false) => 15.,
+            }),
+            p.ink,
+        ))
 }
 
 fn detail_row(label: &'static str, status: String, p: Palette) -> gpui::Div {
