@@ -144,6 +144,7 @@ fn wm_class_matches(value: &[u8], app_id: &str) -> bool {
 
 #[cfg(target_os = "linux")]
 fn set_fixed_hints(connection: &x11rb::rust_connection::RustConnection, window: u32) {
+    use x11rb::connection::Connection;
     use x11rb::properties::WmSizeHints;
     use x11rb::protocol::xproto::ConnectionExt as _;
 
