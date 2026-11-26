@@ -11,7 +11,8 @@ import re
 def main(exe):
     with tempfile.TemporaryDirectory(prefix="carbon-native-smoke-") as folder:
         marker = Path(folder) / "ready"
-        env = {**os.environ, "GPUI_DISABLE_DIRECT_COMPOSITION": "1"}
+        env = {**os.environ, "TMP": folder, "TEMP": folder, "TMPDIR": folder,
+               "GPUI_DISABLE_DIRECT_COMPOSITION": "1"}
         process = subprocess.Popen([exe, "--comparison-review", "--ready-file", str(marker)], env=env)
         try:
             deadline = time.monotonic() + 60
