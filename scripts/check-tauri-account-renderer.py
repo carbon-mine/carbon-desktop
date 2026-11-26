@@ -73,10 +73,12 @@ def main():
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel=args.channel)
                 verify(browser, address, "unavailable", "Microsoft account",
-                       "Microsoft sign-in requires Carbon’s approved application registration.")
+                       "Microsoft sign-in is unavailable. Open Microsoft account for details.")
                 verify(browser, address, "unsupported", "Microsoft account",
                        "Minecraft account controls are unavailable on this platform.")
                 verify(browser, address, "signIn", "Sign in with Microsoft",
+                       "Verify your Minecraft account to check Java Edition entitlement.")
+                verify(browser, address, "available", "Minecraft account",
                        "Verify your Minecraft account to check Java Edition entitlement.")
                 verify(browser, address, "verified", "Minecraft account", "Microsoft account verified.")
                 browser.close()
