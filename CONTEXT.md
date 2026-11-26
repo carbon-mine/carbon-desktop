@@ -1,6 +1,6 @@
 # Carbon Desktop
 
-Carbon Desktop prepares each Minecraft instance independently and supervises its game processes.
+Carbon Desktop prepares each Minecraft instance independently. This glossary describes the planned boundary for protected game execution.
 
 ## Launch
 

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Pure planning for reviewed vanilla content. Launch admission belongs to the trusted runner.
 mod arguments;
+mod corpus;
 
 use super::{plan::Platform, PreparedInstanceView};
-use carbon_profiles::{Profile, VanillaVersion};
+use carbon_profiles::Profile;
 use carbon_runtime::RuntimeLease;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -41,6 +42,7 @@ impl AccountReference {
 pub enum PlanError {
     UnsupportedPlatform,
     UnsupportedVersion,
+    UnreviewedManifest,
     UnsupportedLegacy,
     UnsupportedRule,
     MalformedManifest,
@@ -61,6 +63,9 @@ impl fmt::Display for PlanError {
             Self::UnsupportedPlatform => "Vanilla launch planning is unavailable on this platform.",
             Self::UnsupportedVersion => {
                 "This Minecraft version is outside the launch planning corpus."
+            }
+            Self::UnreviewedManifest => {
+                "This Minecraft version's manifest revision requires launch review."
             }
             Self::UnsupportedLegacy => {
                 "Legacy or inherited launch metadata requires its own adapter."
@@ -221,14 +226,6 @@ fn matches_binding(
     Ok(())
 }
 
-fn required_major(version: VanillaVersion) -> Result<u16, PlanError> {
-    match version {
-        VanillaVersion::Release26_3 => Ok(25),
-        VanillaVersion::Snapshot24w14a => Ok(21),
-        _ => Err(PlanError::UnsupportedVersion),
-    }
-}
-
 /// Identity for the exact verified manifest and its ordered artifact map, scoped to this
 /// instance and platform. No local paths or account data participate.
 pub fn activation_digest(view: &PreparedInstanceView) -> [u8; 32] {
@@ -267,10 +264,6 @@ pub fn plan_launch<'a>(
     {
         return Err(PlanError::UnsupportedPlatform);
     }
-    let required = required_major(profile.version)?;
-    if runtime.major() != required || !runtime.belongs_to(view.root()) {
-        return Err(PlanError::IncompatibleRuntime);
-    }
     if profile.id != summary.profile_id
         || profile.version.id() != summary.version
         || profile.imported_pack.is_some()
@@ -280,12 +273,17 @@ pub fn plan_launch<'a>(
     {
         return Err(PlanError::InvalidProfile);
     }
+    let metadata = &view.plan().metadata;
+    let reviewed = corpus::reviewed(profile.version, metadata)?;
+    if runtime.major() != reviewed.java_major || !runtime.belongs_to(view.root()) {
+        return Err(PlanError::IncompatibleRuntime);
+    }
     let paths = view.paths();
     let parts = arguments::build(
-        &view.plan().metadata,
+        metadata,
         platform,
         profile,
-        required,
+        reviewed.java_major,
         arguments::Material {
             asset_index: paths.asset_index_id(),
             classpath: paths.class_path(),

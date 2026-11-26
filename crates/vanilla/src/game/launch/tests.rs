@@ -4,7 +4,7 @@ use super::{
     *,
 };
 use crate::{game::plan::Plan, verified, Origin, Pin};
-use serde::Deserialize;
+use carbon_profiles::VanillaVersion;
 use serde_json::{json, Value};
 use std::{
     ffi::OsStr,
@@ -186,7 +186,31 @@ fn native_extraction_properties_require_separate_host_qualification() {
             JvmArgument::UnresolvedNativeExtraction { property, subdirectory: Some(dir) }
                 if *property == key && *dir == suffix
         )));
+        assert!(!plan.jvm.iter().any(|arg| matches!(arg,
+            JvmArgument::Value(value) if value.to_string_lossy().starts_with(key)
+        )));
+        *raw["arguments"]["jvm"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap() = json!(format!("{key}=${{game_directory}}/{suffix}"));
+        assert_eq!(
+            fixture_parts(&raw, "linux-x86_64", 25).err(),
+            Some(PlanError::UnsupportedArgument)
+        );
     }
+}
+
+#[test]
+fn same_id_java_and_main_class_cannot_substitute_for_a_reviewed_manifest() {
+    let mut changed = manifest();
+    changed["releaseTime"] = json!("2026-01-01T00:00:00Z");
+    assert!(fixture_parts(&changed, "windows-x86_64", 25).is_ok());
+    let changed = serde_json::to_vec(&changed).unwrap();
+    assert_eq!(
+        corpus::reviewed(VanillaVersion::Release26_3, &changed).err(),
+        Some(PlanError::UnreviewedManifest)
+    );
 }
 
 #[test]
@@ -238,39 +262,34 @@ fn summary_is_redacted() {
     );
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CorpusEntry {
-    version: VanillaVersion,
-    sha1: String,
-    sha256: String,
-    url: String,
-    java_major: u16,
-    asset_index: String,
-    asset_index_sha1: String,
-    windows_classpath: usize,
-    linux_classpath: usize,
-}
-
 #[test]
 #[ignore = "requires independently obtained pinned provider metadata in CARBON_LAUNCH_CORPUS_INPUT"]
 fn pinned_official_corpus_is_offline_deterministic() {
     let root = PathBuf::from(
         std::env::var_os("CARBON_LAUNCH_CORPUS_INPUT").expect("set the public metadata directory"),
     );
-    let corpus: Vec<CorpusEntry> = serde_json::from_str(include_str!(
-        "../../../../../fixtures/launch-corpus/vanilla.json"
-    ))
-    .unwrap();
-    for entry in corpus {
+    for entry in corpus::entries().unwrap() {
         let profile = profile(entry.version);
         let raw = std::fs::read(root.join(format!("{}.json", entry.version.id()))).unwrap();
-        assert_eq!(hex::encode(Sha256::digest(&raw)), entry.sha256);
+        assert!(std::ptr::eq(
+            corpus::reviewed(entry.version, &raw).unwrap(),
+            entry
+        ));
+        let mut revised: Value = serde_json::from_slice(&raw).unwrap();
+        let original_time = &revised["time"];
+        let new_time = json!("2026-01-01T00:00:00Z");
+        assert_ne!(original_time, &new_time);
+        revised["time"] = new_time;
+        let revised = serde_json::to_vec(&revised).unwrap();
+        assert_eq!(
+            corpus::reviewed(entry.version, &revised).err(),
+            Some(PlanError::UnreviewedManifest)
+        );
         let pin = Pin {
             id: entry.version.id().into(),
             kind: crate::release_type(entry.version).into(),
-            sha1: entry.sha1,
-            url: entry.url,
+            sha1: entry.sha1.clone(),
+            url: entry.url.clone(),
         };
         let info = verified(&raw, &pin, profile.id, Origin::Cache).unwrap();
         for (label, expected) in [
@@ -296,9 +315,9 @@ fn pinned_official_corpus_is_offline_deterministic() {
                 .collect();
             assert_eq!(classpath.len(), expected);
             let log = plan.logging_path.map(|p| view.join(p));
-            let build = || {
+            let build = |bytes: &[u8]| {
                 arguments::build(
-                    &raw,
+                    bytes,
                     platform,
                     &profile,
                     entry.java_major,
@@ -310,12 +329,14 @@ fn pinned_official_corpus_is_offline_deterministic() {
                 )
                 .unwrap()
             };
+            let revised_args = build(&revised);
             let start = Instant::now();
-            let cold = build();
+            let cold = build(&raw);
             let cold_ms = start.elapsed().as_secs_f64() * 1000.;
+            assert!(revised_args.jvm == cold.jvm && revised_args.game == cold.game);
             let start = Instant::now();
             for _ in 0..50 {
-                let warm = build();
+                let warm = build(&raw);
                 assert!(cold.jvm == warm.jvm && cold.game == warm.game);
             }
             let warm_ms = start.elapsed().as_secs_f64() * 1000. / 50.;
