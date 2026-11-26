@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Run from this directory after npm ci. Chrome is needed only to bake the native assets.
 import { build } from 'esbuild';
-import { cameraFor } from './source-config.mjs';
+import { cameraFor, validateOutputs } from './source-config.mjs';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const manifest = JSON.parse(await readFile(new URL('../../design-system/landscapes/manifest.json', import.meta.url), 'utf8'));
+validateOutputs(manifest.views);
 if (!manifest.views.some(entry => entry.bake)) process.exit(0);
 const sources = JSON.parse(await readFile(new URL('sources.json', import.meta.url), 'utf8'));
 for (const entry of manifest.views) if (entry.bake) cameraFor(sources, entry.bake);
