@@ -52,24 +52,15 @@ The comparison flag opens a temporary library with sample profiles. Run without 
 
 Select an instance, then choose **Review install** to inspect its download plan. **Install instance** prepares the reviewed files and the required JDK. **Verify game files** checks the result offline.
 
-### Svelte/Tauri edition
-
-The secondary interface uses the same Rust core and maintains its own local library. Install Bun and the system dependencies for Tauri. [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-
-```sh
-bun install --frozen-lockfile
-bun run tauri dev
-```
-
 ## Project status
 
 Carbon Desktop is a development preview. Vanilla setup and offline verification are available. The Play action leads to setup and account requirements. Protected Minecraft launch, authenticated multiplayer, and full mod-loader installation are still in development. Microsoft sign-in requires an approved application registration.
 
 The project targets x64 and ARM64 on all three operating systems. The current managed JDKs and private game installations support Windows x64 and Linux x64. macOS and ARM64 are build targets while their runtime setup and gameplay are in development. See the [CI matrix](docs/ci.md) and [runtime qualification](docs/runtime.md).
 
-On macOS, GPUI's File and View menus and native accessibility adapter are still pending. The Svelte/Tauri edition also needs native macOS instance editors, confirmations, and notices. Interactive macOS qualification remains open for both editions.
+On macOS, GPUI's File and View menus and native accessibility adapter are still pending. Interactive macOS qualification remains open.
 
-The [GPUI application](crates/gpui-launcher) is the primary desktop frontend. The [Svelte interface](src) and [Tauri shell](src-tauri) remain available for comparison. Shared Rust code owns [profiles](crates/profiles), [Java runtime preparation](crates/runtime), [vanilla installation](crates/vanilla), and [pack import](crates/pack).
+The [GPUI application](crates/gpui-launcher) is the sole active frontend. The former Svelte/Tauri shell is preserved as a historical design reference. Shared Rust code owns [profiles](crates/profiles), [Java runtime preparation](crates/runtime), [vanilla installation](crates/vanilla), and [pack import](crates/pack).
 
 ## License
 
