@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+mod review_video;
 use gpui::{App, Context, ObjectFit, RenderImage, Window, div, img, prelude::*, rgb};
 use std::{
     sync::Arc,
@@ -167,6 +168,8 @@ fn after_present(step: usize, due: Instant, now: Instant, period: Duration) -> (
 
 pub struct SceneView {
     landscape: Landscape,
+    video: Option<review_video::Reader>,
+    video_failed: bool,
     image: Option<Arc<RenderImage>>,
     step: usize,
     poster_pending: bool,
@@ -185,6 +188,8 @@ impl SceneView {
             .detach();
         let mut view = Self {
             landscape,
+            video: None,
+            video_failed: false,
             image: None,
             step: 0,
             poster_pending: true,
@@ -205,6 +210,8 @@ impl SceneView {
         }
         self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
+        self.video.take();
+        self.video_failed = false;
         self.landscape = landscape;
         self.motion_failed = false;
         self.poster_failed = false;
@@ -220,6 +227,7 @@ impl SceneView {
         }
         self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
+        self.video.take();
         self.playing = playing;
         self.next_due = None;
         self.schedule(cx);
@@ -231,6 +239,12 @@ impl SceneView {
         let scene = self.landscape.0;
         let poster = self.poster_pending;
         let now = Instant::now();
+        let video_source = review_video::Source::configured().filter(|_| !self.video_failed);
+        let fps = if video_source.is_some() {
+            30
+        } else {
+            scene.fps
+        };
         let (bytes, due, step) = if poster {
             (scene.poster, now, 0)
         } else {
@@ -238,7 +252,7 @@ impl SceneView {
                 return;
             }
             let Some(pack) = scene.motion else { return };
-            let period = Duration::from_secs_f64(1. / f64::from(scene.fps));
+            let period = Duration::from_secs_f64(1. / f64::from(fps));
             let (due, advance) = frame_deadline(self.next_due.unwrap_or(now + period), now, period);
             let step = self.step.wrapping_add(advance);
             let Some(bytes) = Frames::open(pack).and_then(|f| f.at(f.index(step, scene.forward)))
@@ -248,14 +262,36 @@ impl SceneView {
             };
             (bytes, due, step)
         };
+        let previous_reader = self.video.take();
         let generation = self.generation;
         let (interrupt, interrupted) = async_channel::bounded::<()>(1);
         self.interrupt = Some(interrupt);
         self.busy = true;
         cx.spawn(async move |this, cx| {
-            let decoded = cx
+            let (decoded, reader, video_failed) = cx
                 .background_executor()
-                .spawn(async move { decode(bytes) })
+                .spawn(async move {
+                    if let Some(source) = video_source {
+                        if poster {
+                            return (
+                                source.poster(scene.id).or_else(|| decode(bytes)),
+                                None,
+                                false,
+                            );
+                        }
+                        match review_video::Reader::frame(previous_reader, source, scene.id, step) {
+                            Ok((reader, image)) => return (Some(image), Some(reader), false),
+                            Err(err) => {
+                                eprintln!(
+                                    "H.264 scenery {}: {}; using bundled playback",
+                                    scene.id, err
+                                );
+                                return (decode(bytes), None, true);
+                            }
+                        }
+                    }
+                    (decode(bytes), None, false)
+                })
                 .await;
             let remaining = due.saturating_duration_since(Instant::now());
             if !remaining.is_zero() {
@@ -269,11 +305,13 @@ impl SceneView {
                 view.busy = false;
                 view.interrupt.take();
                 if view.generation == generation {
+                    view.video = reader;
+                    view.video_failed |= video_failed;
                     if let Some(image) = decoded {
                         retire(view.image.replace(image), cx);
                         view.poster_pending = false;
                         if !poster {
-                            let period = Duration::from_secs_f64(1. / f64::from(scene.fps));
+                            let period = Duration::from_secs_f64(1. / f64::from(fps));
                             let (phase, next) = after_present(step, due, Instant::now(), period);
                             view.step = phase;
                             view.next_due = Some(next);
