@@ -13,6 +13,9 @@ use std::{collections::HashSet, path::Path};
 use theme::{Palette, Partition, compact_action};
 
 const ORDER_FILE: &str = "home-order.json";
+/// Two capped UUID lists need about 10 KiB, so the shared 4 KiB preference cap
+/// would discard a full order and silently clear pins and recents.
+const ORDER_FILE_LIMIT: u64 = 32 * 1024;
 const ORDER_VERSION: u32 = 1;
 const MAX_PINNED: usize = 128;
 const MAX_RECENT: usize = 128;
@@ -46,7 +49,8 @@ impl Default for HomeOrder {
 
 impl HomeOrder {
     pub(crate) fn load(root: &Path) -> Self {
-        let mut order = shell::read::<Self>(root, ORDER_FILE).unwrap_or_default();
+        let mut order =
+            shell::read_at_most::<Self>(root, ORDER_FILE, ORDER_FILE_LIMIT).unwrap_or_default();
         if order.version != ORDER_VERSION {
             return Self::default();
         }
@@ -208,6 +212,7 @@ impl Launcher {
                 .text_color(gpui::rgb(0xf4f4f4))
                 .child("Carbon Desktop"),
         );
+        let busy = self.popup.is_some() || self.picker_open;
         let navigation =
             row()
                 .gap_1()
@@ -218,7 +223,7 @@ impl Launcher {
                         "home-back",
                         "Back",
                         false,
-                        false,
+                        busy,
                         cx,
                         |this, window, cx| {
                             this.history_back(window, cx);
@@ -231,7 +236,7 @@ impl Launcher {
             "home-scenery",
             "Scenery",
             false,
-            false,
+            busy,
             cx,
             |launcher, window, cx| {
                 let scene = popup::ScenePicker::snapshot(launcher);
@@ -245,7 +250,7 @@ impl Launcher {
                 "home-motion",
                 if paused { "Resume" } else { "Pause" },
                 false,
-                false,
+                busy,
                 cx,
                 |launcher, _, cx| {
                     launcher
@@ -260,7 +265,7 @@ impl Launcher {
                 "home-shuffle",
                 "Shuffle",
                 false,
-                false,
+                busy,
                 cx,
                 |launcher, _, cx| {
                     launcher.rotate_home_scene();
@@ -272,7 +277,7 @@ impl Launcher {
             "home-account",
             self.account.read(cx).toolbar_label(),
             false,
-            self.popup.is_some() || self.picker_open,
+            busy,
             cx,
             |launcher, window, cx| launcher.open_account(window, cx),
         );
@@ -936,6 +941,18 @@ mod tests {
             window_width: 1280,
             window_height: 720,
         }
+    }
+
+    #[test]
+    fn a_full_order_round_trips_through_the_home_read_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut order = HomeOrder::default();
+        order.pinned = (0..MAX_PINNED).map(|_| Uuid::new_v4()).collect();
+        order.recent = (0..MAX_RECENT).map(|_| Uuid::new_v4()).collect();
+        order.save(dir.path()).unwrap();
+        let loaded = HomeOrder::load(dir.path());
+        assert_eq!(loaded.pinned, order.pinned);
+        assert_eq!(loaded.recent, order.recent);
     }
 
     #[test]

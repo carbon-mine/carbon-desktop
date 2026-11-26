@@ -50,10 +50,21 @@ struct Placement {
     maximized: bool,
 }
 
+/// Read a small JSON preference file. The default cap keeps other callers from
+/// reading unbounded user files; `read_at_most` exists for callers whose
+/// documents can legitimately exceed it.
 pub(super) fn read<T: serde::de::DeserializeOwned>(root: &Path, file: &str) -> Option<T> {
+    read_at_most(root, file, 4096)
+}
+
+pub(super) fn read_at_most<T: serde::de::DeserializeOwned>(
+    root: &Path,
+    file: &str,
+    limit: u64,
+) -> Option<T> {
     let path = root.join(file);
     let info = fs::symlink_metadata(&path).ok()?;
-    if !info.is_file() || info.len() > 4096 {
+    if !info.is_file() || info.len() > limit {
         return None;
     }
     serde_json::from_slice(&fs::read(path).ok()?).ok()
