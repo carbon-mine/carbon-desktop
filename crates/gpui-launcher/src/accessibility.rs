@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 use accesskit::{
-    Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, Live, Node, NodeId, Rect,
-    Role, TextPosition, TextSelection, Toggled, TreeId, TreeInfo, TreeUpdate,
+    Action, ActionData, ActionRequest, Live, Node, NodeId, Rect, Role, TextPosition, TextSelection,
+    Toggled, TreeId, TreeInfo, TreeUpdate,
 };
+#[cfg(any(windows, target_os = "linux"))]
+use accesskit::{ActionHandler, ActivationHandler};
 use gpui::{
     AnyElement, App, Bounds, Context, Element, ElementId, Entity, EntityInputHandler, FocusHandle,
     Focusable, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Pixels, Render, Window,
@@ -21,14 +23,18 @@ const ROOT: NodeId = NodeId(0);
 type Snapshot = Arc<Mutex<Option<TreeUpdate>>>;
 type Invoke = Rc<dyn Fn(ActionRequest, &mut Window, &mut App)>;
 
+#[cfg(any(windows, target_os = "linux"))]
 struct Activation(Snapshot);
+#[cfg(any(windows, target_os = "linux"))]
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         self.0.lock().ok()?.clone()
     }
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 struct Actions(async_channel::Sender<ActionRequest>);
+#[cfg(any(windows, target_os = "linux"))]
 impl ActionHandler for Actions {
     fn do_action(&mut self, request: ActionRequest) {
         // Platform callbacks may run off the GPUI thread. Queue a bounded request and return.
@@ -43,15 +49,15 @@ impl accesskit::DeactivationHandler for Deactivation {
     fn deactivate_accessibility(&mut self) {}
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 enum Platform {
     #[cfg(windows)]
     Windows(accesskit_windows::SubclassingAdapter),
     #[cfg(target_os = "linux")]
     Linux(accesskit_unix::Adapter),
-    #[cfg(not(any(windows, target_os = "linux")))]
-    Unsupported,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 impl Platform {
     #[cfg(windows)]
     fn attach(window: &Window, activation: Activation, actions: Actions) -> Self {
@@ -77,11 +83,6 @@ impl Platform {
             Deactivation,
         ))
     }
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    fn attach(_: &Window, _: Activation, _: Actions) -> Self {
-        Self::Unsupported
-    }
 }
 
 #[derive(Default)]
@@ -96,6 +97,7 @@ struct Frame {
 struct State {
     title: String,
     pinned_snapshot: Snapshot,
+    #[cfg(any(windows, target_os = "linux"))]
     platform: RefCell<Platform>,
     frame: RefCell<Frame>,
     routes: RefCell<HashMap<NodeId, Invoke>>,
@@ -109,16 +111,23 @@ pub struct Accessibility(Rc<State>);
 impl Accessibility {
     pub fn new<T: Render>(window: &mut Window, cx: &mut Context<T>, title: String) -> Self {
         let snapshot = Snapshot::default();
+        #[cfg(any(windows, target_os = "linux"))]
         let (send, receive) = async_channel::bounded(128);
+        #[cfg(any(windows, target_os = "linux"))]
         let platform = Platform::attach(window, Activation(snapshot.clone()), Actions(send));
+        #[cfg(not(any(windows, target_os = "linux")))]
+        let _ = (window, cx);
         let state = Rc::new(State {
             title,
             pinned_snapshot: snapshot,
+            #[cfg(any(windows, target_os = "linux"))]
             platform: RefCell::new(platform),
             frame: RefCell::new(Frame::default()),
             routes: RefCell::new(HashMap::new()),
         });
+        #[cfg(any(windows, target_os = "linux"))]
         let weak = Rc::downgrade(&state);
+        #[cfg(any(windows, target_os = "linux"))]
         cx.spawn_in(window, async move |_, cx| {
             while let Ok(request) = receive.recv().await {
                 #[cfg(target_os = "linux")]
@@ -514,7 +523,7 @@ impl State {
         bounds: Bounds<Pixels>,
         blocked: bool,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) {
         let mut frame = self.frame.take();
         for (id, node) in &mut frame.nodes {
@@ -558,8 +567,10 @@ impl State {
         if !unchanged && let Ok(mut snapshot) = self.pinned_snapshot.lock() {
             snapshot.replace(update.clone());
         }
+        #[cfg(any(windows, target_os = "linux"))]
         let state = self.clone();
-        window.defer(cx, move |_window, _| {
+        #[cfg(any(windows, target_os = "linux"))]
+        window.defer(_cx, move |_window, _| {
             #[cfg(windows)]
             if !unchanged {
                 let events = {

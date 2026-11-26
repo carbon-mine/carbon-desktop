@@ -116,6 +116,14 @@ impl Platform {
         }
         Ok(Self { os, arch })
     }
+    #[cfg(test)]
+    pub(super) const fn fixture() -> Self {
+        Self {
+            os: "linux",
+            arch: "x86_64",
+        }
+    }
+
     pub(super) fn label(self) -> String {
         format!("{}-{}", self.os, self.arch)
     }

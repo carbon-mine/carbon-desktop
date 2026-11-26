@@ -1,6 +1,7 @@
 use super::*;
 use carbon_profiles::{ProfileAction, VanillaVersion};
 use serde_json::{json, Value};
+#[cfg(any(windows, target_os = "linux"))]
 use std::{collections::HashMap, fs, io::Cursor};
 
 fn digest(bytes: &[u8]) -> String {
@@ -16,11 +17,14 @@ fn file(bytes: &[u8], name: &str, kind: &str) -> Value {
     json!({"id":name,"path":name,"size":bytes.len(),"sha1":hash,"url":url})
 }
 struct Fixture {
+    #[cfg(any(windows, target_os = "linux"))]
     temp: tempfile::TempDir,
+    #[cfg(any(windows, target_os = "linux"))]
     profile: Uuid,
     info: PreparedVersion,
     doc: Value,
     index: Vec<u8>,
+    #[cfg(any(windows, target_os = "linux"))]
     bytes: HashMap<String, Vec<u8>>,
 }
 impl Fixture {
@@ -31,7 +35,7 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let profile = create(root, VanillaVersion::Release1_20_4);
-        let platform = Platform::current().unwrap();
+        let platform = fixture_platform();
         let os = platform.label().split('-').next().unwrap().to_owned();
         let asset = b"shared asset".to_vec();
         let index=serde_json::to_vec(&json!({"objects":{"first":{"hash":digest(&asset),"size":asset.len()},"alias":{"hash":digest(&asset),"size":asset.len()}}})).unwrap();
@@ -63,19 +67,24 @@ impl Fixture {
             })
         })
         .unwrap();
+        #[cfg(any(windows, target_os = "linux"))]
         let bytes = [client, lib, native, log, asset, index.clone()]
             .into_iter()
             .map(|b| (digest(&b), b))
             .collect();
         Self {
+            #[cfg(any(windows, target_os = "linux"))]
             temp,
+            #[cfg(any(windows, target_os = "linux"))]
             profile,
             info,
             doc,
             index,
+            #[cfg(any(windows, target_os = "linux"))]
             bytes,
         }
     }
+    #[cfg(any(windows, target_os = "linux"))]
     fn store_plan(&self) -> (Store, Plan) {
         let root = self.temp.path();
         let cache = cache::Cache::open(root).unwrap();
@@ -94,11 +103,13 @@ impl Fixture {
         .unwrap();
         resolve(root, self.profile, true, Platform::current().unwrap()).unwrap()
     }
+    #[cfg(any(windows, target_os = "linux"))]
     fn fetch(&self, o: &Object) -> Result<Box<dyn Read + Send>, String> {
         Ok(Box::new(Cursor::new(self.bytes[&o.sha1].clone())))
     }
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn resolves_os_rules_aliases_classifiers_and_activation_map() {
     let f = Fixture::new();
@@ -169,6 +180,7 @@ fn resolves_os_rules_aliases_classifiers_and_activation_map() {
     assert!(has_game_install(root, clone).unwrap());
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn cancellation_source_failure_or_changed_version_cannot_publish_the_profile() {
     let f = Fixture::new();
@@ -248,12 +260,31 @@ fn cancellation_source_failure_or_changed_version_cannot_publish_the_profile() {
     assert_eq!(fs::read(store.receipt(f.profile)).unwrap(), saved);
 }
 
+// Resolver fixtures remain independent of native installation support.
+fn fixture_platform() -> Platform {
+    Platform::current().unwrap_or(Platform::fixture())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_game_file_preparation_stays_unavailable_on_macos() {
+    assert!(Platform::current().is_err());
+}
+
+#[cfg(all(target_arch = "aarch64", any(windows, target_os = "linux")))]
+#[test]
+fn arm64_file_plans_do_not_enable_private_game_views() {
+    let fixture = Fixture::with_legacy_natives(false);
+    let (_, plan) = fixture.store_plan();
+    assert!(view::supports_layout(&plan).is_err());
+}
+
 #[test]
 fn platform_rules_apply_the_last_matching_action_in_metadata_order() {
     let f = Fixture::new();
-    let platform = Platform::current().unwrap();
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
+    let platform = fixture_platform();
+    let label = platform.label();
+    let (os, arch) = label.split_once('-').unwrap();
     let mut document = f.doc.clone();
     document["libraries"][0]["rules"] = json!([
         {"action":"allow"},
@@ -301,20 +332,20 @@ fn malformed_source_rules_paths_aliases_and_oversize_are_refused() {
             Plan::version(
                 &f.info,
                 &serde_json::to_vec(&doc).unwrap(),
-                Platform::current().unwrap()
+                fixture_platform()
             )
             .is_err(),
             "{pointer}"
         );
     }
     let raw = serde_json::to_vec(&f.doc).unwrap();
-    let mut plan = Plan::version(&f.info, &raw, Platform::current().unwrap()).unwrap();
+    let mut plan = Plan::version(&f.info, &raw, fixture_platform()).unwrap();
     let mut wrong: Value = serde_json::from_slice(&f.index).unwrap();
     wrong["objects"]["alias"]["size"] = json!(500);
     assert!(plan
         .add_assets(&serde_json::to_vec(&wrong).unwrap())
         .is_err());
-    let mut plan = Plan::version(&f.info, &raw, Platform::current().unwrap()).unwrap();
+    let mut plan = Plan::version(&f.info, &raw, fixture_platform()).unwrap();
     let dup = format!(
         r#"{{"objects":{{"a":{{"hash":"{0}","size":1}},"a":{{"hash":"{0}","size":1}}}}}}"#,
         digest(b"a")
@@ -339,6 +370,7 @@ fn create(root: &Path, version: VanillaVersion) -> Uuid {
     .id
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 #[ignore = "live Mojang version and asset-index JSON only"]
 fn live_public_game_plans() {
@@ -363,6 +395,7 @@ fn live_public_game_plans() {
     }
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 #[ignore = "opt-in full official Mojang download and retained review cache"]
 fn live_full_official_game_files_and_offline_repeat() {
@@ -440,6 +473,7 @@ fn live_full_official_game_files_and_offline_repeat() {
     assert!(carbon_profiles::list(&root).unwrap().contains(&original));
 }
 
+#[cfg(all(target_arch = "x86_64", any(windows, target_os = "linux")))]
 #[test]
 fn private_view_repairs_copied_content_and_preserves_user_state() {
     let f = Fixture::with_legacy_natives(false);
@@ -554,6 +588,7 @@ fn private_view_repairs_copied_content_and_preserves_user_state() {
     assert_eq!(fs::read(&save).unwrap(), b"player data");
 }
 
+#[cfg(all(target_arch = "x86_64", any(windows, target_os = "linux")))]
 #[test]
 fn private_view_refuses_legacy_native_archives() {
     let f = Fixture::new();
@@ -568,6 +603,7 @@ fn private_view_refuses_legacy_native_archives() {
     assert!(!root.join("instances-v1").exists());
 }
 
+#[cfg(all(target_arch = "x86_64", any(windows, target_os = "linux")))]
 #[test]
 fn reviewed_prepare_and_verify_include_a_private_view_receipt() {
     let f = Fixture::with_legacy_natives(false);
@@ -608,7 +644,7 @@ fn reviewed_prepare_and_verify_include_a_private_view_receipt() {
     assert_eq!(private.reused_bytes, private.total_bytes);
 }
 
-#[cfg(unix)]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn private_view_refuses_links_in_managed_content() {
     use std::os::unix::fs::symlink;
@@ -629,6 +665,7 @@ fn private_view_refuses_links_in_managed_content() {
     assert!(fs::symlink_metadata(&client).unwrap().is_symlink());
 }
 
+#[cfg(all(target_arch = "x86_64", any(windows, target_os = "linux")))]
 #[test]
 #[ignore = "opt-in offline materialization from retained verified public 26.3 test cache"]
 fn live_private_26_3_view_from_public_cache() {

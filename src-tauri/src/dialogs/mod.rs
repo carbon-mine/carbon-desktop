@@ -1,5 +1,7 @@
 use crate::Library;
-use carbon_profiles::{Profile, ProfileAction, VanillaVersion};
+use carbon_profiles::Profile;
+#[cfg(any(windows, target_os = "linux"))]
+use carbon_profiles::{ProfileAction, VanillaVersion};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::{State, WebviewWindow};
@@ -11,6 +13,7 @@ pub fn set_theme_preference(preference: usize) {
     THEME_PREFERENCE.store(preference, Ordering::Relaxed);
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 fn dark_theme(owner: &WebviewWindow) -> bool {
     match THEME_PREFERENCE.load(Ordering::Relaxed) {
         1 => false,
@@ -32,6 +35,7 @@ pub enum Mode {
     Clone,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 impl Mode {
     fn title(self) -> &'static str {
         match self {
@@ -49,11 +53,13 @@ impl Mode {
     }
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 struct Form {
     mode: Mode,
     initial: Profile,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 impl Form {
     fn new(mode: Mode, original: Option<&Profile>) -> Result<Self, String> {
         let mut initial = match (mode, original) {
@@ -129,6 +135,7 @@ pub struct Edited {
     selected_id: Uuid,
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 pub async fn notice(
     owner: WebviewWindow,
     title: &'static str,
@@ -144,8 +151,6 @@ pub async fn notice(
             #[cfg(target_os = "linux")]
             let result =
                 linux::message_dialog(&window, title, &description, None, dark).map(|_| ());
-            #[cfg(not(any(windows, target_os = "linux")))]
-            let result = Err("Native dialogs are unavailable on this platform.".to_owned());
             let _ = send.try_send(result);
         })
         .map_err(|_| "Could not show the native dialog.")?;
@@ -155,6 +160,7 @@ pub async fn notice(
         .ok_or("The native dialog closed unexpectedly.")?
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 pub async fn confirm(
     owner: WebviewWindow,
     title: &'static str,
@@ -171,8 +177,6 @@ pub async fn confirm(
             #[cfg(target_os = "linux")]
             let result =
                 linux::message_dialog(&window, title, &description, Some(accept_label), dark);
-            #[cfg(not(any(windows, target_os = "linux")))]
-            let result = Err("Native dialogs are unavailable on this platform.".to_owned());
             let _ = send.try_send(result);
         })
         .map_err(|_| "Could not show the native confirmation.")?;
@@ -182,6 +186,7 @@ pub async fn confirm(
         .ok_or("The native confirmation closed unexpectedly.")?
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 #[tauri::command]
 pub async fn edit_profile_dialog(
     window: WebviewWindow,
@@ -211,9 +216,6 @@ pub async fn edit_profile_dialog(
             let value = windows::show(&owner, &form, dark);
             #[cfg(target_os = "linux")]
             let value = linux::show(&owner, &form, dark);
-            #[cfg(not(any(windows, target_os = "linux")))]
-            let value: Result<Option<ProfileAction>, String> =
-                Err("Native instance editing is unavailable on this platform.".into());
             let _ = send.try_send(value);
         })
         .map_err(|_| "Could not display the native instance editor.")?;
@@ -242,4 +244,31 @@ pub async fn edit_profile_dialog(
     })
     .await
     .map_err(|_| "The save was interrupted. Reload the library.")?
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub async fn notice(_: WebviewWindow, _: &'static str, _: String) -> Result<(), String> {
+    Err("Native dialogs are unavailable on this platform.".into())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub async fn confirm(
+    _: WebviewWindow,
+    _: &'static str,
+    _: String,
+    _: &'static str,
+) -> Result<bool, String> {
+    Err("Native dialogs are unavailable on this platform.".into())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+#[tauri::command]
+pub async fn edit_profile_dialog(
+    window: WebviewWindow,
+    root: State<'_, Library>,
+    mode: Mode,
+    profile_id: Option<Uuid>,
+) -> Result<Option<Edited>, String> {
+    let _ = (window, root, mode, profile_id);
+    Err("Native instance editing is unavailable on this platform.".into())
 }

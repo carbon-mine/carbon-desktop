@@ -247,6 +247,7 @@ fn transport_accepts_only_approved_https_asset_hosts() {
     ));
 }
 
+#[cfg(all(target_arch = "x86_64", any(windows, target_os = "linux")))]
 #[test]
 #[ignore = "downloads three pinned public runtimes into a disposable directory"]
 fn live_native_temurin_preparation() {
@@ -269,4 +270,14 @@ fn live_native_temurin_preparation() {
             artifact.release
         );
     }
+}
+
+#[cfg(not(all(target_arch = "x86_64", any(windows, target_os = "linux"))))]
+#[test]
+fn managed_runtime_remains_unavailable_without_a_native_pin() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        inspect(tmp.path(), 17).unwrap(),
+        RuntimeStatus::Unsupported { major: 17 }
+    ));
 }
