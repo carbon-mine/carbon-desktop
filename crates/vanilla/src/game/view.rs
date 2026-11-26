@@ -2,7 +2,9 @@ use super::{
     cache, ensure_selection, resolve, transfer, GameFileProgress, Object, Plan, Platform, Receipt,
     Store,
 };
+use carbon_profiles::Profile;
 use serde::Serialize;
+use sha1::{Digest, Sha1};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -86,7 +88,7 @@ impl InstancePaths {
     }
 }
 
-/// Holds the profile's exclusive view lease. Keep it alive while consuming these paths.
+/// Holds the profile's view lease. Keep it alive while consuming these paths.
 #[derive(Debug)]
 pub struct PreparedInstanceView {
     _lease: File,
@@ -113,10 +115,9 @@ impl PreparedInstanceView {
         &self.root
     }
 
-    pub(super) fn verify_for_launch(&self) -> Result<(), String> {
+    fn observe_activation(&self) -> Result<Profile, String> {
         let s = &self.summary;
         let expected = Receipt::new(s.profile_id, &s.version, &s.metadata_sha1, &s.platform);
-        let binding = serde_json::to_vec(&expected).map_err(|_| "Invalid view binding.")?;
         let active = self.root.join("game-files-v1").join("active");
         let versions = self.root.join("vanilla-metadata-v1").join("versions");
         for dir in [
@@ -137,17 +138,35 @@ impl PreparedInstanceView {
             }
         }
         let receipt = cache::read(&active.join(format!("{}.json", s.profile_id)), 4096)?;
-        let pin = cache::read(&versions.join(format!("{}.json", s.version)), 4096)?;
-        let selected = super::selected(&self.root, s.profile_id)?;
-        let current_pin = pin
-            .and_then(|raw| serde_json::from_slice::<crate::Pin>(&raw).ok())
-            .filter(|pin| pin.valid_for(&s.version, crate::release_type(selected)));
+        let selected = carbon_profiles::existing_profile(&self.root, s.profile_id)?
+            .ok_or("The selected profile is unavailable.")?;
+        let current_pin = installed_pin(&self.root, &selected)?;
         if receipt.and_then(|raw| serde_json::from_slice::<Receipt>(&raw).ok()) != Some(expected)
             || current_pin.is_none_or(|pin| pin.sha1 != s.metadata_sha1)
-            || selected.id() != s.version
+            || selected.version.id() != s.version
+            || selected.imported_pack.is_some()
         {
             return Err("The selected game version or activation has changed.".into());
         }
+        Ok(selected)
+    }
+
+    /// Re-observe the active receipt, metadata pin, and full profile after expensive checks.
+    /// The private view lock protects content. It does not reserve other stores for launch.
+    pub(super) fn verify_current_binding(&self, profile: &Profile) -> Result<(), String> {
+        if self.observe_activation()? != *profile
+            || carbon_profiles::existing_profile(&self.root, profile.id)?.as_ref() != Some(profile)
+        {
+            return Err("The instance changed during launch input review.".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn verify_for_launch(&self) -> Result<(), String> {
+        self.observe_activation()?;
+        let s = &self.summary;
+        let expected = Receipt::new(s.profile_id, &s.version, &s.metadata_sha1, &s.platform);
+        let binding = serde_json::to_vec(&expected).map_err(|_| "Invalid view binding.")?;
         let layout = Layout::new(&self.plan, &binding)?;
         let mut progress = Observer {
             callback: |_| true,
@@ -176,6 +195,84 @@ pub fn prepare_instance_view(
     }
     let (store, plan) = resolve(root, profile_id, true, Platform::current()?)?;
     materialize(root, &store, &plan, expected_metadata_sha1, on_progress)
+}
+
+fn installed_pin(root: &Path, profile: &Profile) -> Result<Option<crate::Pin>, String> {
+    let cache = root.join("vanilla-metadata-v1");
+    let versions = cache.join("versions");
+    if !ordinary_dir(&cache)? || !ordinary_dir(&versions)? {
+        return Ok(None);
+    }
+    let id = profile.version.id();
+    Ok(cache::read(&versions.join(format!("{id}.json")), 4096)?
+        .and_then(|raw| serde_json::from_slice::<crate::Pin>(&raw).ok())
+        .filter(|pin| pin.valid_for(id, crate::release_type(profile.version))))
+}
+
+/// Lease and verify the activated private view without repairing or acquiring files.
+pub fn lease_installed_view(
+    root: &Path,
+    profile: &Profile,
+) -> Result<PreparedInstanceView, String> {
+    let platform = Platform::current()?;
+    if profile.imported_pack.is_some() || Platform::launch_platform(&platform.label()).is_none() {
+        return Err("This instance has no supported private vanilla view.".into());
+    }
+    let instances = root.join("instances-v1");
+    let owner = instances.join(profile.id.to_string());
+    let content = owner.join("content");
+    for path in [root, &instances, &owner, &content] {
+        if !ordinary_dir(path)? {
+            return Err("Prepare this instance's private game files first.".into());
+        }
+    }
+    let lock = owner.join("view.lock");
+    if !cache::regular(&lock)? {
+        return Err("The private game files have no preparation lease.".into());
+    }
+    let lease = File::open(lock).map_err(|_| "Could not read the private game lease.")?;
+    lease
+        .try_lock_shared()
+        .map_err(|_| "Private game files are in use.")?;
+    let pin = installed_pin(root, profile)?.ok_or("The installed version pin is unavailable.")?;
+    let id = profile.version.id();
+    let versions = content.join("versions");
+    let version = versions.join(id);
+    let assets = content.join("assets");
+    let indexes = assets.join("indexes");
+    for path in [&versions, &version, &assets, &indexes] {
+        if !ordinary_dir(path)? {
+            return Err("The installed version metadata is incomplete.".into());
+        }
+    }
+    let metadata = cache::read(&version.join(format!("{id}.json")), crate::VERSION_LIMIT)?
+        .ok_or("The installed version metadata is unavailable.")?;
+    let info = crate::verified(&metadata, &pin, profile.id, crate::Origin::Cache)?;
+    let mut plan = Plan::version(&info, &metadata, platform)?;
+    supports_layout(&plan)?;
+    let index = cache::read(
+        &indexes.join(format!("{}.json", plan.asset_index_id)),
+        plan.index.size,
+    )?
+    .filter(|raw| {
+        raw.len() as u64 == plan.index.size && hex::encode(Sha1::digest(raw)) == plan.index.sha1
+    })
+    .ok_or("The installed asset index needs repair.")?;
+    plan.add_assets(&index)?;
+    let binding = Receipt::new(profile.id, id, &pin.sha1, &platform.label());
+    let raw_binding = serde_json::to_vec(&binding).map_err(|_| "Invalid view binding.")?;
+    let layout = Layout::new(&plan, &raw_binding)?;
+    let held = held_view(
+        root,
+        &plan,
+        &layout,
+        lease,
+        content,
+        owner.join("game"),
+        true,
+    );
+    held.verify_for_launch()?;
+    Ok(held)
 }
 
 enum Source<'a> {
@@ -556,6 +653,21 @@ pub(super) fn materialize(
     }
     ensure_selection(root, s)?;
 
+    Ok(held_view(
+        root, plan, &layout, lease, content, game_dir, reused,
+    ))
+}
+
+fn held_view(
+    root: &Path,
+    plan: &Plan,
+    layout: &Layout<'_>,
+    lease: File,
+    content: PathBuf,
+    game_dir: PathBuf,
+    reused: bool,
+) -> PreparedInstanceView {
+    let s = &plan.summary;
     let client_jar = content.join(format!("versions/{0}/{0}.jar", s.version));
     let paths = InstancePaths {
         game_dir,
@@ -584,11 +696,11 @@ pub(super) fn materialize(
         copied_bytes: if reused { 0 } else { layout.total_bytes },
         reused_bytes: if reused { layout.total_bytes } else { 0 },
     };
-    Ok(PreparedInstanceView {
+    PreparedInstanceView {
         _lease: lease,
         paths,
         summary,
         root: root.to_owned(),
         plan: plan.clone(),
-    })
+    }
 }

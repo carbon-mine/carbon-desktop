@@ -230,6 +230,7 @@ jobs:
           "$browser_python" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r scripts/renderer-ci-requirements.txt
           "$browser_python" scripts/test-profile-renderer.py --directory dist --channel msedge
           "$browser_python" scripts/check-tauri-account-renderer.py --channel msedge
+          "$browser_python" scripts/check-tauri-launch-review.py --channel msedge
 
       - name: Build both desktop editions
         run: cargo build --locked -p carbon-desktop -p carbon-desktop-gpui

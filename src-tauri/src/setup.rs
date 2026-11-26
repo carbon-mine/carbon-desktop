@@ -31,6 +31,23 @@ pub async fn inspect_vanilla_profile(
 }
 
 #[tauri::command]
+pub async fn review_installed_launch_inputs(
+    root: State<'_, Library>,
+    jobs: State<'_, SetupJobs>,
+    profile_id: Uuid,
+) -> Result<carbon_setup::LaunchInputReview, String> {
+    let path = root.0.clone();
+    let job = jobs.begin(profile_id, Work::LaunchReview)?;
+    blocking(move || {
+        let _job = job;
+        Ok(carbon_setup::review_installed_launch_inputs(
+            &path, profile_id,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn select_profile_java(
     window: tauri::WebviewWindow,
     root: State<'_, Library>,
@@ -88,6 +105,7 @@ enum Work {
     Java,
     Game,
     Session,
+    LaunchReview,
 }
 struct Install {
     kind: Work,

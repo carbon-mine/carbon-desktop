@@ -544,7 +544,7 @@ impl Launcher {
                 })
             })
             .unwrap_or_else(|| "Checked during review".to_owned());
-        let settled = inspection.is_some_and(|i| i.game_files_prepared && data::client_verified(i));
+        let settled = setup.is_some_and(Setup::game_files_prepared);
         let cache_only =
             !settled && inspection.is_some_and(|i| i.game_files_cached && data::client_verified(i));
         let client_needs_repair = inspection.is_some_and(|i| {
@@ -753,6 +753,38 @@ impl Launcher {
                                         ),
                                     )
                                 },
+                            )
+                            .when(settled && profile.imported_pack.is_none(), |task| {
+                                task.child(row().child(self.command(
+                                    p,
+                                    "review-launch-inputs",
+                                    "Review installed launch inputs",
+                                    false,
+                                    !can_change,
+                                    cx,
+                                    |this, window, cx| {
+                                        this.task_focus.focus(window);
+                                        this.review_launch_inputs(cx);
+                                    },
+                                )))
+                            })
+                            .when(!settled && install_activity.is_none() && profile.imported_pack.is_none(), |task| {
+                                let hint = "Prepare this instance to review its installed launch inputs.";
+                                task.child(self.accessibility.text(
+                                    div().text_sm().text_color(p.muted).child(hint),
+                                    "launch-input-review-hint",
+                                    hint,
+                                    Role::Label,
+                                ))
+                            })
+                            .when_some(
+                                setup.and_then(|setup| setup.launch_input_review.as_deref()),
+                                |task, message| task.child(self.accessibility.text(
+                                    div().text_sm().text_color(p.muted).child(message.to_owned()),
+                                    "launch-input-review-result",
+                                    message,
+                                    Role::Status,
+                                )),
                             ),
                     )
                     .when_some(task_action, |task, action| task.child(action));
