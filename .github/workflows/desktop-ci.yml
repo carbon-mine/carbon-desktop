@@ -3,6 +3,8 @@ name: Desktop CI
 on:
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 
@@ -11,7 +13,7 @@ permissions:
 
 concurrency:
   group: desktop-ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 jobs:
   build:
