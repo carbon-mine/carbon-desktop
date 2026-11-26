@@ -110,10 +110,11 @@ function polygon(points,color){
   }));
 }
 function makeDebris(id){
-  const colors={
+  const palettes={
     alpine:[0x8c7757,0xb3a67c],farmland:[0xb48c45,0xd9bc73],riverside:[0x8e854d,0xb5ac69],
     marsh:[0x9b744c,0xbba376],orchard:[0xa05c2f,0xd28a49],
-  }[id]??[0x8a7850,0xc9b987];
+  };
+  const colors=Object.hasOwn(palettes,id) ? palettes[id] : [0x8a7850,0xc9b987];
   const blade=new THREE.Group();
   blade.add(polygon([[-.5,-.03],[-.23,.20],[.05,.24],[.54,.035]],colors[1]));
   blade.add(polygon([[-.5,-.03],[.54,.035],[.21,-.17],[-.17,-.18]],colors[0]));
