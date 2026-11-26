@@ -616,9 +616,7 @@ impl Launcher {
         let Some(id) = self.personal else {
             return;
         };
-        if !self.targets.contains_key(&id) {
-            self.load_targets(id, cx);
-        }
+        self.load_targets(id, cx);
         let kind = popup::home_picker(self);
         popup::open(self, kind, window, cx);
     }
@@ -648,6 +646,8 @@ impl Launcher {
             return;
         };
         let revision = snapshot.revision;
+        let request = Uuid::new_v4();
+        self.targets.insert(id, TargetsState::Loading(request));
         self.message = "Selecting destination…".to_owned();
         let path = self.root.path.clone();
         let work = cx.background_executor().spawn(async move {
@@ -661,21 +661,19 @@ impl Launcher {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |this, cx| {
-                match result {
-                    Ok(targets) => {
-                        this.targets.insert(id, TargetsState::Ready(targets));
-                        if this.personal == Some(id) {
-                            this.message = "Destination selected.".to_owned();
-                        }
+                let message = result
+                    .as_ref()
+                    .map_or_else(Clone::clone, |_| "Destination selected.".to_owned());
+                if this
+                    .targets
+                    .get_mut(&id)
+                    .is_some_and(|entry| entry.complete(request, result))
+                {
+                    if this.personal == Some(id) {
+                        this.message = message;
                     }
-                    Err(error) => {
-                        this.targets.insert(id, TargetsState::Error(error.clone()));
-                        if this.personal == Some(id) {
-                            this.message = error;
-                        }
-                    }
+                    cx.notify();
                 }
-                cx.notify();
             })
             .ok();
         })
