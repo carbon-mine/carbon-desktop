@@ -12,7 +12,7 @@ validateOutputs(manifest.views);
 if (!manifest.views.some(entry => entry.bake)) process.exit(0);
 const sources = JSON.parse(await readFile(new URL('sources.json', import.meta.url), 'utf8'));
 for (const entry of manifest.views) if (entry.bake) cameraFor(sources, entry.bake);
-const framesPerView = 48;
+const cycleSeconds = 8;
 const output = fileURLToPath(new URL('../../design-system/landscapes/', import.meta.url));
 const assets = await build({
   entryPoints: [fileURLToPath(new URL('live.js', import.meta.url))],
@@ -54,13 +54,21 @@ try {
     const view = entry.id;
     await page.goto(base + '?' + new URLSearchParams(entry.bake));
     await page.waitForFunction(() => typeof window.paintScenicFrame === 'function');
+    const framesPerView = entry.frames ? entry.fps * cycleSeconds : 1;
     const frames = [];
     for (let index = 0; index < (entry.frames ? framesPerView : 1); index++) {
       const jpg = await page.evaluate(fraction => {
         window.paintScenicFrame(fraction);
-        return document.querySelector('canvas').toDataURL('image/jpeg', 0.81).split(',')[1];
-      }, index / (framesPerView - 1));
+        return document.querySelector('canvas').toDataURL('image/jpeg', 0.62).split(',')[1];
+      }, index / framesPerView);
       frames.push(Buffer.from(jpg, 'base64'));
+    }
+    if (entry.frames) {
+      const end = await page.evaluate(() => {
+        window.paintScenicFrame(1);
+        return document.querySelector('canvas').toDataURL('image/jpeg', 0.62).split(',')[1];
+      });
+      if (!frames[0].equals(Buffer.from(end, 'base64'))) throw Error(view + ' cycle does not return to its opening pose');
     }
     if (errors.length || frames.some(bytes => bytes.length < 4 || bytes.readUInt16BE(0) !== 0xffd8 || bytes.readUInt16BE(bytes.length - 2) !== 0xffd9)) {
       throw Error(view + ' produced invalid image data or page errors: ' + errors.join('; '));
