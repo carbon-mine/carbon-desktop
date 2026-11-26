@@ -370,13 +370,20 @@ pub(super) fn launch(
         if let Err(error) = verified {
             // Terminate the suspended process explicitly if any pre-resume check fails.
             let terminated = win(TerminateProcess(process.0, 1));
-            job::stop_and_drain(&job)?;
-            if let Err(termination_error) = terminated {
-                // TerminateProcess may fail with access denied for an already-exited process.
-                if WaitForSingleObject(process.0, 0) != WAIT_OBJECT_0 {
-                    return Err(termination_error);
+            let drained = job::stop_and_drain(&job);
+            // An unverified root may be outside the job. Termination is asynchronous.
+            match WaitForSingleObject(process.0, job::DRAIN_TIMEOUT.as_millis() as u32) {
+                WAIT_OBJECT_0 => (),
+                WAIT_TIMEOUT => {
+                    terminated?;
+                    return Err(Error::new(
+                        io::ErrorKind::TimedOut,
+                        "The rejected session did not exit",
+                    ));
                 }
+                _ => return Err(Error::last_os_error()),
             }
+            drained?;
             return Err(error);
         }
         if ResumeThread(thread.0) == u32::MAX {
