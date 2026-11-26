@@ -88,13 +88,22 @@ pub(super) fn for_display(
     // NSScreen is main-thread-only. AppKit uses a bottom-left origin while
     // GPUI display coordinates start at the top-left, so flip the Y axis.
     let mtm = MainThreadMarker::new()?;
-    if cx.primary_display()?.id() != id {
-        return None;
-    }
-    let screen = NSScreen::screens(mtm).firstObject()?;
+    // NSScreenNumber is the public CGDirectDisplayID used by GPUI. Screens
+    // on macOS have overlapping local origins, so geometry cannot identify one.
+    let key = objc2_foundation::NSString::from_str("NSScreenNumber");
+    let screens = NSScreen::screens(mtm);
+    let screen = (0..screens.count())
+        .map(|i| screens.objectAtIndex(i))
+        .find(|s| {
+            s.deviceDescription().objectForKey(&key).and_then(|number| {
+                number
+                    .downcast_ref::<objc2_foundation::NSNumber>()
+                    .map(|n| n.unsignedIntValue())
+            }) == Some(u32::from(id))
+        })?;
     let frame = screen.frame();
     let visible = screen.visibleFrame();
-    let display = cx.primary_display()?.bounds();
+    let display = cx.displays().into_iter().find(|d| d.id() == id)?.bounds();
 
     let left = visible.origin.x - frame.origin.x;
     let top = frame.size.height - (visible.origin.y - frame.origin.y) - visible.size.height;

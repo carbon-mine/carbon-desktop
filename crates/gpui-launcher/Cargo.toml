@@ -46,7 +46,8 @@ x11rb = { version = "=0.13.2", features = ["randr"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSScreen", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSValue", "NSArray", "NSDictionary"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSScreen", "NSGraphics", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
 raw-window-handle = "0.6"
 
 [build-dependencies]

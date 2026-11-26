@@ -108,6 +108,8 @@ struct Placement {
     width: f32,
     height: f32,
     maximized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_uuid: Option<String>,
 }
 
 fn read<T: serde::de::DeserializeOwned>(root: &Path, file: &str) -> Option<T> {
@@ -257,12 +259,20 @@ pub fn initial_bounds(root: &Path, cx: &App) -> (WindowBounds, Option<gpui::Disp
     let saved = read::<Placement>(root, "shell-placement.json");
     let primary = cx.primary_display();
     let saved_origin = saved.as_ref().map(|pos| point(px(pos.x), px(pos.y)));
-    let chosen = primary
-        .as_ref()
-        .filter(|d| saved_origin.is_some_and(|pos| d.bounds().contains(&pos)))
-        .cloned()
+    let displays = cx.displays();
+    let by_identity = saved.as_ref().and_then(|placement| {
+        let id = uuid::Uuid::parse_str(placement.display_uuid.as_deref()?).ok()?;
+        displays.iter().find(|d| d.uuid().ok() == Some(id)).cloned()
+    });
+    let chosen = by_identity
         .or_else(|| {
-            cx.displays()
+            primary
+                .as_ref()
+                .filter(|d| saved_origin.is_some_and(|pos| d.bounds().contains(&pos)))
+                .cloned()
+        })
+        .or_else(|| {
+            displays
                 .into_iter()
                 .find(|d| saved_origin.is_some_and(|pos| d.bounds().contains(&pos)))
         })
@@ -321,6 +331,10 @@ impl Launcher {
             width: b.size.width.into(),
             height: b.size.height.into(),
             maximized: false,
+            display_uuid: window
+                .display(cx)
+                .and_then(|d| d.uuid().ok())
+                .map(|id| id.to_string()),
         };
         if usable_placement(&pos, cx)
             && let Err(error) = write(&self.root.path, "shell-placement.json", &pos)
@@ -396,6 +410,7 @@ mod tests {
             width: 600.,
             height: 500.,
             maximized: true,
+            display_uuid: None,
         };
         let b = fixed_bounds(area(0., 0., 2560., 1440.), Some(&saved));
         assert_eq!(b.origin, point(px(110.), px(85.)));
@@ -428,6 +443,7 @@ mod tests {
             width: b.size.width.into(),
             height: b.size.height.into(),
             maximized: true,
+            display_uuid: None,
         };
         assert!(placement.usable(&[screen]));
         assert!(!placement.usable(&[area(0., 0., 1920., 1080.)]));
@@ -497,6 +513,7 @@ mod tests {
             width: 1040.,
             height: 760.,
             maximized: false,
+            display_uuid: None,
         };
         assert!(p.usable(&[screen]));
         p.y = -1000.;
