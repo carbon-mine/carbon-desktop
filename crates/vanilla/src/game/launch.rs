@@ -324,17 +324,24 @@ pub fn preview_launch_inputs(
     mode: LaunchMode,
 ) -> Result<LaunchSummary, PlanError> {
     let (platform, java_major) = audited_inputs(profile, view)?;
-    let runtime = carbon_runtime::lease_verified(view.root(), java_major)
-        .map_err(|_| PlanError::RuntimeUnavailable)?;
-    let parts = build_arguments(profile, view, &runtime, platform, java_major)?;
-    Ok(summarize(
-        profile.version.id(),
-        view,
-        &runtime,
-        mode,
-        &parts.jvm,
-        &parts.game,
-    ))
+    let runtime = carbon_runtime::lease_verified(view.root(), java_major);
+    let outcome = runtime
+        .as_ref()
+        .map_err(|_| PlanError::RuntimeUnavailable)
+        .and_then(|runtime| {
+            let parts = build_arguments(profile, view, runtime, platform, java_major)?;
+            Ok(summarize(
+                profile.version.id(),
+                view,
+                runtime,
+                mode,
+                &parts.jvm,
+                &parts.game,
+            ))
+        });
+    view.verify_current_binding(profile)
+        .map_err(|_| PlanError::GenerationChanged)?;
+    outcome
 }
 
 /// Construct a plan entirely from already verified inputs. Holding the returned plan keeps

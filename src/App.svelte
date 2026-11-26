@@ -18,7 +18,7 @@
   type Tab = typeof profileTabs[number] | typeof reviewTabs[number]
   type SetupAction = 'check' | 'choose' | 'install' | 'client'
   type GameAction = 'plan' | 'games' | 'verify'
-  type WorkAction = SetupAction | GameAction | 'sandbox'
+  type WorkAction = SetupAction | GameAction | 'sandbox' | 'launchReview'
   type ThemePreference = 'system' | 'light' | 'dark'
   type MenuAction = 'new-profile' | 'import-pack' | 'focus-search' | 'show-activity' | `theme-${ThemePreference}`
   type ShortcutSource = 'native-menu' | 'keyboard'
@@ -28,7 +28,8 @@
     check: 'Checking Minecraft and Java requirements…', choose: 'Checking the selected Java runtime…',
     install: 'Preparing managed JDK…', client: 'Verifying the selected Minecraft client JAR…',
     plan: 'Reviewing the game download…', games: 'Preparing game files…',
-    verify: 'Verifying game files…', sandbox: 'Running the sandbox test…'
+    verify: 'Verifying game files…', sandbox: 'Running the sandbox test…',
+    launchReview: 'Verifying installed game files and managed Java…'
   }
   const filePhases: Record<string, string> = {
     verifying: 'Verifying shared game files…', downloading: 'Downloading game files…',
@@ -103,8 +104,8 @@
   let activityHeading = $state<HTMLHeadingElement>()
   let installReviewHeading = $state<HTMLHeadingElement>()
   let requirementsFor = $state<string | null>(null)
-  let launchReview = $state<{ profileId: string; message?: string } | null>(null)
-  let reviewingInputs = $state(false)
+  let launchReview = $state<{ key: string; message: string } | null>(null)
+  let canReviewInstalledInputs = $derived(!!personal && !personal.importedPack && !!(gamePrepared || gameReceipt))
   let primary = $state<HTMLButtonElement>()
   let workspace = $state<HTMLElement>()
   let theme = $state<ThemePreference>('system')
@@ -220,21 +221,22 @@
   }
 
   async function reviewInstalledLaunchInputs() {
-    const profileId = personalId
-    if (!profileId || reviewingInputs || personalDisabled) return
-    reviewingInputs = true
-    launchReview = { profileId }
+    const profile = personal
+    if (!profile || !canReviewInstalledInputs) return
+    const key = beginWork(profile, 'launchReview')
+    if (!key) return
     let result: {message: string}
     try {
-      result = await invoke<{ message: string }>('review_installed_launch_inputs', { profileId })
+      result = await invoke<{ message: string }>('review_installed_launch_inputs', {profileId: profile.id})
     } catch (error) {
       result = { message: errorText(error) }
     } finally {
-      reviewingInputs = false
+      finishWork()
     }
-    launchReview = view === 'library' && personalId === profileId && profileTab === 'Overview'
-      ? { profileId, message: result.message }
-      : null
+    const detailVisible = detailOpen || !matchMedia(narrowViewport).matches
+    if (view === 'library' && detailVisible && profileTab === 'Overview' && personal && setupKey(personal) === key) {
+      launchReview = { key, message: result.message }
+    }
   }
 
   function errorText(reason: unknown) {
@@ -288,6 +290,7 @@
 
   async function refreshPersonal() {
     const reloading = !!personalFailure
+    launchReview = null
     personalLoading = true
     personalFailure = ''
     try {
@@ -402,7 +405,7 @@
   }
 
   async function importPack(opener: HTMLElement | null) {
-    if (busy || nativePickerActive) return
+    if (busy || nativePickerActive || setupWork?.action === 'launchReview') return
     busy = true
     packFailure = ''
     try {
@@ -476,10 +479,11 @@
   }
 
   function beginWork(profile: PersonalProfile, action: WorkAction) {
-    if (setupWork || busy || personalNeedsReload || personalLoading || packAwaitingSupport(profile)) return
+    if (personalDisabled || packAwaitingSupport(profile)) return
     const key = setupKey(profile)
     if (action !== 'check' && action !== 'plan' && !setupReports[key]) return
     keepTaskFocus()
+    launchReview = null
     explicitSetups.add(key)
     if (profileTab !== 'Overview') changeTab('Overview')
     setupWork = {key, profileId: profile.id, action, name: profile.name}
@@ -488,7 +492,7 @@
     cancelRequested = false
     cancelError = ''
     setupErrors[key] = ''
-    message = profile.name + ' · ' + workingLabels[action]
+    if (action !== 'launchReview') message = profile.name + ' · ' + workingLabels[action]
     return key
   }
 
@@ -680,6 +684,7 @@
         mode, profileId: mode === 'create' ? null : personalId
       })
       if (!result) return
+      launchReview = null
       profiles = result.profiles
       query = ''
       message = mode === 'clone' ? 'Created an independent copy of the profile settings.' : 'Saved the personal profile on this device.'
@@ -802,7 +807,7 @@
                 {#if packAwaitingSupport(personal)}
                   <div class="task-copy"><h3>Pack preparation pending</h3>
                     <p>{personal.importedPack?.name} requires additional pack content before it can play.</p></div>
-                {:else if setupWork?.key === setupKey(personal)}
+                {:else if setupWork?.key === setupKey(personal) && setupWork.action !== 'launchReview'}
                   <div class="task-copy">
                     <h3>{cancelRequested ? 'Cancellation requested…' : javaProgress && javaProgress.receivedBytes === javaProgress.totalBytes ? 'Verifying and preparing Java…' : fileProgress ? (filePhases[fileProgress.phase] ?? workingLabels[setupWork.action]) : workingLabels[setupWork.action]}</h3>
                     {#if javaProgress && javaProgress.receivedBytes < javaProgress.totalBytes}
@@ -841,15 +846,17 @@
                 {#if setupError}<p class="task-error" role="alert">{setupError}</p>{/if}
                 {#if gamePrepared || gameReceipt || requirementsFor === personal.id || packAwaitingSupport(personal)}
                   <div class="readiness"><h4 id="launch-readiness" tabindex="-1">Play requirements</h4>
-                    {#if launchReview?.profileId === personal.id}
-                      <p role="status">{launchReview.message ?? 'Verifying installed game files and managed Java…'}</p>
-                    {:else if reviewingInputs}
-                      <p role="status">A launch input review is in progress.</p>
+                    {#if setupWork?.action === 'launchReview'}
+                      <p role="status">{setupWork.profileId === personal.id ? workingLabels.launchReview : 'A launch input review is in progress.'}</p>
+                    {:else if launchReview?.key === setupKey(personal)}
+                      <p role="status">{launchReview.message}</p>
                     {/if}
-                    {#if !personal.importedPack}
-                      <button disabled={reviewingInputs || personalDisabled} onclick={reviewInstalledLaunchInputs}>
+                    {#if canReviewInstalledInputs}
+                      <button disabled={personalDisabled} onclick={reviewInstalledLaunchInputs}>
                         Review installed launch inputs
                       </button>
+                    {:else if !personal.importedPack}
+                      <p>Prepare this instance to review its installed launch inputs.</p>
                     {/if}
                     {#if setupReport?.blockedReasons.length}
                       {#each setupReport.blockedReasons as reason}<p>{reason}</p>{/each}

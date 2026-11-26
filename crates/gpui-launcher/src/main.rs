@@ -77,6 +77,16 @@ struct Setup {
     error: Option<String>,
 }
 
+impl Setup {
+    fn game_files_prepared(&self) -> bool {
+        self.inspection
+            .as_ref()
+            .is_some_and(|i| i.game_files_prepared && data::client_verified(i))
+    }
+}
+
+const LAUNCH_REVIEW_LABEL: &str = "Checking installed launch inputs";
+
 struct Task {
     label: &'static str,
     profile: Option<Uuid>,
@@ -361,11 +371,7 @@ impl Launcher {
         cx.spawn(async move |this, cx| {
             if let Ok(inspection) = work.await {
                 this.update(cx, |this, cx| {
-                    if this
-                        .profiles
-                        .iter()
-                        .any(|current| current.id == id && current.version == profile.version)
-                    {
+                    if this.profiles.iter().any(|current| current == &profile) {
                         this.setup.entry(id).or_insert(Setup {
                             version: profile.version.id().into(),
                             inspection: Some(inspection),
@@ -502,6 +508,11 @@ impl Launcher {
             self.task = Some(task);
         }
         if let Some(profile) = &profile {
+            if label != LAUNCH_REVIEW_LABEL {
+                for setup in self.setup.values_mut() {
+                    setup.launch_input_review = None;
+                }
+            }
             let setup = self.setup.entry(profile.id).or_insert(Setup {
                 version: profile.version.id().into(),
                 inspection: None,
@@ -510,7 +521,9 @@ impl Launcher {
                 launch_input_review: None,
                 error: None,
             });
-            setup.error = None;
+            if label != LAUNCH_REVIEW_LABEL {
+                setup.error = None;
+            }
             setup.launch_input_review = None;
         }
         let work = cx
@@ -579,7 +592,9 @@ impl Launcher {
         let setup = profile.and_then(|profile| self.setup.get_mut(&profile.id));
         match result {
             Ok(Outcome::LaunchInputs(review)) => {
-                if let Some(setup) = setup {
+                if let Some(setup) = setup
+                    && profile.is_some_and(|profile| self.profiles.contains(profile))
+                {
                     setup.launch_input_review = Some(review.message);
                 }
                 self.message = "Launch input review finished.".into();
@@ -647,16 +662,17 @@ impl Launcher {
             Ok(Outcome::Profiles(profiles)) => {
                 match profiles {
                     Ok(profiles) => {
+                        self.setup.retain(|id, setup| {
+                            setup.launch_input_review = None;
+                            profiles
+                                .iter()
+                                .any(|profile| profile.id == *id && self.profiles.contains(profile))
+                        });
                         self.profiles = profiles;
                         self.profile_issue = None;
                         if self.selected_profile().is_none() {
                             self.personal = self.profiles.first().map(|profile| profile.id);
                         }
-                        self.setup.retain(|id, setup| {
-                            self.profiles.iter().any(|profile| {
-                                profile.id == *id && profile.version.id() == setup.version
-                            })
-                        });
                     }
                     Err(error) => self.profile_issue = Some(error),
                 }
@@ -761,9 +777,15 @@ impl Launcher {
             return;
         };
         let id = profile.id;
+        if profile.imported_pack.is_some()
+            || self.profile_issue.is_some()
+            || !self.setup.get(&id).is_some_and(Setup::game_files_prepared)
+        {
+            return;
+        }
         self.work(
             Some(profile),
-            "Checking installed launch inputs",
+            LAUNCH_REVIEW_LABEL,
             false,
             cx,
             move |root, activity| {
@@ -1064,6 +1086,7 @@ impl Launcher {
     }
 
     fn set_profiles(&mut self, profiles: Vec<Profile>, id: Uuid, cx: &mut Context<Self>) {
+        self.setup.remove(&id);
         self.profiles = profiles;
         self.last_activity = Some(ActivityTarget::Personal(id));
         self.message = "Instance saved.".to_owned();

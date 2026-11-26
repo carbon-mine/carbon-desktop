@@ -115,10 +115,9 @@ impl PreparedInstanceView {
         &self.root
     }
 
-    pub(super) fn verify_for_launch(&self) -> Result<(), String> {
+    fn observe_activation(&self) -> Result<Profile, String> {
         let s = &self.summary;
         let expected = Receipt::new(s.profile_id, &s.version, &s.metadata_sha1, &s.platform);
-        let binding = serde_json::to_vec(&expected).map_err(|_| "Invalid view binding.")?;
         let active = self.root.join("game-files-v1").join("active");
         let versions = self.root.join("vanilla-metadata-v1").join("versions");
         for dir in [
@@ -149,6 +148,25 @@ impl PreparedInstanceView {
         {
             return Err("The selected game version or activation has changed.".into());
         }
+        Ok(selected)
+    }
+
+    /// Re-observe the active receipt, metadata pin, and full profile after expensive checks.
+    /// The private view lock protects content. It does not reserve other stores for launch.
+    pub(super) fn verify_current_binding(&self, profile: &Profile) -> Result<(), String> {
+        if self.observe_activation()? != *profile
+            || carbon_profiles::existing_profile(&self.root, profile.id)?.as_ref() != Some(profile)
+        {
+            return Err("The instance changed during launch input review.".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn verify_for_launch(&self) -> Result<(), String> {
+        self.observe_activation()?;
+        let s = &self.summary;
+        let expected = Receipt::new(s.profile_id, &s.version, &s.metadata_sha1, &s.platform);
+        let binding = serde_json::to_vec(&expected).map_err(|_| "Invalid view binding.")?;
         let layout = Layout::new(&self.plan, &binding)?;
         let mut progress = Observer {
             callback: |_| true,

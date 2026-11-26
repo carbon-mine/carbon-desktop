@@ -1,7 +1,7 @@
 //! Framework-neutral instance inspection and selection of verified Java runtimes.
 mod java;
 use carbon_profiles::{JavaChoice, VanillaVersion};
-use carbon_vanilla::launch::{preview_launch_inputs, LaunchMode, LaunchSummary};
+use carbon_vanilla::launch::{preview_launch_inputs, LaunchMode, LaunchSummary, PlanError};
 pub use java::RuntimeReport;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -60,18 +60,15 @@ pub fn review_installed_launch_inputs(root: &Path, profile_id: Uuid) -> LaunchIn
     };
     let summary = match preview_launch_inputs(&profile, &view, LaunchMode::OfflineSinglePlayer) {
         Ok(summary) => summary,
+        Err(PlanError::GenerationChanged) => {
+            return launch_input_unavailable(
+                "The instance or its installed files changed during review. Check the launch inputs again.",
+            );
+        }
         Err(error) => return launch_input_unavailable(error.to_string()),
     };
-    if !matches!(
-        carbon_profiles::existing_profile(root, profile_id),
-        Ok(Some(current)) if current == profile
-    ) {
-        return launch_input_unavailable(
-            "The instance changed during review. Check its launch inputs again.",
-        );
-    }
     let message = format!(
-        "Installed launch inputs verified for Minecraft {} with managed Java {}.",
+        "Review found verified inputs for Minecraft {} with managed Java {}.",
         summary.version, summary.java_major
     );
     LaunchInputReview {
