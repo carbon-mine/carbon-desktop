@@ -160,6 +160,7 @@ fn main() {
             account::minecraft_account_status,
             account::show_minecraft_accounts,
             dialogs::edit_profile_dialog,
+            dialogs::choose_instance_icon,
             personal_library,
             open_game_folder,
             import_pack,

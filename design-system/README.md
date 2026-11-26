@@ -116,6 +116,10 @@ records Microsoft guidance and before/after evidence.
 The [M0 research packet](../docs/design/README.md) records contrast measurements,
 keyboard paths, theme checks and the packaged-app verification still required.
 
+## Instance icons
+
+The eight 12×12 pixel masks in `instance-icons.json` are original Carbon Desktop artwork, distributed under this repository’s MPL-2.0 license. Each mask is drawn in the foreground color of its surface. The leftmost pixel is bit 11 of each row. The GPUI, WebView and native platform pickers use this same catalog. IDs are persistent profile preferences and must remain stable. A profile with an unavailable ID displays its automatic icon until the player chooses a replacement.
+
 ## Refresh and verify
 
 Run `python design-system/verify_seed.py` from the Desktop root to verify file

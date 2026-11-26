@@ -68,3 +68,18 @@ BEGIN
     PUSHBUTTON     "Sign in with Microsoft", IDOK, 0, 160, 153, 30
     DEFPUSHBUTTON  "Close", IDCANCEL, 153, 160, 153, 30
 END
+
+2112 DIALOGEX 0, 0, 306, 174
+STYLE CARBON_DIALOG
+CAPTION "Choose instance icon"
+FONT 10, "Segoe UI"
+BEGIN
+    LTEXT           "Preview", -1, 13, 13, 90, 11
+    CONTROL         "", 1500, "STATIC", SS_OWNERDRAW, 13, 29, 90, 90
+    LTEXT           "&Icon", -1, 117, 13, 176, 11
+    COMBOBOX        1501, 117, 29, 176, 120, CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_OWNERDRAWFIXED | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "", 1503, 117, 54, 176, 58, SS_NOPREFIX | SS_EDITCONTROL
+    PUSHBUTTON      "Use &default", 1502, 13, 131, 90, 30
+    DEFPUSHBUTTON   "&Save icon", IDOK, 117, 131, 88, 30
+    PUSHBUTTON      "Cancel", IDCANCEL, 205, 131, 88, 30
+END

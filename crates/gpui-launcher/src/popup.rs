@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
+mod icon;
 
 use super::theme::{Partition, compact_action, label, partition, partition_strip};
 use super::{Launcher, account_panel::AccountPanel};
@@ -28,6 +29,7 @@ pub enum Mode {
 
 pub enum Kind {
     Profile(Mode, Option<Profile>),
+    Icon(Profile),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
     Notice {
@@ -53,6 +55,7 @@ struct Popup {
     root_path: PathBuf,
     palette: super::theme::Palette,
     focus: FocusHandle,
+    icon: Option<carbon_profiles::icons::IconDraft>,
     form: Option<Form>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
@@ -68,6 +71,7 @@ fn title(kind: &Kind) -> &'static str {
         Kind::Profile(Mode::Edit, _) => "Edit instance",
         Kind::Profile(Mode::Clone, _) => "Clone instance",
         Kind::ImportPack(..) => "Import modpack",
+        Kind::Icon(_) => "Choose instance icon",
         Kind::Account(_) => "Minecraft account",
         Kind::Notice { title, .. } => title,
     }
@@ -85,6 +89,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
     let result = attached.clone();
     let width = px(480.);
     let (height, minimum_height) = match &kind {
+        Kind::Icon(_) => (368., 315.),
         Kind::Profile(..) => (417., 340.),
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
@@ -170,7 +175,13 @@ impl Popup {
         let accessibility =
             super::accessibility::Accessibility::new(window, cx, title(&kind).into());
         let focus = cx.focus_handle();
+        let mut icon = None;
         let (form, pack, notice, account) = match kind {
+            Kind::Icon(profile) => {
+                icon = Some(carbon_profiles::icons::IconDraft::new(&profile));
+                focus.focus(window);
+                (None, None, None, None)
+            }
             Kind::Profile(mode, original) => {
                 let name = original
                     .as_ref()
@@ -265,6 +276,7 @@ impl Popup {
             root_path,
             palette,
             focus,
+            icon,
             form,
             pack,
             notice,
@@ -338,6 +350,7 @@ impl Popup {
                 |(memory_mib, window_width, window_height)| match form.mode {
                     Mode::Edit => ProfileAction::Edit(Profile {
                         id: form.original.as_ref().expect("edit source").id,
+                        icon_id: form.original.as_ref().and_then(|p| p.icon_id.clone()),
                         imported_pack: form
                             .original
                             .as_ref()
@@ -449,13 +462,31 @@ impl Render for Popup {
             .text_color(self.palette.ink())
             .track_focus(&self.focus)
             .key_context("CarbonPopup")
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if let Some(draft) = this.icon.as_mut() {
+                    let last = carbon_profiles::icons::catalog().len();
+                    let current = draft.selected_index();
+                    let index = match event.keystroke.key.as_str() {
+                        "left" | "up" => current.checked_sub(1).unwrap_or(last),
+                        "right" | "down" => (current + 1) % (last + 1),
+                        "home" => 0,
+                        "end" => last,
+                        _ => return,
+                    };
+                    draft.choose(index);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &Close, window, cx| {
                 if !this.importing {
                     this.account_dismiss(window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &Save, window, cx| {
-                if this.form.is_some() {
+                if this.icon.is_some() {
+                    this.save_icon(window, cx);
+                } else if this.form.is_some() {
                     this.commit(window, cx);
                 } else if this.notice.is_some() {
                     window.remove_window();
@@ -586,6 +617,9 @@ impl Render for Popup {
         if let Some(account) = &self.account {
             content = content.child(self.account_content(account, cx));
         }
+        if let Some(draft) = &self.icon {
+            content = content.child(self.icon_content(draft, cx));
+        }
         if let Some(message) = self.notice {
             content = content.child(self.accessibility.text(
                 div().child(message),
@@ -699,7 +733,25 @@ impl Render for Popup {
                     |this, window, cx| this.import(window, cx),
                 ))
             });
-        let bar = if let Some(account) = &self.account {
+        let bar = if let Some(draft) = &self.icon {
+            let disabled = !draft.changed();
+            bar.child(self.control(
+                label(
+                    compact_action("save-icon", p, Partition::Primary, disabled, cx),
+                    "Save icon",
+                    p,
+                    Partition::Primary,
+                    disabled,
+                ),
+                "save-icon",
+                "Save icon",
+                Role::Button,
+                disabled,
+                None,
+                cx,
+                |this, window, cx| this.save_icon(window, cx),
+            ))
+        } else if let Some(account) = &self.account {
             self.account_actions(account, bar, cx)
         } else {
             bar

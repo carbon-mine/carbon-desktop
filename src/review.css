@@ -124,6 +124,9 @@ button.primary:focus-visible { outline-color: var(--desktop-action-ink); outline
   color: var(--desktop-instance-ink);
   flex: none;
 }
+.personal-mark svg { inline-size: 60%; block-size: 60% }
+.icon-opener { padding: 0; border: 1px solid var(--desktop-line); cursor: pointer }
+.icon-opener:hover { border-color: currentColor }
 .instance-mark i {
   inline-size: 52%;
   block-size: 52%;

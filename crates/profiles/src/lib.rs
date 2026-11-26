@@ -1,5 +1,6 @@
 //! Personal vanilla launch preferences. Profile display names never become paths.
 mod folder;
+pub mod icons;
 mod storage;
 pub use folder::open_game_folder;
 #[cfg(test)]
@@ -56,6 +57,8 @@ pub struct ImportedPack {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Profile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_pack: Option<ImportedPack>,
     pub id: Uuid,
@@ -172,6 +175,7 @@ impl Library {
                 window_width,
                 window_height,
             } => Profile {
+                icon_id: None,
                 imported_pack: None,
                 id: Uuid::new_v4(),
                 name,
@@ -199,6 +203,7 @@ impl Library {
                             .into(),
                     );
                 }
+                edited.icon_id.clone_from(&original.icon_id);
                 edited.imported_pack.clone_from(&original.imported_pack);
                 edited.normalize_input()?;
                 self.profiles[index] = edited;
@@ -233,6 +238,7 @@ pub fn seed_review_library(root: &Path, comparison: bool) -> Result<(), String> 
             Uuid::new_v4()
         };
         library.profiles.push(Profile {
+            icon_id: None,
             imported_pack: None,
             id,
             name: if index == 0 {
@@ -303,6 +309,7 @@ pub fn import_instance(
     let profile = Profile {
         id,
         name: pack.name.clone(),
+        icon_id: None,
         imported_pack: Some(pack),
         version,
         memory_mib: 2048,

@@ -187,11 +187,7 @@ impl Launcher {
                             profile.version.id()
                         ),
                         Some(id) == self.personal,
-                        if profile.imported_pack.is_some() {
-                            Icon::Pack
-                        } else {
-                            Icon::Instance
-                        },
+                        Icon::Builtin(carbon_profiles::icons::displayed(profile)),
                         p,
                         cx,
                         move |this, _, cx| this.choose_personal(id, cx),
@@ -866,6 +862,14 @@ impl Launcher {
                             cx,
                             |this, win, cx| this.editor(popup::Mode::Edit, win, cx),
                         ))
+                        .child(self.command(
+                            p, "change-icon", "Change icon", false, self.busy() || self.popup.is_some(), cx,
+                            |this, win, cx| {
+                                if let Some(profile) = this.selected_profile().cloned() {
+                                    popup::open(this, popup::Kind::Icon(profile), win, cx);
+                                }
+                            },
+                        ))
                         .when(profile.imported_pack.is_none(), |row| row.child(self.command(
                             p,
                             "clone-profile",
@@ -939,11 +943,7 @@ impl Launcher {
                             .gap_3()
                             .child(mark(
                                 p,
-                                if profile.imported_pack.is_some() {
-                                    Icon::Pack
-                                } else {
-                                    Icon::Instance
-                                },
+                                Icon::Builtin(carbon_profiles::icons::displayed(profile)),
                                 !narrow,
                             ))
                             .child(

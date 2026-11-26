@@ -62,6 +62,13 @@ BRIDGE = """
         if (state.failedAction === command) throw 'Could not verify the cached version metadata.';
         return structuredClone(report);
       }
+      if (command === 'choose_instance_icon') {
+        if (!Object.hasOwn(state, 'iconChoice')) return null;
+        const target = profiles.find(profile => profile.id === args.profileId);
+        if (!target) throw 'Unknown test instance';
+        target.iconId = state.iconChoice;
+        return structuredClone(target);
+      }
       if (command === 'select_profile_java') return null;
       if (command === 'install_profile_java') {
         if (!state.installReject) {
@@ -284,6 +291,30 @@ def test_diagnostic_recovery(browser, address):
     page.close()
 
 
+def test_instance_icon(browser, address):
+    page = open_case(browser, address)
+    opener = page.get_by_role("button", name="Change instance icon")
+    selected = page.get_by_role("button", name="Personal world Vanilla").locator("svg path")
+    neighbor = page.get_by_role("button", name="Legacy creative Vanilla").locator("svg path")
+    preview = opener.locator("path")
+    initial = preview.get_attribute("d")
+    assert initial and selected.get_attribute("d") == initial
+    opener.focus()
+    page.keyboard.press("Enter")
+    expect(opener).to_be_focused()
+    expect(preview).to_have_attribute("d", initial)
+    page.evaluate("reviewTest.iconChoice = 'pine'")
+    opener.click()
+    expect(preview).not_to_have_attribute("d", initial)
+    expect(selected).to_have_attribute("d", preview.get_attribute("d"))
+    expect(neighbor).to_have_attribute("d", initial)
+    page.evaluate("reviewTest.iconChoice = null")
+    opener.click()
+    expect(preview).to_have_attribute("d", initial)
+    expect(selected).to_have_attribute("d", initial)
+    page.close()
+
+
 def test_navigation(browser, address, captures):
     page = open_case(browser, address)
     overview = page.get_by_role("tab", name="Overview")
@@ -369,6 +400,7 @@ def main():
                 test_pack_import(browser, address)
                 test_install(browser, address)
                 test_diagnostic_recovery(browser, address)
+                test_instance_icon(browser, address)
                 test_navigation(browser, address, args.captures)
                 test_appearance_keeps_search_selection(browser, address)
                 print("Passed renderer checks for install, recovery, native-dialog requests, keyboard focus and reflow.")

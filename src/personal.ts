@@ -6,6 +6,7 @@ export interface ProfileSettings {
   windowHeight: number
 }
 export interface PersonalProfile extends ProfileSettings {
+  iconId?: string | null
   id: string
   importedPack?: {name: string; loader: string | null; pendingFiles: number} | null
 }

@@ -389,3 +389,83 @@ fn recovery_refuses_a_link_at_the_staging_path() {
         b"outside data"
     );
 }
+
+#[test]
+fn icon_choices_are_scoped_to_the_selected_instance_and_survive_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let source = apply(root, create("Forest")).unwrap().remove(0);
+    assert!(!serde_json::to_value(&source)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .contains_key("iconId"));
+    assert_eq!(icons::displayed(&source).id, "block");
+    let mut draft = icons::IconDraft::new(&source);
+    let pine = icons::catalog()
+        .iter()
+        .position(|v| v.id == "pine")
+        .unwrap()
+        + 1;
+    draft.choose(pine);
+    assert_eq!(draft.preview().id, "pine");
+    assert_eq!(list(root).unwrap()[0].icon_id, None);
+    let mut newer = source.clone();
+    newer.memory_mib = 4096;
+    change(root, ProfileAction::Edit(newer)).unwrap();
+    let saved = draft.save(root).unwrap();
+    assert_eq!(saved.memory_mib, 4096);
+    assert_eq!(icons::displayed(&saved).id, "pine");
+    assert!(icons::set_icon(root, source.id, None, Some("crystal")).is_err());
+    assert!(icons::set_icon(root, source.id, Some("pine"), Some("../icon")).is_err());
+    let mut edited = saved.clone();
+    edited.icon_id = Some("ember".into());
+    change(root, ProfileAction::Edit(edited)).unwrap();
+    let clone = apply(root, json!({"kind":"clone","id":source.id,"name":"Coast"}))
+        .unwrap()
+        .remove(1);
+    assert_eq!(clone.icon_id, saved.icon_id);
+    let mut reset = icons::IconDraft::new(&clone);
+    reset.choose(0);
+    reset.save(root).unwrap();
+    let rows = list(root).unwrap();
+    assert_eq!(rows[0], saved);
+    assert_eq!(rows[1].icon_id, None);
+}
+
+#[test]
+fn unknown_icon_displays_the_default_and_survives_unrelated_edits_and_reimport() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let id = Uuid::new_v4();
+    let pack = ImportedPack {
+        name: "Synthetic pack".into(),
+        loader: None,
+        pending_files: 0,
+    };
+    let profile = import_instance(root, id, VanillaVersion::Release26_3, pack.clone(), |_| {
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(icons::displayed(&profile).id, "pack");
+    let index = root.join("personal/profiles.json");
+    let mut json: Value = serde_json::from_slice(&fs::read(&index).unwrap()).unwrap();
+    json["profiles"][0]["iconId"] = json!("future-icon");
+    fs::write(&index, serde_json::to_vec(&json).unwrap()).unwrap();
+    let mut reopened = list(root).unwrap().remove(0);
+    assert_eq!(icons::displayed(&reopened).id, "pack");
+    let draft = icons::IconDraft::new(&reopened);
+    assert!(!draft.changed());
+    assert_eq!(draft.preview().id, "pack");
+    reopened.name = "Renamed".into();
+    change(root, ProfileAction::Edit(reopened)).unwrap();
+    let again = import_instance(root, id, VanillaVersion::Release26_3, pack, |_| {
+        panic!("idempotent import")
+    })
+    .unwrap();
+    assert_eq!(again.icon_id.as_deref(), Some("future-icon"));
+    let mut reset = icons::IconDraft::new(&again);
+    reset.choose(0);
+    assert!(reset.changed());
+    assert_eq!(reset.save(root).unwrap().icon_id, None);
+}

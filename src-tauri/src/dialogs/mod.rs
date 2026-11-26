@@ -1,7 +1,7 @@
 #[cfg(any(windows, target_os = "linux"))]
 use crate::account::Dialog as AccountDialog;
 use crate::Library;
-use carbon_profiles::Profile;
+use carbon_profiles::{icons::IconDraft, Profile};
 #[cfg(any(windows, target_os = "linux"))]
 use carbon_profiles::{ProfileAction, VanillaVersion};
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,6 @@ pub fn set_theme_preference(preference: usize) {
     THEME_PREFERENCE.store(preference, Ordering::Relaxed);
 }
 
-#[cfg(any(windows, target_os = "linux"))]
 fn dark_theme(owner: &WebviewWindow) -> bool {
     match THEME_PREFERENCE.load(Ordering::Relaxed) {
         1 => false,
@@ -26,6 +25,8 @@ fn dark_theme(owner: &WebviewWindow) -> bool {
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod mac_icon;
 #[cfg(windows)]
 mod windows;
 
@@ -80,6 +81,7 @@ impl Form {
                 memory_mib: 2048,
                 window_width: 1280,
                 window_height: 720,
+                icon_id: None,
                 imported_pack: None,
             },
             (Mode::Edit | Mode::Clone, Some(p)) => p.clone(),
@@ -105,6 +107,7 @@ impl Form {
         };
         let mut edited = Profile {
             id: self.initial.id,
+            icon_id: self.initial.icon_id.clone(),
             imported_pack: self.initial.imported_pack.clone(),
             name,
             version,
@@ -281,4 +284,47 @@ pub async fn edit_profile_dialog(
 ) -> Result<Option<Edited>, String> {
     let _ = (window, root, mode, profile_id);
     Err("Native instance editing is unavailable on this platform.".into())
+}
+
+#[tauri::command]
+pub async fn choose_instance_icon(
+    window: WebviewWindow,
+    root: State<'_, Library>,
+    profile_id: Uuid,
+) -> Result<Option<Profile>, String> {
+    let root = root.0.clone();
+    let source = root.clone();
+    let original = tauri::async_runtime::spawn_blocking(move || {
+        carbon_profiles::list(&source)?
+            .into_iter()
+            .find(|profile| profile.id == profile_id)
+            .ok_or_else(|| "This instance is unavailable. Reload the library.".to_string())
+    })
+    .await
+    .map_err(|_| "Could not open the instance icon picker.")??;
+    let draft = IconDraft::new(&original);
+    let owner = window.clone();
+    let dark = dark_theme(&window);
+    let (send, mut receive) = tauri::async_runtime::channel(1);
+    window
+        .run_on_main_thread(move || {
+            #[cfg(windows)]
+            let result = windows::show_icon(&owner, &draft, dark);
+            #[cfg(target_os = "linux")]
+            let result = linux::show_icon(&owner, &draft, dark);
+            #[cfg(target_os = "macos")]
+            let result = mac_icon::show_icon(&owner, &draft, dark);
+            let _ = send.try_send(result);
+        })
+        .map_err(|_| "Could not show the native icon picker.")?;
+    let Some(draft) = receive
+        .recv()
+        .await
+        .ok_or("The icon picker closed unexpectedly.")??
+    else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || draft.save(&root).map(Some))
+        .await
+        .map_err(|_| "Saving the instance icon was interrupted.")?
 }

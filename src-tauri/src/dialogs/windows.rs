@@ -9,6 +9,10 @@ use windows_sys::Win32::{
 mod account;
 pub(super) use account::show_accounts;
 
+#[path = "windows_icon.rs"]
+mod icon;
+pub(super) use icon::show_icon;
+
 #[path = "windows_style.rs"]
 mod paint;
 use paint::Style;

@@ -35,3 +35,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Wind
 
 [target."cfg(target_os = \"linux\")".dependencies]
 gtk = "0.18"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAccessibilityProtocols", "NSAlert", "NSAppearance", "NSApplication", "NSButton", "NSCell", "NSControl", "NSGraphics", "NSImage", "NSMenuItem", "NSPopUpButton", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSGeometry", "NSString"] }
+png = "0.18"

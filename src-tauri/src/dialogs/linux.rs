@@ -407,3 +407,101 @@ pub(super) fn show(
     dialog.close();
     Ok(response)
 }
+
+pub(super) fn show_icon(
+    owner: &WebviewWindow,
+    original: &super::IconDraft,
+    dark: bool,
+) -> Result<Option<super::IconDraft>, String> {
+    use carbon_profiles::icons::catalog;
+    let parent = owner
+        .gtk_window()
+        .map_err(|_| "The owner window is unavailable.")?;
+    let dialog = Dialog::with_buttons(
+        Some("Choose instance icon"),
+        Some(&parent),
+        DialogFlags::MODAL | DialogFlags::DESTROY_WITH_PARENT,
+        &[
+            ("Cancel", ResponseType::Cancel),
+            ("Save icon", ResponseType::Accept),
+        ],
+    );
+    dialog.set_default_response(ResponseType::Accept);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_border_width(18);
+    let combo = ComboBoxText::new();
+    let label = Label::with_mnemonic("_Instance icon");
+    label.set_xalign(0.);
+    label.set_mnemonic_widget(Some(&combo));
+    combo.append_text("Automatic");
+    for icon in catalog() {
+        combo.append_text(&icon.label);
+    }
+    combo.set_active(Some(original.selected_index() as u32));
+    let draft = Rc::new(RefCell::new(original.clone()));
+    let area = gtk::DrawingArea::new();
+    area.set_size_request(240, 84);
+    area.connect_draw({
+        let draft = draft.clone();
+        move |area, context| {
+            let art = draft.borrow().preview();
+            let bounds = area.allocation();
+            let scale = (bounds.width().min(bounds.height()) / 16).max(1) as f64;
+            let x0 = (f64::from(bounds.width()) - 12. * scale) / 2.;
+            let y0 = (f64::from(bounds.height()) - 12. * scale) / 2.;
+            let style = area.style_context();
+            let ink = style.color(style.state());
+            context.set_source_rgba(ink.red(), ink.green(), ink.blue(), ink.alpha());
+            for (y, row) in art.rows.iter().enumerate() {
+                for x in 0..12 {
+                    if row & (1 << (11 - x)) != 0 {
+                        context.rectangle(
+                            x0 + f64::from(x) * scale,
+                            y0 + y as f64 * scale,
+                            scale,
+                            scale,
+                        );
+                    }
+                }
+            }
+            let _ = context.fill();
+            gtk::glib::Propagation::Proceed
+        }
+    });
+    let description = Label::new(Some(&original.preview().label));
+    let reset = gtk::Button::with_mnemonic("Use _default");
+    reset.set_halign(gtk::Align::Start);
+    content.add(&label);
+    content.add(&combo);
+    content.add(&area);
+    content.add(&description);
+    content.add(&reset);
+    dialog.content_area().add(&content);
+    let _style = style(&dialog, dark);
+    combo.connect_changed({
+        let draft = draft.clone();
+        let area = area.clone();
+        let description = description.clone();
+        move |combo| {
+            if let Some(index) = combo.active() {
+                draft.borrow_mut().choose(index as usize);
+                description.set_text(&draft.borrow().preview().label);
+                area.queue_draw();
+            }
+        }
+    });
+    reset.connect_clicked({
+        let draft = draft.clone();
+        let combo = combo.clone();
+        move |_| {
+            draft.borrow_mut().choose(0);
+            combo.set_active(Some(0));
+        }
+    });
+    dialog.show_all();
+    combo.grab_focus();
+    let accept = dialog.run() == ResponseType::Accept;
+    dialog.close();
+    let draft = draft.borrow();
+    Ok((accept && draft.changed()).then(|| draft.clone()))
+}
