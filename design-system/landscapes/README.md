@@ -37,12 +37,21 @@ npm run bake
 
 The scene sources, original voxel models, camera definitions, sky lighting and siding material live under `tools/landscapes`. All geometry is defined in source. The baker runs offline after package installation, with all assets inlined. It rejects page errors and insufficient variation between frames. The observed Windows bake used Chrome 158.0.8127.88 and qualified distinct frame content for all seven views. Hardware, browser and encoder versions can affect rendered bytes. [Materials, source links and reuse terms](../../tools/landscapes/assets/ASSETS.md)
 
-To render the authored scenes into a new external directory, install FFmpeg with libx264 and ffprobe. The AVC exporter streams original PNG pixels directly into the encoder. It writes a matching first-frame JPEG and a silent 1440 × 810 H.264 Main clip per view, at 30 fps with a one-second keyframe interval. It verifies the closing pose and encoded frame count, timing and color metadata before publishing either output. Set `FFMPEG_PATH` and `FFPROBE_PATH` to use specific binaries.
+To render the authored scenes into a new external directory, install FFmpeg with libx264 and ffprobe. The AVC exporter streams original PNG pixels directly into the encoder. It writes a matching first-frame JPEG and a silent 1440 × 810 H.264 Main clip per view, at 30 fps with one opening keyframe per eight-second cycle. It verifies the closing pose and encoded frame count, timing and color metadata before publishing either output. Set `FFMPEG_PATH` and `FFPROBE_PATH` to use specific binaries.
 
 ```sh
 node bake.mjs --avc-dir ./review-avc
 node bake.mjs --png-dir ./review-master --size 1440x810 --view farmland --frames 60
 ```
+
+The encoder uses a symmetric quality schedule to limit the texture change between the final predictive frame and the opening keyframe. Compare the seam against all 239 other transitions in the decoded container:
+
+```sh
+node check-loop.mjs ./review-avc/farmland.mp4
+node --test avc-export.test.mjs source-config.test.mjs
+```
+
+The check records adjacent-frame RGB error on a 384 × 216 image, including the highest 24 × 18 block error at the join. It fails when the join exceeds the 95th percentile for the full clip. A comparison across all seven corrected encodes gave mean seam differences of 0.14–0.27 on a 0–255 scale; the previous one-second GOPs gave 0.67–1.06. The seven movies occupy 84,320,139 bytes in the qualified Windows bake.
 
 For the JPEG playback path, each `.frames` file starts with a little-endian 32-bit frame count followed by `count + 1` little-endian 32-bit offsets relative to the first byte of the JPEG payload. Each successive pair defines one independent image, including the terminal offset. Playback needs only the current frame and one decoded successor. JPEGs are decoded on demand. The desktop does not need Chrome, Three.js or an online service to show these scenes.
 

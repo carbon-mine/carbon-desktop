@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 import { spawn, execFile } from 'node:child_process';
-import { once } from 'node:events';
 import { constants } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,6 +8,24 @@ import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
+
+// Independent and predicted frames quantize still textures differently. One
+// IDR per loop and a gentle increase in precision around its seam keep the
+// displayed first and last frames close without blending the moving geometry.
+export function loopQualityZones(count, fps) {
+  const ramp = Math.min(Math.round(fps * 1.5), Math.ceil(count / 2));
+  const hold = Math.min(4, Math.floor(ramp / 4));
+  const zones = [];
+  for (let index = 0; index < count; index++) {
+    const distance = Math.min(index, count - 1 - index);
+    const amount = Math.min(1, Math.max(0, distance - hold) / Math.max(1, ramp - 1 - hold));
+    const qp = Math.round(1 + 23 * amount);
+    const previous = zones.at(-1);
+    if (previous && previous.end + 1 === index && previous.qp === qp) previous.end = index;
+    else zones.push({ start:index, end:index, qp });
+  }
+  return zones.map(({start,end,qp}) => `${start},${end},q=${qp}`).join('/');
+}
 
 // FFmpeg and Chromium are offline authoring dependencies. The native launcher
 // reads the two finished assets, so neither tool runs on the player's machine.
@@ -25,14 +42,18 @@ export async function exportAvc(page, errors, { directory, view, width, height, 
   const args = ['-hide_banner','-loglevel','error','-y','-f','image2pipe','-framerate',String(fps),
     '-vcodec','png','-i','pipe:0','-map','0:v:0','-an','-sn','-dn','-vf',filter,
     '-c:v','libx264','-profile:v','main','-preset','medium','-crf','17','-bf','0',
-    '-g',String(fps),'-keyint_min',String(fps),'-sc_threshold','0','-color_range','tv',
+    '-g',String(count),'-keyint_min',String(count),'-sc_threshold','0','-color_range','tv',
     '-colorspace','bt709','-color_primaries','bt709','-color_trc','iec61966-2-1',
-    '-x264-params','colorprim=bt709:transfer=iec61966-2-1:colormatrix=bt709',
+    '-x264-params','colorprim=bt709:transfer=iec61966-2-1:colormatrix=bt709:zones='+loopQualityZones(count,fps),
     '-movflags','+faststart+write_colr',movie];
   const encoder=spawn(process.env.FFMPEG_PATH??'ffmpeg',args,{stdio:['pipe','ignore','pipe'],windowsHide:true});
   let diagnostic='';
   encoder.stderr.on('data',chunk=>{diagnostic=(diagnostic+chunk.toString()).slice(-4096);});
+  let processError;
+  encoder.once('error',error=>{ processError=error; });
+  const closed=new Promise(resolve=>encoder.once('close',resolve));
   const published=[];
+  let failure;
   try {
     async function* originals(){
       let first;
@@ -57,7 +78,8 @@ export async function exportAvc(page, errors, { directory, view, width, height, 
         yield png;
       }
     }
-    const [,[code]]=await Promise.all([pipeline(Readable.from(originals()),encoder.stdin),once(encoder,'close')]);
+    const [,code]=await Promise.all([pipeline(Readable.from(originals()),encoder.stdin),closed]);
+    if(processError) throw processError;
     if(code!==0) throw Error('FFmpeg failed for '+view+': '+diagnostic);
     const {stdout}=await run(process.env.FFPROBE_PATH??'ffprobe',['-v','error','-show_streams','-of','json',movie],{windowsHide:true});
     const streams=JSON.parse(stdout).streams, s=streams[0];
@@ -72,10 +94,17 @@ export async function exportAvc(page, errors, { directory, view, width, height, 
       published.push(target);
     }
   } catch(error) {
-    for(const target of published) await rm(target,{force:true});
+    failure=error;
     throw error;
   } finally {
-    if(encoder.exitCode===null) encoder.kill();
-    await rm(stage,{recursive:true,force:true});
+    if (encoder.pid && encoder.exitCode===null && encoder.signalCode===null) encoder.kill();
+    await closed;
+    try {
+      if (failure) for (const target of published) await rm(target,{force:true});
+      await rm(stage,{recursive:true,force:true});
+    } catch (cleanupError) {
+      if (failure) throw new AggregateError([failure,cleanupError],failure.message);
+      throw cleanupError;
+    }
   }
 }

@@ -76,6 +76,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Verify landscape source and exporter contracts
+        if: runner.os == 'Linux' && runner.arch == 'X64'
+        run: node --test tools/landscapes/source-config.test.mjs tools/landscapes/avc-export.test.mjs
+
       - name: Set up the x64 Windows fixture JDK
         if: runner.os == 'Windows' && runner.arch == 'X64'
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
