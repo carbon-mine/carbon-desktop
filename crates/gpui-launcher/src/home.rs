@@ -296,12 +296,13 @@ impl Launcher {
                     .child(background),
             )
             .child(
-                img("brand/home-identity-shadow.png")
+                img("brand/home-header-shade.png")
                     .absolute()
                     .top_0()
                     .left_0()
-                    .w(px(420.))
-                    .h(px(150.)),
+                    .w_full()
+                    .h(px(if compact { 124. } else { 146. }))
+                    .object_fit(gpui::ObjectFit::Fill),
             )
             .child(heading)
             .child(controls)
@@ -496,7 +497,7 @@ impl Launcher {
             .w_full()
             .justify_center()
             .gap_2()
-            .px(if compact { 12. } else { 30. })
+            .px(gpui::Pixels::from(if compact { 12.0 } else { 30.0 }))
             .py(px(10.))
             .bg(p.surface)
             .border_t_1()
@@ -1109,7 +1110,10 @@ impl Launcher {
 }
 
 fn home_shelf_height(window: &Window) -> f32 {
-    let height = f32::from(window.viewport_size().height);
+    home_shelf_height_for(f32::from(window.viewport_size().height))
+}
+
+fn home_shelf_height_for(height: f32) -> f32 {
     if height < 630. {
         96.
     } else {
@@ -1175,6 +1179,7 @@ mod tests {
 
     fn profile(id: Uuid) -> Profile {
         Profile {
+            icon_id: None,
             imported_pack: None,
             server_address: None,
             id,
@@ -1215,7 +1220,8 @@ mod tests {
 
     #[test]
     fn shelf_height_uses_twenty_two_percent_until_the_short_compact_case() {
-        assert_eq!((720.0 * 0.22_f32).clamp(110., 166.), 158.4);
-        assert!((600.0_f32).lt(&630.));
+        assert_eq!(home_shelf_height_for(400.), 96.);
+        assert_eq!(home_shelf_height_for(720.), 158.4);
+        assert_eq!(home_shelf_height_for(2000.), 166.);
     }
 }
