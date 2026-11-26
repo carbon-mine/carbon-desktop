@@ -68,6 +68,21 @@ native work at the app boundary.
 | Task activity | Name the instance and operation phase. Show measured progress when available. Keep recovery available from the affected instance and the chosen activity surface. Announce state changes without repeating byte updates. |
 | Library empty and no matches | Offer a first-create and import path for an empty library. Preserve the query when filtering returns no matches and give a way to broaden it. |
 
+### Native task motion
+
+The GPUI install card and Activity use the same task meter. During a measured
+transfer, a three-pixel rail and tabular counters ease from their current
+displayed values to the latest worker sample over 180 ms. A new phase, changed
+total, retry or terminal value takes effect immediately. File preparation uses
+completed files for the rail and also shows verified bytes. During an unmeasured
+step three monochrome dots move for up to five seconds, then stay still.
+
+Reduced motion shows measured values immediately and keeps the dots still.
+GPUI reads the Windows client animation setting, the macOS accessibility motion
+preference and the Linux desktop portal setting (with the GNOME animation
+setting as a fallback). Screen readers receive phase changes and can inspect
+the measured progress value independently of the visual interpolation.
+
 ### Desktop launcher workspace
 
 The live [launcher shell](../src/App.svelte),
@@ -84,6 +99,11 @@ Icons or Segoe MDL2 Assets on Windows when available. It carries original
 portable fallback paths for other systems and pairs each icon with visible
 text or an accessible control name. No Microsoft font file is bundled.
 
+- For GPUI controls, use the shared SVG icon set. Draw small icons on the
+  16-unit grid with rounded stroke ends and joins. Use a softly rounded,
+  filled silhouette for Play so the mark remains legible at toolbar size.
+  Review new icons beside existing controls at actual size and fractional
+  display scaling. Give each control a text label or accessible name.
 - Use the `instance-tabs` pattern when an instance has distinct tasks.
   Keep a visible active marker and a programmatic selected state. Arrow
   keys change tabs, Home and End seek the edges, and Tab moves into the

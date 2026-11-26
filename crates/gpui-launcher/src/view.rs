@@ -583,9 +583,7 @@ impl Launcher {
                 if cancelling {
                     "Cancellation requested…".to_owned()
                 } else {
-                    task.activity
-                        .text()
-                        .unwrap_or_else(|| "Starting…".to_owned())
+                    task.meter.read(cx).target.label().to_owned()
                 },
                 task.can_cancel.then(|| {
                     self.command(
@@ -736,6 +734,10 @@ impl Launcher {
                                 ),
                             )
                             .when_some(
+                                install_activity.filter(|task| !task.activity.cancel.load(Ordering::Acquire)),
+                                |body, task| body.child(self.accessibility.progress(&task.meter, cx)),
+                            )
+                            .when_some(
                                 setup_error.filter(|_| install_activity.is_none()),
                                 |task, error| {
                                     task.child(
@@ -869,24 +871,12 @@ impl Launcher {
                         .font_semibold()
                         .child("Instance settings"),
                 )
-                .child(stage(
-                    "Minecraft version",
-                    profile.version.id().into(),
-                    p,
-                    true,
-                ))
-                .child(stage(
-                    "Maximum memory",
-                    format!("{} MiB", profile.memory_mib),
-                    p,
-                    true,
-                ))
-                .child(stage(
-                    "Starting window",
-                    format!("{} × {}", profile.window_width, profile.window_height),
-                    p,
-                    true,
-                ))
+                .child(
+                    col().px_5()
+                        .child(detail_row("Minecraft version", profile.version.id().into(), p))
+                        .child(detail_row("Maximum memory", format!("{} MiB", profile.memory_mib), p))
+                        .child(detail_row("Starting window", format!("{} × {}", profile.window_width, profile.window_height), p)),
+                )
                 .child(
                     command_row(p)
                         .child(self.command(
@@ -942,7 +932,14 @@ impl Launcher {
         let primary_label = Self::primary_label(profile);
         let play = compact_action("play", p, Partition::Neutral, self.popup.is_some(), cx)
             .min_w(px(82.))
-            .child(div().font_semibold().text_color(p.ink).child(primary_label));
+            .child(
+                row()
+                    .gap_1()
+                    .font_semibold()
+                    .text_color(p.ink)
+                    .child(Icon::Play.render(px(16.), p.ink))
+                    .child(primary_label),
+            );
         let play = self.control(
             play,
             "play",
@@ -1561,9 +1558,13 @@ impl Render for Launcher {
                 } else if task.activity.cancel.load(Ordering::Acquire) {
                     "Cancellation requested…".to_owned()
                 } else {
-                    task.activity
-                        .text()
-                        .unwrap_or_else(|| task.label.to_owned())
+                    let phase = task.meter.read(cx).target.label();
+                    if phase == "Starting…" {
+                        task.label
+                    } else {
+                        phase
+                    }
+                    .to_owned()
                 }
             })
             .unwrap_or_else(|| self.message.clone());
@@ -1571,6 +1572,12 @@ impl Render for Launcher {
             Some(name) if !inline_activity => format!("{name} · {activity}"),
             _ => activity,
         };
+        let footer_meter = self
+            .task
+            .as_ref()
+            .or(self.fixture_task.as_ref())
+            .filter(|task| !inline_activity && !task.activity.cancel.load(Ordering::Acquire));
+        let stack_activity = narrow && footer_meter.is_some();
         let frame = col()
             .size_full()
             .bg(p.frame)
@@ -1694,6 +1701,9 @@ impl Render for Launcher {
                         .flex()
                         .id("activity")
                         .track_focus(&self.activity_focus)
+                        .w_full()
+                        .flex_none()
+                        .when(stack_activity, |bar| bar.flex_col())
                         .border_t_1()
                         .border_color(p.stroke)
                         .focus(|style| style.border_color(p.accent))
@@ -1704,9 +1714,10 @@ impl Render for Launcher {
                                 .gap_2()
                                 .flex_1()
                                 .min_w_0()
+                                .when(stack_activity, |status| status.flex_none().w_full())
                                 .child(div().text_xs().font_semibold().child("Activity"))
                                 .child(
-                                    div()
+                                    col()
                                         .flex_1()
                                         .min_w_0()
                                         .text_xs()
@@ -1716,43 +1727,53 @@ impl Render for Launcher {
                                             "activity-status",
                                             activity,
                                             Role::Status,
-                                        )),
+                                        ))
+                                        .when_some(footer_meter, |body, task| {
+                                            body.child(self.accessibility.progress(&task.meter, cx))
+                                        }),
                                 ),
                         )
-                        .when(activity_name.is_some() && !inline_activity, |bar| {
-                            bar.child(div().px_2().py_1().child(self.command(
-                                p,
-                                "activity-target",
-                                "Show task",
-                                false,
-                                self.popup.is_some() || self.picker_open,
-                                cx,
-                                |this, window, cx| this.show_activity_target(window, cx),
-                            )))
-                        })
-                        .when(
-                            !inline_activity
-                                && self.task.as_ref().is_some_and(|task| task.can_cancel),
-                            |bar| {
-                                bar.child(
-                                    div()
-                                        .flex()
-                                        .w(px(124.))
-                                        .border_l_1()
-                                        .border_color(p.stroke)
-                                        .child(self.command(
-                                            p,
-                                            "cancel-job",
-                                            "Cancel",
-                                            false,
-                                            self.task.as_ref().is_some_and(|task| {
-                                                task.activity.cancel.load(Ordering::Acquire)
-                                            }),
-                                            cx,
-                                            |this, _, _| this.cancel_task(),
-                                        )),
-                                )
-                            },
+                        .child(
+                            row()
+                                .justify_end()
+                                .when(activity_name.is_some() && !inline_activity, |bar| {
+                                    bar.child(div().px_2().py_1().child(self.command(
+                                        p,
+                                        "activity-target",
+                                        "Show task",
+                                        false,
+                                        self.popup.is_some() || self.picker_open,
+                                        cx,
+                                        |this, window, cx| this.show_activity_target(window, cx),
+                                    )))
+                                })
+                                .when(
+                                    !inline_activity
+                                        && self.task.as_ref().is_some_and(|task| task.can_cancel),
+                                    |bar| {
+                                        bar.child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .px_2()
+                                                .py_1()
+                                                .when(!narrow, |group| {
+                                                    group.border_l_1().border_color(p.stroke)
+                                                })
+                                                .child(self.command(
+                                                    p,
+                                                    "cancel-job",
+                                                    "Cancel",
+                                                    false,
+                                                    self.task.as_ref().is_some_and(|task| {
+                                                        task.activity.cancel.load(Ordering::Acquire)
+                                                    }),
+                                                    cx,
+                                                    |this, _, _| this.cancel_task(),
+                                                )),
+                                        )
+                                    },
+                                ),
                         ),
                     "activity",
                     "Activity",
@@ -1786,31 +1807,8 @@ fn detail_row(label: &'static str, status: String, p: Palette) -> gpui::Div {
         .border_t_1()
         .border_color(p.stroke)
         .text_sm()
-        .child(div().w(px(112.)).flex_none().font_semibold().child(label))
+        .child(div().w(px(132.)).flex_none().font_semibold().child(label))
         .child(div().min_w_0().flex_1().text_color(p.muted).child(status))
-}
-
-fn stage(title: &'static str, value: String, p: Palette, complete: bool) -> gpui::Div {
-    row()
-        .gap_2()
-        .px_5()
-        .py_2()
-        .border_b_1()
-        .border_color(p.stroke)
-        .items_start()
-        .child(
-            div()
-                .flex_none()
-                .text_color(if complete { p.success } else { p.muted })
-                .child(if complete { "✓" } else { "○" }),
-        )
-        .child(
-            col()
-                .min_w_0()
-                .gap_1()
-                .child(div().font_semibold().child(title))
-                .child(div().text_sm().text_color(p.muted).child(value)),
-        )
 }
 
 fn fixture_status(item: &InstanceView) -> &'static str {
