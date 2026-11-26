@@ -11,13 +11,9 @@ mod linux;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{NativeMenu, apply_frame, configure_renderer, high_contrast};
+pub use windows::{NativeMenu, apply_frame, configure_renderer};
 #[cfg(not(windows))]
 pub fn apply_frame(_: &Window, _: bool) {}
-#[cfg(not(windows))]
-pub fn high_contrast() -> bool {
-    false
-}
 
 actions!(shell, [CloseLauncher, OpenFile, OpenView]);
 
