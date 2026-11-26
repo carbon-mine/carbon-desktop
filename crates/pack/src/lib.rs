@@ -453,6 +453,25 @@ mod tests {
         let p = inspect(&archive(SAMPLE, Some("overrides/config/forest.txt"))).unwrap();
         assert_eq!((p.review.pending_files, p.review.overrides), (1, 1));
     }
+
+    #[test]
+    fn review_counts_client_entries_and_bundled_overrides() {
+        let mut index: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
+        let files = ["required", "optional", "unsupported"].map(|requirement| {
+            let mut entry = index["files"][0].clone();
+            entry["path"] = format!("mods/{requirement}.txt").into();
+            entry["env"] = serde_json::json!({ "client": requirement, "server": "required" });
+            entry
+        });
+        index["files"] = files.to_vec().into();
+        let manifest = index.to_string();
+        let plain = inspect(&archive(&manifest, None)).unwrap().review;
+        assert_eq!((plain.pending_files, plain.overrides), (2, 0));
+        let bundled = inspect(&archive(&manifest, Some("overrides/mods/required.txt")))
+            .unwrap()
+            .review;
+        assert_eq!((bundled.pending_files, bundled.overrides), (1, 1));
+    }
     fn client_pack() -> Vec<u8> {
         let mut index: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
         index["dependencies"]["fabric-loader"] = "0.16.10".into();
