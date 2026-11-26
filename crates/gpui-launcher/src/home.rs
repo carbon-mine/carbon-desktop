@@ -179,14 +179,20 @@ impl Launcher {
             .min_h_0()
             .bg(p.surface)
             .track_focus(&self.home_focus)
-            .child(self.home_hero(p, compact, cx))
+            .child(self.home_hero(p, compact, window.viewport_size().width < px(620.), cx))
             .child(self.home_shelf(p, compact, shelf_height, cx));
         self.accessibility
             .focus_group(home, "home", "Home", Role::Main, &self.home_focus)
             .into_any_element()
     }
 
-    fn home_hero(&self, p: Palette, compact: bool, cx: &Context<Self>) -> AnyElement {
+    fn home_hero(
+        &self,
+        p: Palette,
+        compact: bool,
+        narrow_header: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let background = match self.home_world_image() {
             Some(image) => img(image)
                 .size_full()
@@ -202,19 +208,11 @@ impl Launcher {
                 .text_color(gpui::rgb(0xf4f4f4))
                 .child("Carbon Desktop"),
         );
-        let heading = col()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .h(px(132.))
-            .px_4()
-            .py_3()
-            .gap_2()
-            .child(identity)
-            .child(row().gap_1().child(self.surface_tabs(ink, cx)).when(
-                !self.history.is_empty(),
-                |bar| {
+        let navigation =
+            row()
+                .gap_1()
+                .child(self.surface_tabs(ink, cx))
+                .when(!self.history.is_empty(), |bar| {
                     bar.child(self.command(
                         ink,
                         "home-back",
@@ -226,26 +224,22 @@ impl Launcher {
                             this.history_back(window, cx);
                         },
                     ))
-                },
-            ));
+                });
         let paused = self.artwork.playback.paused;
-        let controls = row()
-            .absolute()
-            .right(px(12.))
-            .top(px(12.))
+        let scenery_button = self.command(
+            ink,
+            "home-scenery",
+            "Scenery",
+            false,
+            false,
+            cx,
+            |launcher, window, cx| {
+                let scene = popup::ScenePicker::snapshot(launcher);
+                popup::open(launcher, popup::Kind::Scenery(scene), window, cx);
+            },
+        );
+        let playback_controls = row()
             .gap_1()
-            .child(self.command(
-                ink,
-                "home-scenery",
-                "Scenery",
-                false,
-                false,
-                cx,
-                |launcher, window, cx| {
-                    let scene = popup::ScenePicker::snapshot(launcher);
-                    popup::open(launcher, popup::Kind::Scenery(scene), window, cx);
-                },
-            ))
             .child(self.command(
                 ink,
                 "home-motion",
@@ -272,16 +266,50 @@ impl Launcher {
                     launcher.rotate_home_scene();
                     cx.notify();
                 },
-            ))
-            .child(self.command(
-                ink,
-                "home-account",
-                self.account.read(cx).toolbar_label(),
-                false,
-                self.popup.is_some() || self.picker_open,
-                cx,
-                |launcher, window, cx| launcher.open_account(window, cx),
             ));
+        let account = self.command(
+            ink,
+            "home-account",
+            self.account.read(cx).toolbar_label(),
+            false,
+            self.popup.is_some() || self.picker_open,
+            cx,
+            |launcher, window, cx| launcher.open_account(window, cx),
+        );
+        let inset = home_inset(compact);
+        let mut scenery_button = Some(scenery_button);
+        let utilities = row()
+            .gap_1()
+            .children(if narrow_header {
+                None
+            } else {
+                scenery_button.take()
+            })
+            .when(!narrow_header, |r| r.child(playback_controls))
+            .child(
+                div()
+                    .pl(if narrow_header { px(0.) } else { px(8.) })
+                    .child(account),
+            );
+        let heading = col()
+            .absolute()
+            .top(px(if compact { 12. } else { 26. }))
+            .left(inset)
+            .right(inset)
+            .gap_2()
+            .child(
+                row()
+                    .justify_between()
+                    .gap_2()
+                    .child(identity)
+                    .child(utilities),
+            )
+            .child(
+                row()
+                    .justify_between()
+                    .child(navigation)
+                    .children(scenery_button),
+            );
         col()
             .relative()
             .flex_1()
@@ -306,7 +334,6 @@ impl Launcher {
                     .object_fit(gpui::ObjectFit::Fill),
             )
             .child(heading)
-            .child(controls)
             .child(self.home_launchbox(p, compact, cx))
             .into_any_element()
     }
@@ -315,7 +342,7 @@ impl Launcher {
         let mut panel = col()
             .absolute()
             .bottom(px(if compact { 12. } else { 26. }))
-            .left(px(if compact { 12. } else { 30. }))
+            .left(home_inset(compact))
             .bg(p.layer)
             .border_1()
             .border_color(p.stroke)
@@ -323,7 +350,7 @@ impl Launcher {
             .py_4()
             .gap_2();
         panel = if compact {
-            panel.right(px(12.))
+            panel.right(home_inset(compact))
         } else {
             panel.w(px(330.))
         };
@@ -391,16 +418,27 @@ impl Launcher {
             "Selected instance"
         };
         let pick_label = format!("Choose an instance or destination. Current: {pick_text}");
+        let metadata = if target.is_some() {
+            format!("{} · {kind}", profile.name)
+        } else {
+            kind
+        };
         let pinned = self.home_order.is_pinned(profile.id);
         let readiness = self.home_readiness(&profile, cx);
         let button = compact_action("home-pick", p, Partition::Neutral, false, cx)
             .w_full()
-            .h(px(38.))
-            .justify_between()
+            .h(px(42.))
+            .justify_start()
+            .gap_2()
             .px_2()
             .child(
+                Icon::Builtin(carbon_profiles::icons::displayed(&profile)).render(px(24.), p.ink),
+            )
+            .child(
                 div()
-                    .text_size(px(18.))
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(19.))
                     .font_semibold()
                     .truncate()
                     .child(pick_text),
@@ -419,12 +457,13 @@ impl Launcher {
                 cx,
                 |this, window, cx| this.open_home_switcher(window, cx),
             ))
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(p.muted)
-                    .child(format!("{} · {kind}", profile.name)),
-            )
+            .child(div().text_sm().text_color(p.muted).child(metadata))
+            .child(self.accessibility.text(
+                div().text_sm().text_color(p.muted).child(readiness),
+                "home-readiness",
+                readiness,
+                Role::Label,
+            ))
             .child(
                 row()
                     .flex_wrap()
@@ -452,12 +491,6 @@ impl Launcher {
                         |this, _, cx| this.toggle_selected_pin(cx),
                     )),
             )
-            .child(self.accessibility.text(
-                div().text_sm().text_color(p.muted).child(readiness),
-                "home-readiness",
-                readiness,
-                Role::Label,
-            ))
     }
 
     fn home_shelf(&self, p: Palette, compact: bool, height: f32, cx: &Context<Self>) -> AnyElement {
@@ -491,7 +524,7 @@ impl Launcher {
             .w_full()
             .justify_center()
             .gap_2()
-            .px(gpui::Pixels::from(if compact { 12.0 } else { 30.0 }))
+            .px(home_inset(compact))
             .py(px(10.))
             .bg(p.surface)
             .border_t_1()
@@ -833,6 +866,10 @@ impl Launcher {
             "Setup required"
         }
     }
+}
+
+fn home_inset(compact: bool) -> gpui::Pixels {
+    px(if compact { 12. } else { 30. })
 }
 
 fn home_shelf_height(window: &Window) -> f32 {
