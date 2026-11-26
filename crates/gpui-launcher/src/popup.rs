@@ -357,7 +357,7 @@ impl Popup {
         if let Some(targets) = self.targets.as_mut()
             && targets.cancel_edit()
         {
-            self.error = None;
+            self.refresh_targets(cx);
             self.focus.focus(window);
             cx.notify();
             return;

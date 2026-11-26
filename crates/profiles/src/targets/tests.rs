@@ -302,3 +302,26 @@ fn fresh_pack_import_has_an_independent_inventory_and_retry_keeps_preference() {
     assert!(copy.selected.is_none());
     assert!(copy.destinations.is_empty());
 }
+
+#[test]
+fn clearing_an_unavailable_selection_survives_restoring_the_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let id = create(root, "Restore test");
+    let world = root
+        .join("instances-v1")
+        .join(id.to_string())
+        .join("game/saves/Home");
+    fs::create_dir_all(&world).unwrap();
+    fs::write(world.join("level.dat"), "Player canary").unwrap();
+    let key = instance_targets(root, id).unwrap().worlds.remove(0).key;
+    let selected =
+        change_instance_targets(root, id, None, TargetAction::Select(Some(key))).unwrap();
+    let moved = temp.path().join("temporarily moved");
+    fs::rename(&world, &moved).unwrap();
+    assert!(instance_targets(root, id).unwrap().selected.is_none());
+    change_instance_targets(root, id, selected.revision, TargetAction::Select(None)).unwrap();
+    fs::rename(moved, &world).unwrap();
+    assert!(instance_targets(root, id).unwrap().selected.is_none());
+    assert_eq!(fs::read(world.join("level.dat")).unwrap(), b"Player canary");
+}

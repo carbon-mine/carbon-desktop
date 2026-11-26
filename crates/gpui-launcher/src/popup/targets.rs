@@ -183,7 +183,7 @@ impl Popup {
         };
         self.error = None;
         dialog.message = None;
-        let restore = dialog.cancel_edit() || matches!(&action, TargetAction::RemoveDestination(_));
+        let removing = matches!(&action, TargetAction::RemoveDestination(_));
         match change_instance_targets(
             &self.root_path,
             dialog.instance,
@@ -193,23 +193,28 @@ impl Popup {
             Ok(snapshot) => {
                 dialog.snapshot = snapshot;
                 dialog.message = Some(message);
+                if dialog.cancel_edit() || removing {
+                    self.focus.focus(window);
+                }
+            }
+            Err(error) if dialog.editing() => {
+                // Retain the inputs and the revision on which the draft was based. A later
+                // save must never silently use a newer revision for the same draft.
+                self.error = Some(format!(
+                    "{error} Your draft is still here. Cancel edit to review the saved targets."
+                ));
             }
             Err(error) => {
                 self.error = Some(error);
-                // A publication may have replaced the file before the durability check failed.
-                // Reopen the result and require a fresh choice instead of replaying the mutation.
                 if let Ok(snapshot) = instance_targets(&self.root_path, dialog.instance) {
                     dialog.snapshot = snapshot;
                 }
             }
         }
-        if restore {
-            self.focus.focus(window);
-        }
         cx.notify();
     }
 
-    fn refresh_targets(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn refresh_targets(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = &mut self.targets else {
             return;
         };
@@ -405,7 +410,7 @@ impl Popup {
                 )
             });
         col.child(div().text_sm().text_color(p.muted).child(
-            "Choose a target for this instance. Choosing one does not start Minecraft or contact a server."
+            "Save a world or server for this instance. Starting Minecraft with a chosen target is still in development."
         ))
         .when_some(dialog.message, |col, message| {
             col.child(self.accessibility.text(
@@ -494,7 +499,7 @@ impl Popup {
             move |this, window, cx| {
                 this.change_targets(
                     TargetAction::Select(key.clone()),
-                    "Launch preference saved.",
+                    "Target choice saved.",
                     window,
                     cx,
                 )
