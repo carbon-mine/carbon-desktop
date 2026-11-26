@@ -44,6 +44,8 @@ On Ubuntu x86-64 with glibc 2.39, system XCB and XKB libraries, and a Vulkan-cap
 
 Run `--seed-review --temporary-review` for one personal vanilla profile and the Forest fixture. Run `--comparison-review` for a fresh disposable library containing the same 100 profiles and Forest as the Svelte candidate. The seed uses stable IDs and instance settings. Docker, the main Carbon Desktop data root, and existing Minecraft data are unnecessary.
 
+For a reusable development preview, run `--seed-fixtures default`, `empty`, `large` or `faults` against the current executable. This seeds a dedicated offline root with varied instances, launch targets and Review tools states, refuses a normal per-user library and reopens with `--fixture-root`. See [development preview fixture libraries](dev-fixtures.md) for the row-to-UI map and truthfulness boundaries.
+
 The ordinary persistent root is `%LOCALAPPDATA%\CarbonDesktopGpui\library-v1` on Windows or `$XDG_DATA_HOME/carbon-desktop-gpui/library-v1` on Linux, falling back to `~/.local/share/carbon-desktop-gpui/library-v1`. Launch with no flags to reopen ordinary data. For a persistent test, point the launched process's data environment at a new directory and seed once.
 
 Pass `--ready-file <fresh absolute path>` to write `CARBON_LIBRARY_READY <milliseconds>` after the first scheduled frame with the populated library and work area. The process also prints that marker to stdout. This is an application-side timing signal. Use an actual on-screen image to qualify paint and a matched external interval when comparing frontends.

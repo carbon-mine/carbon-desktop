@@ -5,6 +5,7 @@ mod accessibility;
 mod account_panel;
 mod artwork;
 mod data;
+mod dev_fixtures;
 mod home_playback;
 use carbon_desktop_gpui::scenery;
 mod home;
@@ -15,6 +16,7 @@ mod shell;
 mod theme;
 mod view;
 
+use anyhow::Context as _;
 use carbon_profiles::Profile;
 use carbon_store::{Action, InstanceId, InstanceView, Snapshot};
 use carbon_vanilla::{GameFilePlan, GameFilesPrepared};
@@ -1552,6 +1554,21 @@ fn parent_file_dialog(dialog: rfd::AsyncFileDialog, window: &Window) -> rfd::Asy
     dialog.set_parent(window)
 }
 
+fn argument_value(
+    args: &[std::ffi::OsString],
+    flag: &str,
+) -> anyhow::Result<Option<std::ffi::OsString>> {
+    let Some(index) = args.iter().position(|argument| argument == flag) else {
+        return Ok(None);
+    };
+    let value = args
+        .get(index + 1)
+        .filter(|value| value.to_str().is_none_or(|text| !text.starts_with("--")));
+    value.cloned().map(Some).ok_or_else(|| {
+        anyhow::anyhow!("{flag} requires a value. See docs/dev-fixtures.md for the named sets.")
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     shell::configure_renderer();
@@ -1564,13 +1581,64 @@ fn main() -> anyhow::Result<()> {
         .windows(2)
         .find(|pair| pair[0] == "--ready-file")
         .map(|pair| PathBuf::from(&pair[1]));
-    let data = DataRoot::open(temporary, seed, comparison)?;
-    // The seeded comparison launch is the direct, automation-friendly Library
-    // entry. Ordinary launches open Home first and keep Library one tab away.
-    let start = if comparison {
-        Surface::Library
+    let fixture_root = argument_value(&args, "--fixture-root")?.map(PathBuf::from);
+    let fixture_set = argument_value(&args, "--seed-fixtures")?;
+    let reset_fixtures = args.iter().any(|a| a == "--reset-fixtures");
+    let seed_only = args.iter().any(|a| a == "--seed-only");
+    if reset_fixtures && fixture_set.is_none() {
+        anyhow::bail!("--reset-fixtures requires --seed-fixtures <default|empty|large|faults>.");
+    }
+    if seed_only && fixture_set.is_none() {
+        anyhow::bail!("--seed-only requires --seed-fixtures <default|empty|large|faults>.");
+    }
+    if (fixture_set.is_some() || fixture_root.is_some()) && (comparison || temporary || seed) {
+        anyhow::bail!(
+            "--fixture-root and --seed-fixtures are separate from --comparison-review, --temporary-review and --seed-review."
+        );
+    }
+    let (data, start) = if let Some(set) = fixture_set {
+        let set = dev_fixtures::Set::parse(
+            set.to_str()
+                .context("--seed-fixtures must be a UTF-8 set name")?,
+        )?;
+        let root = match fixture_root {
+            Some(root) => root,
+            None => dev_fixtures::default_root(set)?,
+        };
+        let marker = dev_fixtures::prepare(&root, set, reset_fixtures)?;
+        eprintln!(
+            "Seeded '{}' development fixtures ({} rows) at {}",
+            marker.set.as_str(),
+            marker.rows.len(),
+            root.display()
+        );
+        if seed_only {
+            return Ok(());
+        }
+        (
+            DataRoot::at(root),
+            if set.starts_in_library() {
+                Surface::Library
+            } else {
+                Surface::Home
+            },
+        )
+    } else if let Some(root) = fixture_root {
+        let root = dev_fixtures::guard(&root)?;
+        let start = match dev_fixtures::recorded_set(&root)? {
+            Some(set) if set.starts_in_library() => Surface::Library,
+            _ => Surface::Home,
+        };
+        (DataRoot::at(root), start)
     } else {
-        Surface::Home
+        // The seeded comparison launch is the direct, automation-friendly Library
+        // entry. Ordinary launches open Home first and keep Library one tab away.
+        let start = if comparison {
+            Surface::Library
+        } else {
+            Surface::Home
+        };
+        (DataRoot::open(temporary, seed, comparison)?, start)
     };
     let app = Application::new().with_assets(icons::Assets);
     app.run(move |cx: &mut App| {
