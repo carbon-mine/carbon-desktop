@@ -41,9 +41,13 @@ The default roots are `%LOCALAPPDATA%\CarbonDesktopGpui\dev-fixtures\<set>` on W
 siblings of the ordinary `library-v1` root, never that root. `--fixture-root` must be absolute.
 The command is offline: it creates profiles, target preferences, inert save-folder markers, Home
 ordering and local Review tools only. It refuses a normal per-user data root, any ancestor or
-descendant of one, and a non-empty directory without its marker. Repeating the same set is a no-op;
-a different set or a partial seed is refused unless `--reset-fixtures` is explicit. The large set
-reuses the established 100-profile comparison sample and its stable IDs.
+descendant of one (including a path spelled through a symlink or junction), a relative path, a path
+containing `..`, and a non-empty directory without its marker. `--fixture-root` only reopens a root
+with a completed marker; an unseeded or incomplete root is reported with the seed or reset command
+to run. Repeating the same set is a no-op. A different set or a partial seed is refused unless
+`--reset-fixtures` is explicit, and a reset refuses a path that itself or an existing parent is a
+link or reparse point. The large set reuses the established 100-profile comparison sample and its
+stable IDs.
 
 ## Set map
 
@@ -134,5 +138,8 @@ installed and awaiting-activation rows; the bound-server Multiplayer panel; the 
 recovery dialog; the `faults` Repair state; the empty first-use Home; and the 100-row Library
 before and after filtering to `099`. `--seed-only`, a repeat seed, a different-set refusal, reopen
 without reseeding and refusal of `library-v1`, its parent and a nested path were also exercised.
+The final pass additionally checked an unseeded `--fixture-root` refusal, an incomplete-seed
+refusal followed by `--reset-fixtures`, an unsupported marker version reset, a junction to a fixture
+root (reset refused) and a junction to the ordinary library parent (seed refused).
 Screenshots and UIA trees stay outside Git in the worker's scratch evidence directory. Every
 instance correctly remained **Setup required**; no ready or installed state was claimed.

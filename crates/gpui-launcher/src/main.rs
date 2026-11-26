@@ -1494,13 +1494,25 @@ impl Launcher {
                 let marker = format!("CARBON_LIBRARY_READY {}\n", began.elapsed().as_millis());
                 print!("{marker}");
                 let _ = std::io::stdout().flush();
-                if let Some(path) = destination
-                    && let Ok(mut file) = std::fs::OpenOptions::new()
+                if let Some(path) = destination {
+                    match std::fs::OpenOptions::new()
                         .write(true)
                         .create_new(true)
-                        .open(path)
-                {
-                    let _ = file.write_all(marker.as_bytes());
+                        .open(&path)
+                    {
+                        Ok(mut file) => {
+                            if let Err(error) = file.write_all(marker.as_bytes()) {
+                                eprintln!(
+                                    "Could not write the readiness file {}: {error}",
+                                    path.display()
+                                );
+                            }
+                        }
+                        Err(error) => eprintln!(
+                            "Could not create the readiness file {}: {error}",
+                            path.display()
+                        ),
+                    }
                 }
             });
         }
@@ -1605,7 +1617,7 @@ fn main() -> anyhow::Result<()> {
             Some(root) => root,
             None => dev_fixtures::default_root(set)?,
         };
-        let marker = dev_fixtures::prepare(&root, set, reset_fixtures)?;
+        let (root, marker) = dev_fixtures::prepare(&root, set, reset_fixtures)?;
         eprintln!(
             "Seeded '{}' development fixtures ({} rows) at {}",
             marker.set.as_str(),
@@ -1624,10 +1636,11 @@ fn main() -> anyhow::Result<()> {
             },
         )
     } else if let Some(root) = fixture_root {
-        let root = dev_fixtures::guard(&root)?;
-        let start = match dev_fixtures::recorded_set(&root)? {
-            Some(set) if set.starts_in_library() => Surface::Library,
-            _ => Surface::Home,
+        let root = dev_fixtures::guard(&root)?.path;
+        let start = if dev_fixtures::reopen_set(&root)?.starts_in_library() {
+            Surface::Library
+        } else {
+            Surface::Home
         };
         (DataRoot::at(root), start)
     } else {

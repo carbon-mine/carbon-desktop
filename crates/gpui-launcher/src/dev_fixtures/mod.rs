@@ -93,7 +93,7 @@ impl Marker {
     fn validate(&self) -> Result<()> {
         if self.version != MARKER_VERSION {
             bail!(
-                "The development fixture root uses an unsupported marker version. Use a new root or --reset-fixtures."
+                "The development fixture root uses an unsupported marker version. Use a new root."
             );
         }
         Ok(())
@@ -137,47 +137,122 @@ fn data_home() -> Result<PathBuf> {
 /// never replace, descend into or become an ancestor of one of these.
 fn ordinary_roots() -> Result<Vec<PathBuf>> {
     let home = data_home()?;
-    let parents = [
+    [
         home.join("library-v1"),
         home.parent()
             .context("The local application data directory has no parent")?
             .join("dev.carbonmine.desktop.review")
             .join("fixture-library-v1"),
-    ];
-    parents.into_iter().map(|path| absolute(&path)).collect()
+    ]
+    .into_iter()
+    .map(|path| resolve(&path))
+    .collect()
 }
 
 fn absolute(path: &Path) -> Result<PathBuf> {
-    let joined = if path.is_absolute() {
-        path.to_path_buf()
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        bail!(
+            "--fixture-root must not contain '..'; use a dedicated absolute directory without parent traversal."
+        );
+    }
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
     } else {
-        std::env::current_dir()
+        Ok(std::env::current_dir()
             .context("The current directory is unavailable")?
-            .join(path)
-    };
-    let mut normalized = PathBuf::new();
-    for component in joined.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    bail!("The fixture root escapes its filesystem root.");
-                }
+            .join(path))
+    }
+}
+
+/// Resolve symlinks and junctions in the longest existing prefix while leaving
+/// a not-yet-created dedicated suffix in the same parent namespace. The caller
+/// must reject `..` first so lexical and filesystem resolution cannot diverge.
+fn resolve(path: &Path) -> Result<PathBuf> {
+    let absolute = absolute(path)?;
+    let mut cursor = absolute.as_path();
+    let mut suffix = Vec::new();
+    loop {
+        match fs::symlink_metadata(cursor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                let name = cursor.file_name().with_context(|| {
+                    format!(
+                        "Could not resolve the fixture root {}; a filesystem root has no existing prefix.",
+                        absolute.display()
+                    )
+                })?;
+                suffix.push(name.to_os_string());
+                cursor = cursor.parent().with_context(|| {
+                    format!("Could not resolve the fixture root {}", absolute.display())
+                })?;
             }
-            other => normalized.push(other.as_os_str()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Could not inspect the fixture root {}", absolute.display())
+                });
+            }
         }
     }
-    Ok(normalized)
+    let mut resolved = fs::canonicalize(cursor)
+        .with_context(|| format!("Could not resolve the fixture root {}", absolute.display()))?;
+    for part in suffix.into_iter().rev() {
+        resolved.push(part);
+    }
+    Ok(resolved)
+}
+
+fn linked_component(path: &Path) -> Result<bool> {
+    let mut cursor = PathBuf::new();
+    for component in path.components() {
+        cursor.push(component.as_os_str());
+        let Ok(metadata) = fs::symlink_metadata(&cursor) else {
+            continue;
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Ok(true);
+            }
+        }
+        if metadata.is_symlink() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) struct Guarded {
+    pub(crate) path: PathBuf,
+    linked: bool,
+}
+
+impl Guarded {
+    /// A reset deletes a tree, so refuse a path that itself or an existing
+    /// ancestor is a link or reparse point even when every component resolves
+    /// outside the ordinary library.
+    pub(crate) fn allow_reset(&self) -> Result<()> {
+        if self.linked {
+            bail!(
+                "Refusing to reset {} because its path contains a symlink or reparse point. Choose a plain dedicated directory.",
+                self.path.display()
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Refuse a normal per-user library, one of its ancestors, a path inside it, a
-/// filesystem root and a relative path. The seeder repeats this check after
-/// canonicalization so a caller cannot bypass it.
-pub(crate) fn guard(root: &Path) -> Result<PathBuf> {
+/// filesystem root, a relative path and any unresolved `..` component. Existing
+/// symlinks and junctions are resolved before the comparison, so an alternate
+/// spelling cannot reach the ordinary library.
+pub(crate) fn guard(root: &Path) -> Result<Guarded> {
     if !root.is_absolute() {
         bail!("--fixture-root must be an absolute path so its owner is unambiguous.");
     }
-    let root = absolute(root)?;
+    let supplied = absolute(root)?;
+    let linked = linked_component(&supplied)?;
+    let root = resolve(&supplied)?;
     if root.parent().is_none() {
         bail!("--fixture-root must name a dedicated directory, not a filesystem root.");
     }
@@ -190,7 +265,7 @@ pub(crate) fn guard(root: &Path) -> Result<PathBuf> {
             );
         }
     }
-    Ok(root)
+    Ok(Guarded { path: root, linked })
 }
 
 fn read_marker(root: &Path) -> Result<Option<Marker>> {
@@ -222,25 +297,108 @@ fn read_marker(root: &Path) -> Result<Option<Marker>> {
     Ok(Some(marker))
 }
 
-/// The set recorded in a previously seeded root, if any. Reopening an existing
-/// fixture root uses the same initial surface without reseeding it.
-pub(crate) fn recorded_set(root: &Path) -> Result<Option<Set>> {
-    Ok(read_marker(root)?
-        .filter(|marker| marker.complete)
-        .map(|marker| marker.set))
+#[derive(Deserialize)]
+struct ResetHeader {
+    version: u64,
+    #[allow(dead_code)]
+    set: String,
+}
+
+/// Authorize a reset for an existing fixture marker even when a newer build
+/// wrote fields this binary does not know. The file name and location are
+/// specific, and the header still has to name a version and a set.
+fn read_reset_header(root: &Path) -> Result<Option<ResetHeader>> {
+    let path = root.join(MARKER_FILE);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("Could not inspect the fixture marker at {}", path.display())
+            });
+        }
+    };
+    if !metadata.is_file() || metadata.is_symlink() || metadata.len() > MAX_MARKER_BYTES {
+        bail!(
+            "The development fixture marker at {} is not a small regular file. Preserve the directory.",
+            path.display()
+        );
+    }
+    let bytes = fs::read(&path)
+        .with_context(|| format!("Could not read the fixture marker at {}", path.display()))?;
+    let header: ResetHeader = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "The development fixture marker at {} is unreadable. Preserve the directory.",
+            path.display()
+        )
+    })?;
+    if header.version == 0 || header.set.is_empty() {
+        bail!(
+            "The development fixture marker at {} is not a recognizable seed record. Preserve the directory.",
+            path.display()
+        );
+    }
+    Ok(Some(header))
+}
+
+/// Resolve a root that a previous command already seeded. A missing marker and
+/// an incomplete seed are different user errors and both require an explicit
+/// seed command; neither silently opens an unseeded library.
+pub(crate) fn reopen_set(root: &Path) -> Result<Set> {
+    let root = guard(root)?.path;
+    match read_marker(&root)? {
+        Some(marker) if marker.complete => Ok(marker.set),
+        Some(_) => bail!(
+            "{} contains an incomplete development fixture seed. Run --seed-fixtures <set> --fixture-root {} --reset-fixtures.",
+            root.display(),
+            root.display()
+        ),
+        None => bail!(
+            "No development fixture marker at {}. Run --seed-fixtures <default|empty|large|faults> --fixture-root {} first.",
+            root.display(),
+            root.display()
+        ),
+    }
+}
+
+/// Move the root aside before deleting it so a failed recursive delete cannot
+/// strand the marker inside a half-removed tree. A retry can seed the now-empty
+/// requested path; the quarantine stays clearly named for manual cleanup.
+fn remove_seeded_root(root: &Path) -> Result<()> {
+    let parent = root
+        .parent()
+        .context("The fixture root has no parent directory")?;
+    let name = root
+        .file_name()
+        .context("The fixture root has no directory name")?;
+    let quarantine = parent.join(format!(
+        ".{}-reset-{}",
+        name.to_string_lossy(),
+        Uuid::new_v4().simple()
+    ));
+    fs::rename(root, &quarantine)
+        .with_context(|| format!("Could not move the fixture root {}", root.display()))?;
+    if let Err(error) = fs::remove_dir_all(&quarantine) {
+        bail!(
+            "The fixture root was moved to {} but cleanup failed: {error}. The requested root is clear; delete that quarantine directory and retry.",
+            quarantine.display()
+        );
+    }
+    Ok(())
 }
 
 /// Seed a set if its root is absent, empty or already carries this set's
 /// marker. A different set, an unmarked non-empty directory and a failed
-/// partial seed are refused instead of being overwritten.
-pub(crate) fn prepare(root: &Path, set: Set, reset: bool) -> Result<Marker> {
-    let root = guard(root)?;
+/// partial seed are refused instead of being overwritten. The returned path is
+/// the resolved root used for every subsequent read and write.
+pub(crate) fn prepare(root: &Path, set: Set, reset: bool) -> Result<(PathBuf, Marker)> {
+    let guarded = guard(root)?;
+    let root = guarded.path.clone();
     if reset {
         if root.exists() {
-            match read_marker(&root)? {
-                Some(_) => fs::remove_dir_all(&root).with_context(|| {
-                    format!("Could not reset the fixture root {}", root.display())
-                })?,
+            guarded.allow_reset()?;
+            match read_reset_header(&root)? {
+                Some(_) => remove_seeded_root(&root)?,
                 None => bail!(
                     "Refusing to reset {}. It has no development fixture marker, so it may contain user data.",
                     root.display()
@@ -256,7 +414,7 @@ pub(crate) fn prepare(root: &Path, set: Set, reset: bool) -> Result<Marker> {
                 );
             }
             if marker.set == set {
-                return Ok(marker);
+                return Ok((root, marker));
             }
             bail!(
                 "{} already contains the '{}' fixture set. Use --reset-fixtures to replace it with '{}'.",
@@ -298,7 +456,7 @@ pub(crate) fn prepare(root: &Path, set: Set, reset: bool) -> Result<Marker> {
     };
     marker.complete = true;
     shell_write(&root, &marker)?;
-    Ok(marker)
+    Ok((root, marker))
 }
 
 fn shell_write(root: &Path, marker: &Marker) -> Result<()> {
@@ -388,7 +546,7 @@ fn seed_default(root: &Path) -> Result<Marker> {
 fn create_profile(root: &Path, row: &ProfileRow) -> Result<Uuid> {
     let id = match &row.pack {
         Some(pack) => {
-            let profile = import_instance(
+            let mut profile = import_instance(
                 root,
                 Uuid::new_v4(),
                 row.version,
@@ -400,6 +558,12 @@ fn create_profile(root: &Path, row: &ProfileRow) -> Result<Uuid> {
                 |_| Ok(()),
             )
             .map_err(anyhow::Error::msg)?;
+            // Import sets its own defaults. Apply the catalog row through the
+            // ordinary edit operation, which preserves the pack identity.
+            profile.memory_mib = row.memory_mib;
+            profile.window_width = row.window.0;
+            profile.window_height = row.window.1;
+            change(root, ProfileAction::Edit(profile.clone())).map_err(anyhow::Error::msg)?;
             profile.id
         }
         None => {
@@ -582,7 +746,7 @@ mod tests {
     #[test]
     fn default_rows_validate_through_the_ordinary_stores() {
         let (_temp, root) = temp_root();
-        let marker = prepare(&root, Set::Default, false).unwrap();
+        let (_, marker) = prepare(&root, Set::Default, false).unwrap();
         assert_eq!(marker.rows.len(), DEFAULT_PROFILES.len());
         assert_eq!(marker.store_instances, 3);
         let profiles = carbon_profiles::list(&root).unwrap();
@@ -613,6 +777,29 @@ mod tests {
                 .as_ref()
                 .is_some_and(|pack| pack.loader.is_none() && pack.pending_files == 0)
         }));
+        for row in DEFAULT_PROFILES {
+            let profile = profiles
+                .iter()
+                .find(|profile| {
+                    let pack_matches = match (&profile.imported_pack, &row.pack) {
+                        (None, None) => true,
+                        (Some(profile), Some(row)) => {
+                            profile.loader.as_deref() == row.loader
+                                && profile.pending_files == row.pending_files
+                        }
+                        _ => false,
+                    };
+                    profile.name == row.name && profile.version == row.version && pack_matches
+                })
+                .unwrap_or_else(|| panic!("fixture row {} was not persisted", row.key));
+            assert_eq!(profile.memory_mib, row.memory_mib, "{}", row.key);
+            assert_eq!(
+                (profile.window_width, profile.window_height),
+                row.window,
+                "{}",
+                row.key
+            );
+        }
         let mixed = profiles
             .iter()
             .find(|profile| profile.name == "Targets · mixed")
@@ -653,11 +840,11 @@ mod tests {
     #[test]
     fn reseeding_the_same_set_is_a_no_op_and_a_different_set_is_refused() {
         let (_temp, root) = temp_root();
-        let first = prepare(&root, Set::Default, false).unwrap();
+        let (_, first) = prepare(&root, Set::Default, false).unwrap();
         let profiles = carbon_profiles::list(&root).unwrap();
-        let second = prepare(&root, Set::Default, false).unwrap();
+        let (_, second) = prepare(&root, Set::Default, false).unwrap();
         assert_eq!(first.rows, second.rows);
-        assert_eq!(recorded_set(&root).unwrap(), Some(Set::Default));
+        assert_eq!(reopen_set(&root).unwrap(), Set::Default);
         assert_eq!(profiles, carbon_profiles::list(&root).unwrap());
         let error = prepare(&root, Set::Empty, false).unwrap_err().to_string();
         assert!(error.contains("--reset-fixtures"));
@@ -689,10 +876,19 @@ mod tests {
         )
         .unwrap();
         assert!(prepare(&root, Set::Default, false).is_err());
+        assert!(reopen_set(&root).is_err());
         prepare(&root, Set::Empty, true).unwrap();
         assert!(carbon_profiles::list(&root).unwrap().is_empty());
         let marker = read_marker(&root).unwrap().unwrap();
         assert_eq!(marker.set, Set::Empty);
+
+        fs::write(
+            root.join(MARKER_FILE),
+            br#"{"version":999,"set":"default","future":true}"#,
+        )
+        .unwrap();
+        prepare(&root, Set::Empty, true).unwrap();
+        assert!(carbon_profiles::list(&root).unwrap().is_empty());
     }
 
     #[test]
@@ -701,6 +897,7 @@ mod tests {
         assert!(
             prepare(&empty_root, Set::Empty, false)
                 .unwrap()
+                .1
                 .rows
                 .is_empty()
         );
@@ -744,6 +941,16 @@ mod tests {
             assert!(guard(&root.join("nested")).is_err());
         }
         assert!(guard(Path::new("relative-fixture")).is_err());
+        assert!(
+            guard(
+                &std::env::current_dir()
+                    .unwrap()
+                    .join("..")
+                    .join("fixture-with-parent")
+            )
+            .is_err()
+        );
+        assert!(reopen_set(&ordinary[0].join("missing")).is_err());
     }
 
     #[test]
