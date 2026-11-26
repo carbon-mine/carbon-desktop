@@ -10,6 +10,8 @@ The owner selected the client size of an observed, unmaximized official launcher
 
 On a disposable Windows desktop at 96 DPI, the revised Carbon window measured 1368 × 788 client, 1370 × 840 visible and 1384 × 847 outer. The native menu accounts for the 20-pixel difference between the two launchers’ outer heights. The fixed-window follow-up retained a saved position when a legacy 620 × 490 maximized record was seeded. The main HWND omitted thick-frame and Maximize styles; a caption double-click, F11 and native size/maximize commands left its bounds unchanged. Move and minimize/restore worked.
 
+On X11 the launcher finds its own toplevel by `_NET_WM_PID` and `WM_CLASS` and writes ICCCM `WM_NORMAL_HINTS` with equal minimum and maximum sizes. It does not use GPUI 0.2.2's raw window handle, which is unimplemented for X11. Wayland compositors are not covered and keep their own policy.
+
 ## Build and run
 
 On Windows, use the MSVC Rust toolchain, Windows SDK and a JDK that supplies `javac` when compiling the protected sandbox fixture. From this checkout:

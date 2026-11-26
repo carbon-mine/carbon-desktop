@@ -39,32 +39,42 @@ pub fn keep_main_windowed(
 
     let mut last_request = None;
     cx.observe_window_bounds(window, move |_, window, cx| {
-        let status = window.window_bounds();
-        let request = match status {
-            WindowBounds::Fullscreen(_) => Some(Correction::LeaveFullscreen),
-            WindowBounds::Maximized(_) => Some(Correction::Restore),
-            WindowBounds::Windowed(bounds) if bounds.size != target => {
-                Some(Correction::Resize(bounds.size))
+        // GPUI 0.2.2 reports X11 fullscreen only through `is_fullscreen()`;
+        // `window_bounds()` stays Windowed or Maximized while the flag is set.
+        let request = if window.is_fullscreen() {
+            Some(Correction::LeaveFullscreen)
+        } else {
+            match window.window_bounds() {
+                WindowBounds::Fullscreen(_) => Some(Correction::LeaveFullscreen),
+                WindowBounds::Maximized(_) => Some(Correction::Restore),
+                WindowBounds::Windowed(bounds) if bounds.size != target => {
+                    Some(Correction::Resize(bounds.size))
+                }
+                _ => None,
             }
-            _ => None,
         };
         if request == last_request {
             return;
         }
         last_request = request;
         if let Some(action) = request {
-            window.defer(cx, move |window, _| {
-                match (action, window.window_bounds()) {
-                    (Correction::LeaveFullscreen, WindowBounds::Fullscreen(_)) => {
-                        window.toggle_fullscreen()
+            window.defer(cx, move |window, _| match action {
+                Correction::LeaveFullscreen => {
+                    if window.is_fullscreen() {
+                        window.toggle_fullscreen();
                     }
-                    (Correction::Restore, WindowBounds::Maximized(_)) => window.zoom_window(),
-                    (Correction::Resize(_), WindowBounds::Windowed(bounds))
-                        if bounds.size != target =>
-                    {
-                        window.resize(target)
+                }
+                Correction::Restore => {
+                    if matches!(window.window_bounds(), WindowBounds::Maximized(_)) {
+                        window.zoom_window();
                     }
-                    _ => {}
+                }
+                Correction::Resize(_) => {
+                    if let WindowBounds::Windowed(bounds) = window.window_bounds() {
+                        if bounds.size != target {
+                            window.resize(target);
+                        }
+                    }
                 }
             });
         }
@@ -240,15 +250,17 @@ fn fixed_bounds(area: Bounds<gpui::Pixels>, saved: Option<&Placement>) -> Bounds
                 ((area.size.width - result.size.width) / 2.).min(px(NATIVE_FRAME_WIDTH / 2.));
             let margin_y =
                 ((area.size.height - result.size.height) / 2.).min(px(NATIVE_FRAME_HEIGHT / 2.));
+            // `max` then `min` matches `clamp` for ordered bounds and cannot
+            // panic if independent f32 rounding reverses them.
             result.origin = point(
-                origin.x.clamp(
-                    area.left() + margin_x,
-                    area.right() - result.size.width - margin_x,
-                ),
-                origin.y.clamp(
-                    area.top() + margin_y,
-                    area.bottom() - result.size.height - margin_y,
-                ),
+                origin
+                    .x
+                    .max(area.left() + margin_x)
+                    .min(area.right() - result.size.width - margin_x),
+                origin
+                    .y
+                    .max(area.top() + margin_y)
+                    .min(area.bottom() - result.size.height - margin_y),
             );
         }
     }
