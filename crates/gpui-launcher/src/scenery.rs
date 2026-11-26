@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 use gpui::{App, Context, ObjectFit, RenderImage, Window, div, img, prelude::*, rgb};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 struct Scene {
     id: &'static str,
@@ -10,6 +13,7 @@ struct Scene {
     poster: &'static [u8],
     motion: Option<&'static [u8]>,
     fps: u8,
+    forward: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -99,7 +103,10 @@ impl<'a> Frames<'a> {
         let end = word(self.table, (index + 1) * 4)?;
         (start < end).then(|| self.images.get(start..end)).flatten()
     }
-    fn index(&self, step: usize) -> usize {
+    fn index(&self, step: usize, forward: bool) -> usize {
+        if forward {
+            return step % self.count;
+        }
         let cycle = (self.count - 1) * 2;
         let phase = step % cycle;
         phase.min(cycle - phase)
@@ -107,6 +114,18 @@ impl<'a> Frames<'a> {
 }
 
 fn decode(jpeg: &[u8]) -> Option<Arc<RenderImage>> {
+    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::BGRA);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), options);
+    decoder.decode_headers().ok()?;
+    if decoder.input_colorspace() == Some(ColorSpace::YCbCr) {
+        let (width, height) = decoder.dimensions()?;
+        let bytes = decoder.decode().ok()?;
+        let image =
+            image::RgbaImage::from_raw(width.try_into().ok()?, height.try_into().ok()?, bytes)?;
+        return Some(Arc::new(RenderImage::new([image::Frame::new(image)])));
+    }
+    // Preserve the image crate's color handling for grayscale and CMYK posters.
     let mut rgba = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
         .ok()?
         .into_rgba8();
@@ -124,10 +143,24 @@ fn retire(image: Option<Arc<RenderImage>>, cx: &mut App) {
     }
 }
 
+// Keep presentation anchored to the original cadence and skip elapsed slots
+// after a stall. Decode at most one successor, regardless of the delay.
+fn frame_deadline(due: Instant, now: Instant, period: Duration) -> (Instant, usize) {
+    let late = now.saturating_duration_since(due);
+    let skipped = late.as_nanos() / period.as_nanos();
+    let aligned = if skipped == 0 {
+        due
+    } else {
+        now - Duration::from_nanos((late.as_nanos() % period.as_nanos()) as u64)
+    };
+    (aligned, (skipped as usize).wrapping_add(1))
+}
+
 pub struct SceneView {
     landscape: Landscape,
     image: Option<Arc<RenderImage>>,
     step: usize,
+    next_due: Option<Instant>,
     playing: bool,
     busy: bool,
     motion_failed: bool,
@@ -143,6 +176,7 @@ impl SceneView {
             landscape,
             image: None,
             step: 0,
+            next_due: None,
             playing: false,
             busy: false,
             motion_failed: false,
@@ -161,6 +195,7 @@ impl SceneView {
         self.motion_failed = false;
         self.poster_failed = false;
         self.step = 0;
+        self.next_due = None;
         retire(self.image.take(), cx);
         self.schedule(cx);
         cx.notify();
@@ -171,6 +206,7 @@ impl SceneView {
         }
         self.generation = self.generation.wrapping_add(1);
         self.playing = playing;
+        self.next_due = None;
         self.schedule(cx);
     }
     fn schedule(&mut self, cx: &mut Context<Self>) {
@@ -179,43 +215,43 @@ impl SceneView {
         }
         let scene = self.landscape.0;
         let poster = self.image.is_none();
-        let (bytes, delay) = if poster {
-            (scene.poster, Duration::ZERO)
+        let now = Instant::now();
+        let (bytes, due, step) = if poster {
+            (scene.poster, now, 0)
         } else {
             if !self.playing || self.motion_failed {
                 return;
             }
             let Some(pack) = scene.motion else { return };
-            let frame = Frames::open(pack).and_then(|f| f.at(f.index(self.step.wrapping_add(1))));
-            let Some(bytes) = frame else {
+            let period = Duration::from_secs_f64(1. / f64::from(scene.fps));
+            let (due, advance) = frame_deadline(self.next_due.unwrap_or(now + period), now, period);
+            let step = self.step.wrapping_add(advance);
+            let Some(bytes) = Frames::open(pack).and_then(|f| f.at(f.index(step, scene.forward)))
+            else {
                 self.fallback(cx);
                 return;
             };
-            (bytes, Duration::from_secs_f64(1. / f64::from(scene.fps)))
+            self.next_due = Some(due + period);
+            (bytes, due, step)
         };
         let generation = self.generation;
         self.busy = true;
         cx.spawn(async move |this, cx| {
-            if !delay.is_zero() {
-                cx.background_executor().timer(delay).await;
+            let decoded = cx
+                .background_executor()
+                .spawn(async move { decode(bytes) })
+                .await;
+            let remaining = due.saturating_duration_since(Instant::now());
+            if !remaining.is_zero() {
+                cx.background_executor().timer(remaining).await;
             }
-            let current = this
-                .read_with(cx, |view, _| view.generation == generation)
-                .unwrap_or(false);
-            let decoded = if current {
-                cx.background_executor()
-                    .spawn(async move { decode(bytes) })
-                    .await
-            } else {
-                None
-            };
             let _ = this.update(cx, |view, cx| {
                 view.busy = false;
                 if view.generation == generation {
                     if let Some(image) = decoded {
                         retire(view.image.replace(image), cx);
                         if !poster {
-                            view.step = view.step.wrapping_add(1)
+                            view.step = step
                         }
                         cx.notify();
                     } else if poster {
@@ -253,6 +289,32 @@ impl Render for SceneView {
 mod tests {
     use super::*;
     #[test]
+    fn prefetch_preserves_the_due_time_and_skips_missed_slots() {
+        let due = Instant::now() + Duration::from_secs(1);
+        let period = Duration::from_millis(40);
+        assert_eq!(frame_deadline(due, due - period, period), (due, 1));
+        assert_eq!(
+            frame_deadline(due, due + Duration::from_millis(95), period),
+            (due + 2 * period, 3)
+        );
+    }
+    #[test]
+    fn wind_advances_at_camera_turns_and_at_the_loop_seam() {
+        let f = Frames {
+            table: &[],
+            images: &[],
+            count: 4,
+        };
+        assert_eq!(
+            (0..7).map(|i| f.index(i, true)).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 0, 1, 2]
+        );
+        assert_eq!(
+            (0..7).map(|i| f.index(i, false)).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 2, 1, 0]
+        );
+    }
+    #[test]
     fn adding_a_scenic_only_manifest_entry_populates_the_same_selection_and_playback_catalog() {
         const EXTENDED: &[Landscape] = &include!(concat!(env!("OUT_DIR"), "/landscape_fixture.rs"));
         let extra = Landscape::lookup(EXTENDED, "extra-scenic").unwrap();
@@ -276,7 +338,7 @@ mod tests {
         );
         assert!(decode(extra.0.poster).is_some());
         let frames = Frames::open(extra.0.motion.unwrap()).unwrap();
-        assert!(decode(frames.at(frames.index(2)).unwrap()).is_some());
+        assert!(decode(frames.at(frames.index(2, false)).unwrap()).is_some());
         assert_eq!(extra.0.fps, 8);
     }
     #[test]
@@ -292,8 +354,8 @@ mod tests {
             if let Some(pack) = view.0.motion {
                 let frames = Frames::open(pack).unwrap();
                 assert_eq!(frames.at(0).unwrap(), view.0.poster);
-                assert_eq!(frames.index(frames.count), frames.count - 2);
-                assert_eq!(frames.index(2 * (frames.count - 1)), 0);
+                assert_eq!(frames.index(frames.count, false), frames.count - 2);
+                assert_eq!(frames.index(2 * (frames.count - 1), false), 0);
                 for i in 0..frames.count {
                     assert!(frames.at(i).unwrap().starts_with(&[0xff, 0xd8]));
                 }

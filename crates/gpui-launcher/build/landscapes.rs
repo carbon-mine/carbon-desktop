@@ -23,6 +23,7 @@ struct View {
     poster: String,
     frames: Option<String>,
     fps: Option<u8>,
+    playback: Option<String>,
     bake: Option<Bake>,
 }
 
@@ -118,7 +119,12 @@ pub fn generate(root: &Path, output: PathBuf, fixture: Option<&Path>) -> Result<
                 ));
             }
         };
-        entries.push(format!("Landscape(&Scene {{ id:{:?}, family:{:?}, name:{:?}, attribution:{:?}, poster:{poster}, motion:{motion}, fps:{rate} }})",view.id,view.family,view.name,view.attribution));
+        let forward = match view.playback.as_deref() {
+            None => false,
+            Some("loop") if view.frames.is_some() => true,
+            _ => return Err(format!("Invalid playback mode for {}", view.id)),
+        };
+        entries.push(format!("Landscape(&Scene {{ id:{:?}, family:{:?}, name:{:?}, attribution:{:?}, poster:{poster}, motion:{motion}, fps:{rate}, forward:{forward} }})",view.id,view.family,view.name,view.attribution));
     }
     fs::write(output, format!("[{}]", entries.join(",\n"))).map_err(|e| e.to_string())
 }
