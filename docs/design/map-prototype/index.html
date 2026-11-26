@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carbon Desktop · Map study</title><link rel="stylesheet" href="study.css"><script src="study.js" defer></script></head>
+<body>
+<div id="shell">
+  <aside><div class="brand"><img src="../../../design-system/inherited/brand/mark-dark.svg" alt="">Carbon<span>Desktop</span></div>
+    <nav aria-label="Workspace"><button id="libraryNav" aria-current="page">▦ <span>Library</span></button><button id="mapNav">▧ <span>Map</span></button></nav>
+    <div class="aside-bottom"><span class="dot"></span>Local library</div></aside>
+  <main>
+    <section id="library"><div class="heading"><div><h1>Instance library</h1><p>Local worlds and saved servers</p></div><span class="library-count">4 instances</span></div>
+      <div id="cards" class="cards"></div>
+    </section>
+    <section id="mapTab" hidden></section>
+  </main>
+</div>
+<section id="expanded" aria-label="Expanded world map" hidden></section>
+<div id="viewer" hidden>
+  <header class="viewer-head"><div><div class="eyebrow" id="instanceName"></div><h2 id="worldTitle"></h2></div>
+    <div class="header-actions"><button id="expandHere">⛶ <span>Expand map</span></button><button id="detach">↗ <span>Separate window</span></button><button id="dismiss" hidden>× <span>Close</span></button></div>
+  </header>
+  <div class="map-selectors"><label>Instance <select id="instanceSelect"></select></label><label>World <select id="worldSelect"></select></label><label>Dimension <select id="dimSelect"></select></label></div>
+  <div class="stage"><canvas id="largeMap" aria-label="Map terrain. Arrow keys pan, plus and minus zoom." tabindex="0"></canvas><div id="emptyMap" hidden><b>No saved terrain</b><span>This world and dimension have no readable tiles.</span></div>
+    <div class="map-controls"><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button><button id="center" aria-label="Recenter map">⌖</button></div>
+  </div>
+  <div class="map-footer"><span id="coverage"></span><span id="mapCoords"></span></div>
+</div>
+<footer id="review"><span>Map study <i>·</i> synthetic terrain</span><div id="variants" aria-label="Tile composition"><button data-v="scenic">Scenic</button><button data-v="split">Split</button><button data-v="compact">Compact</button></div></footer>
+<div id="notice" role="status"></div>
+</body></html>
