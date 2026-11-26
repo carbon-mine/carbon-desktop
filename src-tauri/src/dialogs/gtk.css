@@ -29,3 +29,4 @@
 .carbon-dialog.carbon-light button.suggested-action:focus {outline-color:#fff; outline-offset:-4px;}
 .carbon-dialog.carbon-dark button.suggested-action:focus {outline-color:#181818; outline-offset:-4px;}
 .carbon-dialog .validation {color:inherit; font-weight:600;}
+.carbon-dialog .account-heading {font-size:1.15em; font-weight:600;}
