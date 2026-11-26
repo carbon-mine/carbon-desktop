@@ -67,6 +67,8 @@ Carbon Desktop is a development preview. Vanilla setup and offline verification 
 
 The project targets x64 and ARM64 on all three operating systems. The current managed JDKs and private game installations support Windows x64 and Linux x64. macOS and ARM64 are build targets while their runtime setup and gameplay are in development. See the [CI matrix](docs/ci.md) and [runtime qualification](docs/runtime.md).
 
+On macOS, GPUI's File and View menus and native accessibility adapter are still pending. The Svelte/Tauri edition also needs native macOS instance editors, confirmations, and notices. Interactive macOS qualification remains open for both editions.
+
 The [GPUI application](crates/gpui-launcher) is the primary desktop frontend. The [Svelte interface](src) and [Tauri shell](src-tauri) remain available for comparison. Shared Rust code owns [profiles](crates/profiles), [Java runtime preparation](crates/runtime), [vanilla installation](crates/vanilla), and [pack import](crates/pack).
 
 ## License
