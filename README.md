@@ -38,7 +38,7 @@
 
 ### Native GPUI edition
 
-Use a stable Rust toolchain. On Windows, install the MSVC C++ build tools and Windows SDK. A JDK with `javac` is optional at build time and enables the protected Java sample. On Linux, use a graphical session with Vulkan support and install the C toolchain, `pkg-config`, and OpenSSL, fontconfig, FreeType, XCB, and XKB development libraries.
+Use a stable Rust toolchain. On Windows, install the MSVC C++ build tools and Windows SDK. On Windows x64, a JDK with `javac` enables the optional protected Java sample. On Linux, use a graphical session with Vulkan support and install the C toolchain, `pkg-config`, and OpenSSL, fontconfig, FreeType, XCB, and XKB development libraries.
 
 On macOS, install Xcode with its Metal compiler and CMake. The [CI guide](docs/ci.md) lists the native prerequisites and toolchain versions for each target.
 
