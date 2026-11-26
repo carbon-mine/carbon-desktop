@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use carbon_profiles::icons::{InstanceIcon, catalog};
-use gpui::{AnyElement, AssetSource, Pixels, Rgba, SharedString, img, prelude::*, svg};
+use gpui::{AnyElement, AssetSource, Pixels, Rgba, SharedString, Svg, img, prelude::*, svg};
 use std::borrow::Cow;
 
 #[derive(Clone, Copy)]
@@ -39,6 +39,35 @@ impl Icon {
     }
 }
 
+pub fn brand_mark(light_ink: bool, height: Pixels) -> Svg {
+    let (path, shade) = if light_ink {
+        ("brand/mark-light.svg", 0xf4f4f4)
+    } else {
+        ("brand/mark-dark.svg", 0x202427)
+    };
+    svg()
+        .path(path)
+        .flex_none()
+        .h(height)
+        .w(height * (81. / 87.75))
+        .text_color(gpui::rgb(shade))
+}
+
+const BRAND: [(&str, &[u8]); 3] = [
+    (
+        "brand/home-header-shade.png",
+        include_bytes!("../assets/home-header-shade.png"),
+    ),
+    (
+        "brand/mark-light.svg",
+        include_bytes!("../../../design-system/inherited/brand/mark-light.svg"),
+    ),
+    (
+        "brand/mark-dark.svg",
+        include_bytes!("../../../design-system/inherited/brand/mark-dark.svg"),
+    ),
+];
+
 pub struct Assets;
 
 const ICONS: [(Icon, &[u8]); 5] = [
@@ -63,6 +92,9 @@ impl AssetSource for Assets {
                 .find(|icon| icon.id == id)
                 .map(|icon| Cow::Borrowed(icon.png)));
         }
+        if let Some((_, data)) = BRAND.iter().find(|(name, _)| *name == path) {
+            return Ok(Some(Cow::Borrowed(*data)));
+        }
         Ok(ICONS.iter().find_map(|(icon, bytes)| {
             (icon.path().as_ref() == path).then_some(Cow::Borrowed(*bytes))
         }))
@@ -72,6 +104,7 @@ impl AssetSource for Assets {
         Ok(ICONS
             .iter()
             .map(|(icon, _)| icon.path())
+            .chain(BRAND.iter().map(|(name, _)| SharedString::from(*name)))
             .chain(catalog().iter().map(|icon| Icon::Builtin(icon).path()))
             .filter(|name| name.starts_with(path))
             .collect())

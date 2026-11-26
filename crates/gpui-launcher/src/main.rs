@@ -3,7 +3,11 @@
 
 mod accessibility;
 mod account_panel;
+mod artwork;
 mod data;
+mod home_playback;
+use carbon_desktop_gpui::scenery;
+mod home;
 mod icons;
 mod popup;
 mod progress;
@@ -17,7 +21,8 @@ use carbon_vanilla::{GameFilePlan, GameFilesPrepared};
 use data::{Activity, DataRoot, Inspection, size_label};
 use gpui::{
     AnyWindowHandle, App, Application, Context, Entity, FocusHandle, KeyBinding, MouseButton,
-    TitlebarOptions, Window, WindowDecorations, WindowOptions, actions, prelude::*, px, size,
+    Point, ScrollHandle, TitlebarOptions, Window, WindowDecorations, WindowOptions, actions,
+    prelude::*, px, size,
 };
 use gpui_component::{Root, input::InputState};
 use std::{
@@ -32,7 +37,14 @@ use uuid::Uuid;
 
 actions!(
     desktop,
-    [FindInstance, NewInstance, ImportPack, Back, FocusActivity]
+    [
+        FindInstance,
+        NewInstance,
+        ImportPack,
+        Back,
+        HistoryBack,
+        FocusActivity
+    ]
 );
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,6 +62,28 @@ impl Tab {
             Self::Storage => 2,
         }
     }
+}
+
+/// The two persistent top-level destinations. Home is the ordinary first
+/// screen; the direct review launch still starts in the Library so the
+/// established automation and readiness checks keep their original entry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Surface {
+    Home,
+    Library,
+}
+
+/// The state restored by Back. Only launcher-owned identity and view choices
+/// are retained, never a filesystem path or a worker snapshot.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct HistoryEntry {
+    origin: Option<gpui::ElementId>,
+    surface: Surface,
+    review: bool,
+    personal: Option<Uuid>,
+    fixture: InstanceId,
+    tab: Tab,
+    show_detail: bool,
 }
 #[derive(Clone, Copy)]
 enum Picker {
@@ -180,6 +214,7 @@ struct Launcher {
     search: Entity<InputState>,
     root_focus: FocusHandle,
     detail_focus: FocusHandle,
+    home_focus: FocusHandle,
     rail_resize_focus: FocusHandle,
     activity_focus: FocusHandle,
     task_focus: FocusHandle,
@@ -196,8 +231,16 @@ struct Launcher {
     fixture: InstanceId,
     fixture_play_checked: Option<InstanceId>,
     tab: Tab,
+    surface: Surface,
+    history: Vec<HistoryEntry>,
+    artwork: artwork::HomeArtwork,
+    home_order: home::HomeOrder,
     diagnostics_open: bool,
     show_detail: bool,
+    library_scroll: ScrollHandle,
+    detail_scroll: ScrollHandle,
+    library_scroll_offset: Point<gpui::Pixels>,
+    detail_scroll_offset: Point<gpui::Pixels>,
     preference: Preference,
     #[cfg(windows)]
     native_menu: Option<shell::NativeMenu>,
@@ -216,6 +259,7 @@ impl Launcher {
     fn new(
         root: DataRoot,
         readiness: (Instant, Option<PathBuf>),
+        start: Surface,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -256,7 +300,7 @@ impl Launcher {
                         })
                         .map(|item| item.id)
                     {
-                        this.choose_personal(id, cx);
+                        this.select_personal(id, cx);
                     }
                     this.focus_detail(window);
                     cx.notify();
@@ -265,6 +309,7 @@ impl Launcher {
         )
         .detach();
         cx.observe_window_activation(window, |this, win, cx| {
+            cx.notify();
             if win.is_window_active() {
                 this.account
                     .update(cx, account_panel::AccountPanel::refresh);
@@ -307,6 +352,8 @@ impl Launcher {
         );
         #[cfg(not(windows))]
         let initial_message = "No active tasks".to_owned();
+        let home_order = home::HomeOrder::load(&root.path);
+        let artwork = artwork::HomeArtwork::new(&root.path, cx);
         let mut launcher = Self {
             #[cfg(target_os = "linux")]
             reduced_motion: true,
@@ -320,6 +367,7 @@ impl Launcher {
             search,
             root_focus,
             detail_focus: cx.focus_handle(),
+            home_focus: cx.focus_handle().tab_stop(true),
             rail_resize_focus: cx.focus_handle().tab_stop(true),
             activity_focus: cx.focus_handle(),
             task_focus: cx.focus_handle(),
@@ -335,8 +383,16 @@ impl Launcher {
             fixture: InstanceId::Sample,
             fixture_play_checked: None,
             tab: Tab::Overview,
+            surface: start,
+            history: Vec::new(),
+            home_order,
+            artwork,
             diagnostics_open: false,
             show_detail: false,
+            library_scroll: ScrollHandle::new(),
+            detail_scroll: ScrollHandle::new(),
+            library_scroll_offset: Point::default(),
+            detail_scroll_offset: Point::default(),
             preference,
             #[cfg(windows)]
             native_menu: native_menu.ok(),
@@ -387,6 +443,7 @@ impl Launcher {
             .find(|item| item.id == self.fixture)
     }
     fn switch_view(&mut self, review: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_surface(Surface::Library, window, cx);
         self.tab = Tab::Overview;
         self.review = review;
         self.show_detail = false;
@@ -409,12 +466,13 @@ impl Launcher {
         if self.popup.is_some() || self.picker_open {
             return;
         }
+        let switched = self.show_surface(Surface::Library, window, cx);
         let narrow = is_narrow(window);
         self.search_back_to_detail =
             narrow && return_to_detail && (self.show_detail || self.search_back_to_detail);
         let reveal_search = self.show_detail && narrow;
         self.show_detail = false;
-        if reveal_search {
+        if reveal_search || switched {
             let input = self.search.clone();
             window.on_next_frame(move |window, cx| {
                 input.update(cx, |input, cx| input.focus(window, cx));
@@ -593,11 +651,12 @@ impl Launcher {
         if self.popup.is_some() || self.picker_open {
             return;
         }
+        self.show_surface(Surface::Library, window, cx);
         match self.activity_target() {
             Some(ActivityTarget::Personal(id))
                 if self.profiles.iter().any(|profile| profile.id == id) =>
             {
-                self.choose_personal(id, cx);
+                self.select_personal(id, cx);
                 self.tab = Tab::Overview;
             }
             Some(ActivityTarget::Fixture(id)) => self.choose_fixture(id),
@@ -839,6 +898,7 @@ impl Launcher {
                         });
                         self.targets.clear();
                         self.profiles = profiles;
+                        self.home_order.retain_profiles(&self.profiles);
                         self.profile_issue = None;
                         if self.selected_profile().is_none() {
                             self.personal = self.profiles.first().map(|profile| profile.id);
@@ -1283,6 +1343,7 @@ impl Launcher {
         if self.popup.is_some() || self.picker_open {
             return;
         }
+        self.show_surface(Surface::Library, window, cx);
         self.tab = Tab::Overview;
         let focus = if self
             .selected_profile()
@@ -1395,6 +1456,7 @@ impl Launcher {
         self.last_activity = Some(ActivityTarget::Personal(id));
         self.message = "Instance saved.".to_owned();
         self.choose_personal(id, cx);
+        self.remember_recent(id);
     }
 
     fn pack_imported(
@@ -1503,6 +1565,13 @@ fn main() -> anyhow::Result<()> {
         .find(|pair| pair[0] == "--ready-file")
         .map(|pair| PathBuf::from(&pair[1]));
     let data = DataRoot::open(temporary, seed, comparison)?;
+    // The seeded comparison launch is the direct, automation-friendly Library
+    // entry. Ordinary launches open Home first and keep Library one tab away.
+    let start = if comparison {
+        Surface::Library
+    } else {
+        Surface::Home
+    };
     let app = Application::new().with_assets(icons::Assets);
     app.run(move |cx: &mut App| {
         gpui_component::init(cx);
@@ -1512,6 +1581,7 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new("ctrl-o", ImportPack, Some("CarbonDesktop")),
             KeyBinding::new("ctrl-w", shell::CloseLauncher, Some("CarbonDesktop")),
             KeyBinding::new("escape", Back, Some("CarbonDesktop")),
+            KeyBinding::new("alt-left", HistoryBack, Some("CarbonDesktop")),
             KeyBinding::new("f6", FocusActivity, Some("CarbonDesktop")),
             KeyBinding::new("escape", popup::Close, Some("CarbonPopup")),
             KeyBinding::new("enter", popup::Save, Some("CarbonPopup")),
@@ -1544,7 +1614,7 @@ fn main() -> anyhow::Result<()> {
             },
             |window, cx| {
                 popup::set_app_icon(window);
-                let view = cx.new(|cx| Launcher::new(data, (began, ready_file), window, cx));
+                let view = cx.new(|cx| Launcher::new(data, (began, ready_file), start, window, cx));
                 let weak = view.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
                     weak.update(cx, |view, cx| view.allow_close(window, cx))
