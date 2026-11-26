@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
-// The source export and the bundled pack render at the requested canvas size.
-// 8,294,400 pixels (3840 x 2160) bounds the authoring browser's GPU work.
+// 8,294,400 pixels (3840 x 2160) bounds the authoring browser's GPU work, and
+// no edge may exceed the 4096-pixel texture size common to authoring hardware.
 export const MAX_AUTHORING_PIXELS = 8_294_400;
+export const MAX_AUTHORING_EDGE = 4_096;
 
 export function authoringSize(text) {
   const match = /^([1-9][0-9]{0,4})x([1-9][0-9]{0,4})$/.exec(text ?? '');
@@ -11,6 +12,9 @@ export function authoringSize(text) {
   if (width < 2 || height < 2) throw Error('Use at least 2x2 pixels');
   if (width * height > MAX_AUTHORING_PIXELS) {
     throw Error('Source size exceeds the ' + MAX_AUTHORING_PIXELS + '-pixel authoring budget');
+  }
+  if (width > MAX_AUTHORING_EDGE || height > MAX_AUTHORING_EDGE) {
+    throw Error('Source dimension exceeds the ' + MAX_AUTHORING_EDGE + '-pixel authoring edge');
   }
   return { width, height, pixels: width * height };
 }

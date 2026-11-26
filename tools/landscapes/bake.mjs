@@ -73,10 +73,11 @@ try {
     await page.waitForFunction(() => typeof window.paintScenicFrame === 'function');
     const canvas = await page.evaluate(() => {
       const element = document.querySelector('canvas');
-      return [element.width, element.height];
+      const context = element.getContext('webgl2') ?? element.getContext('webgl');
+      return [element.width, element.height, context?.drawingBufferWidth, context?.drawingBufferHeight];
     });
-    if(canvas[0]!==width || canvas[1]!==height) {
-      throw Error(view+' rendered a '+canvas.join('x')+' canvas instead of '+width+'x'+height);
+    if(canvas[0]!==width || canvas[1]!==height || canvas[2]!==width || canvas[3]!==height) {
+      throw Error(view+' rendered '+canvas.slice(0,2).join('x')+' with a '+canvas.slice(2).join('x')+' drawing buffer instead of '+width+'x'+height);
     }
     const framesPerView = entry.frames ? entry.fps * cycleSeconds : 1;
     if(avcDir){
