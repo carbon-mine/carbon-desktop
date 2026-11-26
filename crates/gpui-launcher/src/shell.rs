@@ -6,11 +6,80 @@ use gpui::{App, Bounds, Context, Window, WindowBounds, actions, point, px, size}
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::Path};
 
+#[cfg(not(windows))]
+mod fixed_platform;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]
 mod windows;
 mod work_area;
+
+pub fn configure_main_window(window: &mut Window) {
+    #[cfg(windows)]
+    windows::configure_fixed_window(window);
+    #[cfg(not(windows))]
+    fixed_platform::configure(window);
+}
+
+/// Compositors choose whether to honor native size hints. GPUI exposes the
+/// configured size and state, so request the fixed content size or leave an
+/// imposed maximize/fullscreen state once per distinct configuration.
+#[cfg(target_os = "linux")]
+pub fn keep_main_windowed(
+    window: &mut Window,
+    target: gpui::Size<gpui::Pixels>,
+    cx: &Context<Launcher>,
+) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Correction {
+        LeaveFullscreen,
+        Restore,
+        Resize(gpui::Size<gpui::Pixels>),
+    }
+
+    let mut last_request = None;
+    cx.observe_window_bounds(window, move |_, window, cx| {
+        // GPUI 0.2.2 reports X11 fullscreen only through `is_fullscreen()`;
+        // `window_bounds()` stays Windowed or Maximized while the flag is set.
+        let request = if window.is_fullscreen() {
+            Some(Correction::LeaveFullscreen)
+        } else {
+            match window.window_bounds() {
+                WindowBounds::Fullscreen(_) => Some(Correction::LeaveFullscreen),
+                WindowBounds::Maximized(_) => Some(Correction::Restore),
+                WindowBounds::Windowed(bounds) if bounds.size != target => {
+                    Some(Correction::Resize(bounds.size))
+                }
+                _ => None,
+            }
+        };
+        if request == last_request {
+            return;
+        }
+        last_request = request;
+        if let Some(action) = request {
+            window.defer(cx, move |window, _| match action {
+                Correction::LeaveFullscreen => {
+                    if window.is_fullscreen() {
+                        window.toggle_fullscreen();
+                    }
+                }
+                Correction::Restore => {
+                    if matches!(window.window_bounds(), WindowBounds::Maximized(_)) {
+                        window.zoom_window();
+                    }
+                }
+                Correction::Resize(_) => match window.window_bounds() {
+                    WindowBounds::Windowed(bounds) if bounds.size != target => {
+                        window.resize(target);
+                    }
+                    _ => {}
+                },
+            });
+        }
+    })
+    .detach();
+}
 #[cfg(windows)]
 pub use windows::{NativeMenu, apply_frame, configure_renderer};
 #[cfg(not(windows))]
@@ -48,6 +117,8 @@ struct Placement {
     width: f32,
     height: f32,
     maximized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_uuid: Option<String>,
 }
 
 pub(super) fn read<T: serde::de::DeserializeOwned>(root: &Path, file: &str) -> Option<T> {
@@ -169,34 +240,66 @@ fn usable_placement(pos: &Placement, cx: &App) -> bool {
     pos.usable(&screens) || work_area::primary(cx).is_some_and(|work| pos.usable(&[work]))
 }
 
-pub fn initial_bounds(root: &Path, cx: &App) -> WindowBounds {
-    if let Some(pos) =
-        read::<Placement>(root, "shell-placement.json").filter(|p| usable_placement(p, cx))
-    {
-        let b = Bounds::new(
-            point(px(pos.x), px(pos.y)),
-            size(px(pos.width), px(pos.height)),
-        );
-        if pos.maximized {
-            WindowBounds::Maximized(b)
-        } else {
-            WindowBounds::Windowed(b)
+fn fixed_bounds(area: Bounds<gpui::Pixels>, saved: Option<&Placement>) -> Bounds<gpui::Pixels> {
+    let mut result = default_window(area);
+    if let Some(saved) = saved {
+        let origin = point(px(saved.x), px(saved.y));
+        if saved.x.is_finite() && saved.y.is_finite() && area.contains(&origin) {
+            let margin_x =
+                ((area.size.width - result.size.width) / 2.).min(px(NATIVE_FRAME_WIDTH / 2.));
+            let margin_y =
+                ((area.size.height - result.size.height) / 2.).min(px(NATIVE_FRAME_HEIGHT / 2.));
+            // `max` then `min` matches `clamp` for ordered bounds and cannot
+            // panic if independent f32 rounding reverses them.
+            result.origin = point(
+                origin
+                    .x
+                    .max(area.left() + margin_x)
+                    .min(area.right() - result.size.width - margin_x),
+                origin
+                    .y
+                    .max(area.top() + margin_y)
+                    .min(area.bottom() - result.size.height - margin_y),
+            );
         }
-    } else {
-        // The native work area excludes reserved desktop space where reported.
-        // Compositor-managed sessions can supply only the display bounds.
-        WindowBounds::Windowed(
-            work_area::primary(cx)
-                .or_else(|| cx.primary_display().map(|display| display.bounds()))
-                .map(default_window)
-                .unwrap_or_else(|| {
-                    Bounds::new(
-                        point(px(0.), px(0.)),
-                        size(px(DEFAULT_CLIENT_WIDTH), px(DEFAULT_LAYOUT_HEIGHT)),
-                    )
-                }),
-        )
     }
+    result
+}
+
+pub fn initial_bounds(root: &Path, cx: &App) -> (WindowBounds, Option<gpui::DisplayId>) {
+    let saved = read::<Placement>(root, "shell-placement.json");
+    let primary = cx.primary_display();
+    let saved_origin = saved.as_ref().map(|pos| point(px(pos.x), px(pos.y)));
+    let displays = cx.displays();
+    let by_identity = saved.as_ref().and_then(|placement| {
+        let id = uuid::Uuid::parse_str(placement.display_uuid.as_deref()?).ok()?;
+        displays.iter().find(|d| d.uuid().ok() == Some(id)).cloned()
+    });
+    let chosen = by_identity
+        .or_else(|| {
+            primary
+                .as_ref()
+                .filter(|d| saved_origin.is_some_and(|pos| d.bounds().contains(&pos)))
+                .cloned()
+        })
+        .or_else(|| {
+            displays
+                .into_iter()
+                .find(|d| saved_origin.is_some_and(|pos| d.bounds().contains(&pos)))
+        })
+        .or(primary);
+    let area = chosen
+        .as_ref()
+        .map(|d| work_area::for_display(cx, d.id(), saved_origin).unwrap_or_else(|| d.bounds()));
+    let bounds = area
+        .map(|area| fixed_bounds(area, saved.as_ref()))
+        .unwrap_or_else(|| {
+            Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(DEFAULT_CLIENT_WIDTH), px(DEFAULT_LAYOUT_HEIGHT)),
+            )
+        });
+    (WindowBounds::Windowed(bounds), chosen.map(|d| d.id()))
 }
 
 impl Launcher {
@@ -230,13 +333,19 @@ impl Launcher {
             return false;
         }
         let status = window.window_bounds();
-        let b = status.get_bounds();
+        let WindowBounds::Windowed(b) = status else {
+            return true;
+        };
         let pos = Placement {
             x: b.origin.x.into(),
             y: b.origin.y.into(),
             width: b.size.width.into(),
             height: b.size.height.into(),
-            maximized: matches!(status, WindowBounds::Maximized(_)),
+            maximized: false,
+            display_uuid: window
+                .display(cx)
+                .and_then(|d| d.uuid().ok())
+                .map(|id| id.to_string()),
         };
         if usable_placement(&pos, cx)
             && let Err(error) = write(&self.root.path, "shell-placement.json", &pos)
@@ -305,6 +414,25 @@ mod tests {
     }
 
     #[test]
+    fn legacy_maximize_and_size_are_ignored_while_position_survives() {
+        let saved = Placement {
+            x: 110.,
+            y: 85.,
+            width: 600.,
+            height: 500.,
+            maximized: true,
+            display_uuid: None,
+        };
+        let b = fixed_bounds(area(0., 0., 2560., 1440.), Some(&saved));
+        assert_eq!(b.origin, point(px(110.), px(85.)));
+        assert_eq!(b.size, size(px(1368.), px(808.)));
+        assert_eq!(
+            fixed_bounds(area(-800., 0., 800., 600.), Some(&saved)),
+            default_window(area(-800., 0., 800., 600.))
+        );
+    }
+
+    #[test]
     fn windows_does_not_apply_a_left_or_top_taskbar_twice() {
         assert_eq!(
             windows_placement_area((0, 0), [50, 75, 1600, 900], 1.25),
@@ -326,6 +454,7 @@ mod tests {
             width: b.size.width.into(),
             height: b.size.height.into(),
             maximized: true,
+            display_uuid: None,
         };
         assert!(placement.usable(&[screen]));
         assert!(!placement.usable(&[area(0., 0., 1920., 1080.)]));
@@ -395,6 +524,7 @@ mod tests {
             width: 1040.,
             height: 760.,
             maximized: false,
+            display_uuid: None,
         };
         assert!(p.usable(&[screen]));
         p.y = -1000.;

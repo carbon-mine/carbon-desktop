@@ -26,6 +26,36 @@ pub fn configure_renderer() {
     unsafe { std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1") };
 }
 
+/// Suppress native size/maximize commands for the main HWND. The creation
+/// style already omits resize borders. Move and minimize keep normal handling.
+pub(super) fn configure_fixed_window(window: &Window) {
+    use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::{
+        Shell::{DefSubclassProc, SetWindowSubclass},
+        WindowsAndMessaging::{SC_MAXIMIZE, SC_SIZE, WM_SYSCOMMAND},
+    };
+    unsafe extern "system" fn filter(
+        hwnd: HWND,
+        message: u32,
+        command: WPARAM,
+        data: LPARAM,
+        _: usize,
+        _: usize,
+    ) -> LRESULT {
+        if message == WM_SYSCOMMAND && matches!((command.0 as u32) & 0xfff0, SC_MAXIMIZE | SC_SIZE)
+        {
+            return LRESULT(0);
+        }
+        unsafe { DefSubclassProc(hwnd, message, command, data) }
+    }
+    if let Some(raw) = handle(window) {
+        // Windows removes subclasses when it destroys their HWND.
+        unsafe {
+            let _ = SetWindowSubclass(HWND(raw as *mut _), Some(filter), 0x4344_4658, 0);
+        }
+    }
+}
+
 fn handle(window: &Window) -> Option<isize> {
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
         RawWindowHandle::Win32(raw) => Some(raw.hwnd.get()),
