@@ -156,10 +156,21 @@ fn frame_deadline(due: Instant, now: Instant, period: Duration) -> (Instant, usi
     (aligned, (skipped as usize).wrapping_add(1))
 }
 
+fn after_present(step: usize, due: Instant, now: Instant, period: Duration) -> (usize, Instant) {
+    // Give each visible image at least half a period after a late decode.
+    let (aligned, advance) = frame_deadline(due, now, period);
+    (
+        step.wrapping_add(advance - 1),
+        (aligned + period).max(now + period / 2),
+    )
+}
+
 pub struct SceneView {
     landscape: Landscape,
     image: Option<Arc<RenderImage>>,
     step: usize,
+    poster_pending: bool,
+    interrupt: Option<async_channel::Sender<()>>,
     next_due: Option<Instant>,
     playing: bool,
     busy: bool,
@@ -176,6 +187,8 @@ impl SceneView {
             landscape,
             image: None,
             step: 0,
+            poster_pending: true,
+            interrupt: None,
             next_due: None,
             playing: false,
             busy: false,
@@ -190,13 +203,14 @@ impl SceneView {
         if self.landscape == landscape {
             return;
         }
+        self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
         self.landscape = landscape;
         self.motion_failed = false;
         self.poster_failed = false;
         self.step = 0;
         self.next_due = None;
-        retire(self.image.take(), cx);
+        self.poster_pending = true;
         self.schedule(cx);
         cx.notify();
     }
@@ -204,6 +218,7 @@ impl SceneView {
         if self.playing == playing {
             return;
         }
+        self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
         self.playing = playing;
         self.next_due = None;
@@ -214,7 +229,7 @@ impl SceneView {
             return;
         }
         let scene = self.landscape.0;
-        let poster = self.image.is_none();
+        let poster = self.poster_pending;
         let now = Instant::now();
         let (bytes, due, step) = if poster {
             (scene.poster, now, 0)
@@ -231,10 +246,11 @@ impl SceneView {
                 self.fallback(cx);
                 return;
             };
-            self.next_due = Some(due + period);
             (bytes, due, step)
         };
         let generation = self.generation;
+        let (interrupt, interrupted) = async_channel::bounded::<()>(1);
+        self.interrupt = Some(interrupt);
         self.busy = true;
         cx.spawn(async move |this, cx| {
             let decoded = cx
@@ -243,19 +259,30 @@ impl SceneView {
                 .await;
             let remaining = due.saturating_duration_since(Instant::now());
             if !remaining.is_zero() {
-                cx.background_executor().timer(remaining).await;
+                futures::future::select(
+                    Box::pin(cx.background_executor().timer(remaining)),
+                    Box::pin(interrupted.recv()),
+                )
+                .await;
             }
             let _ = this.update(cx, |view, cx| {
                 view.busy = false;
+                view.interrupt.take();
                 if view.generation == generation {
                     if let Some(image) = decoded {
                         retire(view.image.replace(image), cx);
+                        view.poster_pending = false;
                         if !poster {
-                            view.step = step
+                            let period = Duration::from_secs_f64(1. / f64::from(scene.fps));
+                            let (phase, next) = after_present(step, due, Instant::now(), period);
+                            view.step = phase;
+                            view.next_due = Some(next);
                         }
                         cx.notify();
                     } else if poster {
                         view.poster_failed = true;
+                        retire(view.image.take(), cx);
+                        cx.notify();
                     } else {
                         view.fallback(cx);
                     }
@@ -267,7 +294,7 @@ impl SceneView {
     }
     fn fallback(&mut self, cx: &mut Context<Self>) {
         self.motion_failed = true;
-        retire(self.image.take(), cx);
+        self.poster_pending = true;
         self.schedule(cx);
         cx.notify();
     }
@@ -288,6 +315,44 @@ impl Render for SceneView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn late_decode_skips_stale_frames_and_spaces_the_next_presentation() {
+        let due = Instant::now();
+        let period = Duration::from_millis(40);
+        let late = due + Duration::from_millis(115);
+        let (step, next) = after_present(1, due, late, period);
+        assert_eq!(step, 3);
+        assert_eq!(next, late + period / 2);
+        assert_eq!(after_present(1, due, due, period), (1, due + period));
+    }
+
+    #[test]
+    #[ignore = "timing report for the native CI matrix; run with --ignored --nocapture"]
+    fn report_bundled_decode_timing() {
+        let mut samples = Vec::new();
+        for view in Landscape::ALL {
+            let Some(pack) = view.0.motion.and_then(Frames::open) else {
+                continue;
+            };
+            for i in (0..pack.count).step_by((pack.count / 8).max(1)) {
+                let bytes = pack.at(i).unwrap();
+                let start = Instant::now();
+                let image = decode(bytes).unwrap();
+                samples.push(start.elapsed().as_micros());
+                std::hint::black_box(image);
+            }
+        }
+        assert!(!samples.is_empty());
+        samples.sort_unstable();
+        println!(
+            "Native JPEG decode, {} {}: {} samples, p50 {} us, p95 {} us",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            samples.len(),
+            samples[samples.len() / 2],
+            samples[95 * samples.len() / 100]
+        );
+    }
     #[test]
     fn optimized_decode_preserves_poster_colors_and_alpha() {
         for scene in Landscape::ALL {
