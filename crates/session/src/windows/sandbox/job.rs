@@ -118,7 +118,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let job = create(2).unwrap();
         let mut parent = fixture(root.path(), "parent").spawn().unwrap();
-        unsafe { win(AssignProcessToJobObject(job.0, parent.as_raw_handle())).unwrap() };
+        if let Err(error) = unsafe { win(AssignProcessToJobObject(job.0, parent.as_raw_handle())) }
+        {
+            // The fixture is still waiting for admission outside the job's cleanup boundary.
+            parent.kill().unwrap();
+            parent.wait().unwrap();
+            panic!("Could not admit the fixture parent to the job: {error}");
+        }
         fs::write(root.path().join("admitted"), []).unwrap();
         assert_eq!(
             unsafe { WaitForSingleObject(parent.as_raw_handle(), 15_000) },

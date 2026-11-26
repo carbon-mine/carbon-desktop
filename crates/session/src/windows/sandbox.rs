@@ -369,8 +369,14 @@ pub(super) fn launch(
         });
         if let Err(error) = verified {
             // Terminate the suspended process explicitly if any pre-resume check fails.
-            win(TerminateProcess(process.0, 1))?;
+            let terminated = win(TerminateProcess(process.0, 1));
             job::stop_and_drain(&job)?;
+            if let Err(termination_error) = terminated {
+                // TerminateProcess may fail with access denied for an already-exited process.
+                if WaitForSingleObject(process.0, 0) != WAIT_OBJECT_0 {
+                    return Err(termination_error);
+                }
+            }
             return Err(error);
         }
         if ResumeThread(thread.0) == u32::MAX {
