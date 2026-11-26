@@ -548,6 +548,7 @@ impl Popup {
             cx,
             move |this, window, cx| this.choose_instance(instance, window, cx),
         )
+        .within_scroller(&dialog.scroll)
     }
 
     #[expect(
@@ -616,6 +617,7 @@ impl Popup {
             cx,
             move |this, window, cx| this.choose_target(instance, key.clone(), window, cx),
         )
+        .within_scroller(&dialog.scroll)
     }
 
     #[expect(

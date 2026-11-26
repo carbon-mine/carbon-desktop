@@ -95,6 +95,7 @@ struct Frame {
 }
 
 struct State {
+    previous_focus: std::cell::Cell<Option<NodeId>>,
     focus_after_paint: RefCell<Option<ElementId>>,
     title: String,
     pinned_snapshot: Snapshot,
@@ -125,6 +126,7 @@ impl Accessibility {
         #[cfg(not(any(windows, target_os = "linux")))]
         let _ = (window, cx);
         let state = Rc::new(State {
+            previous_focus: Default::default(),
             focus_after_paint: RefCell::default(),
             title,
             pinned_snapshot: snapshot,
@@ -384,6 +386,7 @@ impl Accessibility {
             node,
             binding,
             focus_outline: None,
+            scroll_on_focus: None,
         }
     }
 }
@@ -404,9 +407,16 @@ pub struct Semantic {
     node: Node,
     binding: Binding,
     focus_outline: Option<gpui::Hsla>,
+    scroll_on_focus: Option<gpui::ScrollHandle>,
 }
 
 impl Semantic {
+    /// Reveal a newly focused row; subsequent wheel scrolling remains under user control.
+    pub fn within_scroller(mut self, scroll: &gpui::ScrollHandle) -> Self {
+        self.scroll_on_focus = Some(scroll.clone());
+        self
+    }
+
     pub fn with_focus_outline(mut self, color: gpui::Hsla) -> Self {
         self.focus_outline = Some(color);
         self
@@ -513,6 +523,27 @@ impl Element for Semantic {
                 }
                 if focus.is_focused(window) {
                     frame.focus = Some(id);
+                    if self.state.previous_focus.get() != Some(id)
+                        && let Some(scroll) = &self.scroll_on_focus
+                    {
+                        let viewport = scroll.bounds();
+                        let dy = if bounds.top() < viewport.top() {
+                            viewport.top() - bounds.top()
+                        } else if bounds.bottom() > viewport.bottom() {
+                            viewport.bottom() - bounds.bottom()
+                        } else {
+                            px(0.)
+                        };
+                        if dy != px(0.) {
+                            let scroll = scroll.clone();
+                            window.on_next_frame(move |window, _| {
+                                let mut offset = scroll.offset();
+                                offset.y += dy;
+                                scroll.set_offset(offset);
+                                window.refresh();
+                            });
+                        }
+                    }
                 }
                 let callback = match &self.binding {
                     Binding::Button(_, callback)
@@ -603,6 +634,7 @@ impl State {
         _cx: &mut App,
     ) {
         let mut frame = self.frame.take();
+        self.previous_focus.set(frame.focus);
         self.focus_after_paint.take();
         for (id, node) in &mut frame.nodes {
             if let Some(children) = frame.children.remove(id) {
