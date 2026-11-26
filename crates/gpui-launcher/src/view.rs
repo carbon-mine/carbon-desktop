@@ -351,7 +351,6 @@ impl Launcher {
             .w(px(6.))
             .cursor_col_resize()
             .track_focus(&resize)
-            .tab_stop(true)
             .hover(|style| style.bg(p.stroke))
             .focus(|style| style.bg(p.muted))
             .on_mouse_down(
@@ -446,7 +445,13 @@ impl Launcher {
         .into_any_element()
     }
 
-    fn workspace(&self, p: Palette, narrow: bool, cx: &Context<Self>) -> AnyElement {
+    fn workspace(
+        &self,
+        p: Palette,
+        narrow: bool,
+        stack_targets: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let mut pane = col()
             .id("workspace")
             .flex_1()
@@ -515,7 +520,7 @@ impl Launcher {
                 pane.child(detail).into_any_element()
             } else if let Some(profile) = self.selected_profile() {
                 let detail = self.accessibility.group(
-                    self.personal_detail(profile, p, narrow, cx),
+                    self.personal_detail(profile, p, narrow, stack_targets, cx),
                     format!("profile-{}", profile.id),
                     &profile.name,
                     Role::Group,
@@ -567,6 +572,7 @@ impl Launcher {
         profile: &Profile,
         p: Palette,
         narrow: bool,
+        stack_targets: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
         let setup = self.setup.get(&profile.id);
@@ -764,7 +770,7 @@ impl Launcher {
                 .focus(|style| style.border_color(p.accent))
                 .px_4()
                 .py_4()
-                .when(narrow, |layout| layout.flex_col())
+                .when(stack_targets, |layout| layout.flex_col())
                 .child(
                     col()
                         .min_w_0()
@@ -943,12 +949,12 @@ impl Launcher {
         };
         let body: AnyElement = match self.tab {
             Tab::Overview => {
-                let side = self.target_stack(profile, p, narrow, cx);
+                let side = self.target_stack(profile, p, stack_targets, cx);
                 div()
                     .flex()
                     .items_start()
                     .min_w_0()
-                    .when(narrow, |layout| layout.flex_col())
+                    .when(stack_targets, |layout| layout.flex_col())
                     .child(main.flex_1().min_w_0())
                     .child(side)
                     .into_any_element()
@@ -1235,6 +1241,44 @@ impl Launcher {
 
     /// Read-only overview panels beside the instance detail. The snapshot is
     /// cached in `targets`; rendering never walks the filesystem.
+    fn side_panel(&self, p: Palette, title: &'static str, count: Option<usize>) -> gpui::Div {
+        col()
+            .w_full()
+            .min_w_0()
+            .bg(p.surface)
+            .border_1()
+            .border_color(p.stroke)
+            .child(
+                self.accessibility.text(
+                    row()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .justify_between()
+                        .px_3()
+                        .py_2()
+                        .bg(p.layer)
+                        .border_b_1()
+                        .border_color(p.stroke)
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .font_semibold()
+                                .child(title),
+                        )
+                        .when_some(count, |header, count| {
+                            header
+                                .child(div().text_xs().text_color(p.muted).child(count.to_string()))
+                        }),
+                    format!("heading-{title}"),
+                    count.map_or_else(|| title.to_owned(), |n| format!("{title}, {n}")),
+                    Role::Heading,
+                ),
+            )
+    }
+
     fn target_stack(
         &self,
         profile: &Profile,
@@ -1258,7 +1302,7 @@ impl Launcher {
                 // overview inexpensive during resizes even for a full saves directory.
                 const PREVIEW_ROWS: usize = 3;
                 let panel = |title, total, empty, rows: Vec<(String, String, String)>| {
-                    let mut panel = side_panel(p, title, Some(total));
+                    let mut panel = self.side_panel(p, title, Some(total));
                     if total == 0 {
                         panel = panel.child(
                             self.accessibility.text(
@@ -1289,12 +1333,12 @@ impl Launcher {
                                     .py_2()
                                     .border_t_1()
                                     .border_color(p.stroke)
-                                    .child(div().w_full().truncate().text_sm().child(name))
+                                    .child(div().w_full().overflow_hidden().text_sm().child(name))
                                     .when(!secondary.is_empty(), |row| {
                                         row.child(
                                             div()
                                                 .w_full()
-                                                .truncate()
+                                                .overflow_hidden()
                                                 .text_xs()
                                                 .text_color(p.muted)
                                                 .child(secondary),
@@ -1322,7 +1366,8 @@ impl Launcher {
                             ),
                         );
                     }
-                    panel
+                    self.accessibility
+                        .group(panel, format!("group-{title}"), title, Role::Group)
                 };
                 let worlds = panel(
                     "Local worlds",
@@ -1368,7 +1413,8 @@ impl Launcher {
                 );
                 col().gap_3().child(worlds).child(destinations)
             }
-            Some(TargetsState::Error(error)) => side_panel(p, "Local saves and destinations", None)
+            Some(TargetsState::Error(error)) => self
+                .side_panel(p, "Local saves and destinations", None)
                 .child(
                     self.accessibility.text(
                         div()
@@ -1391,8 +1437,9 @@ impl Launcher {
                     cx,
                     |this, _, cx| this.refresh_targets(cx),
                 ))),
-            Some(TargetsState::Loading(_)) | None => {
-                side_panel(p, "Local saves and destinations", None).child(
+            Some(TargetsState::Loading(_)) | None => self
+                .side_panel(p, "Local saves and destinations", None)
+                .child(
                     self.accessibility.text(
                         div()
                             .px_3()
@@ -1404,8 +1451,7 @@ impl Launcher {
                         "Reading local saves and saved destinations",
                         Role::Status,
                     ),
-                )
-            }
+                ),
         };
         stack.child(panel).into_any_element()
     }
@@ -1996,7 +2042,13 @@ impl Render for Launcher {
                         body.child(self.sidebar(p, narrow, cx))
                     })
                     .when(!narrow || self.show_detail, |body| {
-                        body.child(self.workspace(p, narrow, cx))
+                        body.child(self.workspace(
+                            p,
+                            narrow,
+                            narrow
+                                || f32::from(window.viewport_size().width) - self.rail_width < 620.,
+                            cx,
+                        ))
                     }),
             )
             .child(
@@ -2099,38 +2151,6 @@ fn detail_row(label: &'static str, status: String, p: Palette) -> gpui::Div {
         .text_sm()
         .child(div().w(px(132.)).flex_none().font_semibold().child(label))
         .child(div().min_w_0().flex_1().text_color(p.muted).child(status))
-}
-
-fn side_panel(p: Palette, title: &'static str, count: Option<usize>) -> gpui::Div {
-    col()
-        .w_full()
-        .min_w_0()
-        .bg(p.surface)
-        .border_1()
-        .border_color(p.stroke)
-        .child(
-            row()
-                .w_full()
-                .min_w_0()
-                .gap_3()
-                .justify_between()
-                .px_3()
-                .py_2()
-                .bg(p.layer)
-                .border_b_1()
-                .border_color(p.stroke)
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_sm()
-                        .font_semibold()
-                        .child(title),
-                )
-                .when_some(count, |header, count| {
-                    header.child(div().text_xs().text_color(p.muted).child(count.to_string()))
-                }),
-        )
 }
 
 fn fixture_status(item: &InstanceView) -> &'static str {

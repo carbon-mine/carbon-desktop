@@ -125,6 +125,23 @@ enum TargetsState {
     Error(String),
 }
 
+impl TargetsState {
+    fn complete(
+        &mut self,
+        request: Uuid,
+        result: Result<carbon_profiles::InstanceTargets, String>,
+    ) -> bool {
+        if !matches!(self, Self::Loading(active) if *active == request) {
+            return false;
+        }
+        *self = match result {
+            Ok(snapshot) => Self::Ready(snapshot),
+            Err(error) => Self::Error(error),
+        };
+        true
+    }
+}
+
 struct Task {
     label: &'static str,
     profile: Option<Uuid>,
@@ -295,7 +312,7 @@ impl Launcher {
             search,
             root_focus,
             detail_focus: cx.focus_handle(),
-            rail_resize_focus: cx.focus_handle(),
+            rail_resize_focus: cx.focus_handle().tab_stop(true),
             activity_focus: cx.focus_handle(),
             task_focus: cx.focus_handle(),
             server_focus: cx.focus_handle(),
@@ -440,17 +457,13 @@ impl Launcher {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |this, cx| {
-                if !matches!(this.targets.get(&id), Some(TargetsState::Loading(active)) if *active == request) {
-                    return;
+                if this
+                    .targets
+                    .get_mut(&id)
+                    .is_some_and(|entry| entry.complete(request, result))
+                {
+                    cx.notify();
                 }
-                this.targets.insert(
-                    id,
-                    match result {
-                        Ok(snapshot) => TargetsState::Ready(snapshot),
-                        Err(error) => TargetsState::Error(error),
-                    },
-                );
-                cx.notify();
             })
             .ok();
         })
@@ -1556,6 +1569,17 @@ mod tests {
             width = rail_width_for_key(width, "right", true).unwrap();
         }
         assert_eq!(width, RAIL_MAX_WIDTH);
+    }
+
+    #[test]
+    fn late_inventory_completion_preserves_a_newer_result() {
+        let obsolete = Uuid::new_v4();
+        let current = Uuid::new_v4();
+        let mut entry = TargetsState::Loading(current);
+        assert!(!entry.complete(obsolete, Err("old read".into())));
+        assert!(entry.complete(current, Err("current read".into())));
+        assert!(!entry.complete(obsolete, Err("old read".into())));
+        assert!(matches!(entry, TargetsState::Error(message) if message == "current read"));
     }
 
     #[test]
