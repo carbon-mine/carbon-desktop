@@ -83,7 +83,7 @@ impl Reader {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        let mut child = command
+        let child = command
             .args([
                 "-nostdin",
                 "-v",
@@ -123,6 +123,10 @@ impl Reader {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
+        Self::from_child(child, step, cancellation)
+    }
+
+    fn from_child(mut child: Child, step: usize, cancellation: Cancellation) -> io::Result<Self> {
         let pipe = child.stdout.take().expect("piped video output");
         let mut state = cancellation.0.lock().unwrap();
         if state.cancelled {
@@ -172,5 +176,63 @@ impl Reader {
 impl Drop for Reader {
     fn drop(&mut self) {
         self.cancellation.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{io::Write, sync::mpsc, time::Duration};
+
+    #[test]
+    #[ignore = "child process used by cancellation_unblocks_a_partial_frame"]
+    fn hold_partial_frame_for_decoder_cancellation() {
+        if std::env::var_os("CARBON_TEST_PARTIAL_FRAME_CHILD").is_none() {
+            return;
+        }
+        // The sentinel confirms this helper ran, followed by less than one frame.
+        let mut out = std::io::stdout().lock();
+        out.write_all(&[0, 1, 2, 3]).unwrap();
+        out.flush().unwrap();
+        std::thread::sleep(Duration::from_secs(15));
+    }
+
+    #[test]
+    fn cancellation_unblocks_a_partial_frame() {
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "hold_partial_frame_for_decoder_cancellation",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("CARBON_TEST_PARTIAL_FRAME_CHILD", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let cancellation = Cancellation::default();
+        let mut reader = Reader::from_child(child, 0, cancellation.clone()).unwrap();
+        let (ready, started) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut byte = [0];
+            loop {
+                reader.pipe.read_exact(&mut byte).unwrap();
+                if byte == [0] {
+                    break;
+                }
+            }
+            ready.send(()).unwrap();
+            let mut frame = [0; 64];
+            done.send(reader.pipe.read_exact(&mut frame)).unwrap();
+        });
+        let did_start = started.recv_timeout(Duration::from_secs(10));
+        cancellation.cancel();
+        did_start.expect("the decoder helper must emit its sentinel");
+        let result = finished
+            .recv_timeout(Duration::from_secs(5))
+            .expect("cancellation must interrupt a partial frame before the helper exits");
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
     }
 }
