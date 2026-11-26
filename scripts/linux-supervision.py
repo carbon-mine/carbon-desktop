@@ -22,14 +22,30 @@ def emit(event):
     os.write(1, (event + "\n").encode("ascii"))
 
 
+def descendant_watchdog(_signal, _frame):
+    try:
+        emit("descendant-watchdog-expired")
+    finally:
+        os._exit(124)
+
+
 def fixture(ready, release):
     # The root and child exit independently of the grandchild. Only the grandchild
     # retains stdout until its actual exit, even if namespace init is killed.
     os.close(0)
     if os.fork() == 0 and os.fork() == 0:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGALRM, descendant_watchdog)
+        signal.alarm(WAIT_SECONDS * 3)
         os.write(ready, b"R")
-        os.read(release, 1)
+        if os.read(release, 1) != b"R":
+            # The release pipe also closes when init dies. Only R permits exit.
+            try:
+                os.write(ready, b"E")
+            except BrokenPipeError:
+                pass
+            while True:
+                signal.pause()
     os._exit(0)
 
 
@@ -63,7 +79,10 @@ def init():
         events.register(ready, selectors.EVENT_READ)
         while time.monotonic() < deadline:
             try:
-                while (child := os.waitpid(-1, os.WNOHANG)[0]) != 0:
+                while (reaped := os.waitpid(-1, os.WNOHANG))[0] != 0:
+                    child, status = reaped
+                    if os.waitstatus_to_exitcode(status) == 124:
+                        raise RuntimeError("Descendant watchdog expired before teardown")
                     root_exited |= child == root
             except ChildProcessError:
                 emit("drained-" + outcome)
@@ -75,14 +94,23 @@ def init():
 
             for key, _ in events.select(0.01):
                 if key.fd == ready:
-                    descendant_ready = os.read(ready, 1) == b"R"
-                    events.unregister(ready)
+                    marker = os.read(ready, 1)
+                    if marker == b"R":
+                        descendant_ready = True
+                    elif marker == b"E":
+                        emit("release-eof-descendant-live")
+                    elif not marker:
+                        events.unregister(ready)
                     continue
                 command = os.read(0, 1)
                 if not command:
                     events.unregister(0)
-                if command == b"R" and announced and stopping is None:
-                    os.write(release, b"R")
+                if announced and stopping is None and release is not None:
+                    if command == b"R":
+                        os.write(release, b"R")
+                    elif command == b"E":
+                        os.close(release)
+                        release = None
                 if command in (b"S", b"") and stopping is None:
                     outcome = "graceful"
                     stopping = time.monotonic() + GRACE_SECONDS
@@ -186,6 +214,8 @@ def self_test(script):
             run.expect("namespace-ready")
             run.command(b"A")
             run.expect("root-exited-descendant-live")
+        first.command(b"E")
+        first.expect("release-eof-descendant-live")
         started = time.monotonic()
         first.command(b"SS")
         first.expect("drained-forced")
@@ -198,6 +228,7 @@ def self_test(script):
     owner_death(script, admit=False)
     owner_ms = owner_death(script, admit=True)
     print("PASS admission cancellation and loss of owner before admission")
+    print("PASS closing the release pipe alone left the grandchild alive")
     print(f"PASS repeated stop drained an uncooperative descendant in {forced_ms} ms")
     print("PASS the second tree remained alive and drained naturally")
     print(f"PASS owner death closed the descendant witness in {owner_ms} ms")
