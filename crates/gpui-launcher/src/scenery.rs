@@ -416,6 +416,76 @@ mod tests {
         );
     }
     #[test]
+    #[ignore = "release benchmark comparing three JPEG color conversion paths"]
+    fn compare_bundled_decode_paths() {
+        use std::hint::black_box;
+        use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+
+        let mut scenes = Landscape::ALL.to_vec();
+        scenes.sort_by_key(|scene| scene.id());
+        let mut frames = Vec::new();
+        for scene in scenes {
+            if let Some(bytes) = scene.0.motion {
+                let pack = Frames::open(bytes).unwrap();
+                frames.extend([pack.at(0).unwrap(), pack.at(pack.count / 2).unwrap()]);
+            }
+        }
+        assert!(!frames.is_empty());
+
+        let decode_path = |jpeg: &[u8], mode: Option<ColorSpace>| {
+            let mut pixels = match mode {
+                None => image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+                    .unwrap()
+                    .into_rgba8()
+                    .into_raw(),
+                Some(color) => zune_jpeg::JpegDecoder::new_with_options(
+                    ZCursor::new(jpeg),
+                    DecoderOptions::default().jpeg_set_out_colorspace(color),
+                )
+                .decode()
+                .unwrap(),
+            };
+            if mode != Some(ColorSpace::BGRA) {
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+            }
+            pixels
+        };
+        let paths = [None, Some(ColorSpace::RGBA), Some(ColorSpace::BGRA)];
+        let mut samples = [Vec::new(), Vec::new(), Vec::new()];
+        for repetition in 0..=15 {
+            for (index, jpeg) in frames.iter().enumerate() {
+                for offset in 0..paths.len() {
+                    let path = (offset + repetition + index) % paths.len();
+                    let start = Instant::now();
+                    let pixels = decode_path(black_box(jpeg), paths[path]);
+                    let elapsed = start.elapsed().as_micros();
+                    if repetition == 0 {
+                        assert_eq!(pixels, decode_path(jpeg, None));
+                        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
+                    } else {
+                        samples[path].push(elapsed);
+                    }
+                    black_box(pixels);
+                }
+            }
+        }
+        for (label, mut times) in ["image RGBA + swap", "Zune RGBA + swap", "Zune BGRA"]
+            .into_iter()
+            .zip(samples)
+        {
+            times.sort_unstable();
+            println!(
+                "{label}: {} samples, median {} us, p95 {} us",
+                times.len(),
+                times[times.len() / 2],
+                times[(times.len() * 95).div_ceil(100) - 1]
+            );
+        }
+    }
+
+    #[test]
     fn optimized_decode_preserves_poster_colors_and_alpha() {
         for scene in Landscape::ALL {
             let mut reference =
