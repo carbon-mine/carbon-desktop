@@ -1,0 +1,7 @@
+# 0003 · Use the Rust vanilla resolver to produce launch plans
+
+Use Carbon's framework-neutral Rust resolver for the 26.3 and 24w14a planning corpus. It reuses the installer's ordered artifact map and runs entirely on verified inputs held by the view and runtime leases. This keeps preparation, planning, account decisions and process admission under the same boundaries across GPUI and Svelte/Tauri.
+
+PortableMC 5.0.6 prepares its game command through an installer that can download, write or locate Java, and its Forge integration starts processors directly. XMCL exposes a narrower argument generator, but the pinned published dependency chain failed installation and separate workflow APIs still need a transport and execution review. Both would also need Carbon's validation of the produced command and its binding to the selected activation. The [candidate comparison](../discovery/launch-adapter.md) records sources and the measurements that were possible for this checkpoint.
+
+The returned plan is trusted Rust data with unresolved identity, game state, asset and native scratch slots. Only a redacted summary can cross to a UI. A later runner must recheck the activation, both leases and the account service's decision before spawn. The protected launcher remains gated pending runner, entitlement and OS qualification. Production adoption and support for another version or loader require owner review.

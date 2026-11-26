@@ -1,0 +1,23 @@
+{
+  "legacy": {
+    "id": "1.8.9",
+    "url": "https://piston-meta.mojang.com/v1/packages/d546f1707a3f2b7d034eece5ea2e311eda875787/1.8.9.json",
+    "sha256": "341af5f47a6b5bc137bfe681f4f3533e081041290aabbf9d7ebeae9881de768f",
+    "mainClass": "net.minecraft.client.main.Main",
+    "javaMajor": 8,
+    "assetIndex": "1.8",
+    "legacyArguments": true
+  },
+  "forge": {
+    "id": "1.21.1-52.1.0",
+    "url": "https://maven.minecraftforge.net/net/minecraftforge/forge/1.21.1-52.1.0/forge-1.21.1-52.1.0-installer.jar",
+    "sha256": "f1b620f2879ad6a5bbe15daba4d8f81eab9f5e08004967604960b98996bdebc4",
+    "entry": "install_profile.json",
+    "minecraft": "1.21.1",
+    "clientProcessorArtifacts": [
+      "net.minecraftforge:installertools:1.4.3",
+      "net.minecraftforge:ForgeAutoRenamingTool:1.0.6",
+      "net.minecraftforge:binarypatcher:1.2.0"
+    ]
+  }
+}
