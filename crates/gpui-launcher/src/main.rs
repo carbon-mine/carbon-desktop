@@ -122,6 +122,7 @@ struct Launcher {
     root_focus: FocusHandle,
     activity_focus: FocusHandle,
     task_focus: FocusHandle,
+    server_focus: FocusHandle,
     tab_focus: [FocusHandle; 3],
     review: bool,
     personal: Option<Uuid>,
@@ -251,6 +252,7 @@ impl Launcher {
             root_focus,
             activity_focus: cx.focus_handle(),
             task_focus: cx.focus_handle(),
+            server_focus: cx.focus_handle(),
             tab_focus: std::array::from_fn(|_| cx.focus_handle()),
             review: false,
             personal,
@@ -1083,6 +1085,55 @@ impl Launcher {
             return;
         }
         popup::open(self, popup::Kind::Profile(mode, profile), window, cx);
+    }
+
+    fn primary_label(profile: &Profile) -> &'static str {
+        if profile.server_address.is_some() {
+            "Review join"
+        } else {
+            "Play"
+        }
+    }
+
+    fn activate_primary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_some() || self.picker_open {
+            return;
+        }
+        self.tab = Tab::Overview;
+        let focus = if self
+            .selected_profile()
+            .is_some_and(|profile| profile.server_address.is_some())
+        {
+            self.server_focus.clone()
+        } else {
+            self.task_focus.clone()
+        };
+        window.on_next_frame(move |window, _| focus.focus(window));
+        cx.notify();
+    }
+
+    fn open_targets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_some() || self.picker_open || self.profile_issue.is_some() {
+            return;
+        }
+        let Some(profile) = self
+            .selected_profile()
+            .filter(|profile| profile.server_address.is_none())
+        else {
+            return;
+        };
+        let id = profile.id;
+        match carbon_profiles::instance_targets(&self.root.path, id) {
+            Ok(targets) => popup::open(self, popup::Kind::Targets(id, targets), window, cx),
+            Err(error) => {
+                self.message = error;
+                self.last_activity = Some(ActivityTarget::Personal(id));
+                if let Ok(profile) = carbon_profiles::server_profile(&self.root.path, id) {
+                    self.refresh_server_binding(profile);
+                }
+                cx.notify();
+            }
+        }
     }
 
     fn server_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -26,7 +26,7 @@ fn ordinary(meta: &Metadata) -> bool {
     !meta.is_symlink()
 }
 
-fn regular_file(path: &Path) -> Result<bool, String> {
+pub(super) fn regular_file(path: &Path) -> Result<bool, String> {
     match fs::symlink_metadata(path) {
         Ok(m) if ordinary(&m) && m.is_file() => Ok(true),
         Ok(_) => {
@@ -37,7 +37,7 @@ fn regular_file(path: &Path) -> Result<bool, String> {
     }
 }
 
-fn ordinary_directory(path: &Path) -> Result<bool, String> {
+pub(super) fn ordinary_directory(path: &Path) -> Result<bool, String> {
     match fs::symlink_metadata(path) {
         Ok(meta) if ordinary(&meta) && meta.is_dir() => Ok(true),
         Ok(_) => {
@@ -347,7 +347,12 @@ pub(super) fn save_java_choices(dir: &Path, choices: &Choices) -> Result<(), Str
     publish(dir, "java.json", "java.next", &bytes)
 }
 
-fn publish(dir: &Path, index_name: &str, next_name: &str, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn publish(
+    dir: &Path,
+    index_name: &str,
+    next_name: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
     if bytes.len() as u64 > MAX_INDEX_BYTES {
         return Err("The personal library is too large to save this change.".into());
     }

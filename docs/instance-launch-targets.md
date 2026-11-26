@@ -1,0 +1,11 @@
+# Instance launch targets
+
+An ordinary instance can keep local Minecraft saves and saved multiplayer destinations together. **Targets…** opens an owned GPUI window. Choose a local save, choose a saved destination, or return to **No specific target**. Choosing updates a launcher preference. It sends no server request, starts no process, and records no visit.
+
+The window lists direct save directories containing an ordinary `level.dat` file. It uses the exact instance-relative directory identifier for selection and shows the directory name by default. Use **Label…** to set a launcher-only name. The chooser shows the folder alongside each custom label to distinguish names that match. The launcher does not parse the world's internal name, open the save contents, rename a directory, or follow links. If a directory disappears or is renamed, reopening the chooser omits the unavailable preference. A saved server has its own UUID, a display name, and a validated address. Two server entries can share the same name and are distinguished by their addresses and UUIDs.
+
+Each instance owns its target preferences. New profiles and independent clones begin with no saved destinations or chosen target. A new pack import owns its own targets and exposes any local saves actually present in that copy. Retrying the same completed import preserves its existing preferences. Target updates use the shared profile lock and a revision check. When another window has changed them, refresh before retrying.
+
+A dedicated bound instance keeps the server address from [server binding](server-bound-instances.md). It hides the general chooser and exposes **Review join** with **Join unavailable**. Review opens the saved destination and requirements. Binding an ordinary instance leaves its worlds and other launch targets intact so they return if the binding is removed.
+
+The Rust tests cover two worlds with matching launcher labels and two saved destinations with matching names, independent instances and copies, import retry, stale writes, restart-equivalent reads, preserved world files, and missing or linked saves on Unix. Real Play, Join, last played and world maps remain separate.
