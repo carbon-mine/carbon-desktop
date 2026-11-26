@@ -283,11 +283,15 @@ impl Popup {
             }
         };
         cx.on_release(move |this, cx| {
+            let had_targets = this.targets.is_some();
             if let Some(account) = &this.account {
                 account.panel.update(cx, AccountPanel::dialog_closed);
             }
             let _ = this.owner.update(cx, |launcher, cx| {
                 launcher.popup = None;
+                if had_targets {
+                    launcher.refresh_targets(cx);
+                }
                 cx.notify();
             });
             let _ = this.parent.update(cx, |_, window, _| {
