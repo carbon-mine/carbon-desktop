@@ -1520,7 +1520,7 @@ fn main() -> anyhow::Result<()> {
             }
         })
         .detach();
-        let initial = shell::initial_bounds(&data.path, cx);
+        let (initial, display_id) = shell::initial_bounds(&data.path, cx);
         #[cfg(target_os = "linux")]
         let fitted_size = initial.get_bounds().size;
         cx.open_window(
@@ -1530,6 +1530,7 @@ fn main() -> anyhow::Result<()> {
                     ..Default::default()
                 }),
                 window_bounds: Some(initial),
+                display_id,
                 is_resizable: false,
                 window_min_size: Some(initial.get_bounds().size),
                 window_decorations: Some(WindowDecorations::Server),

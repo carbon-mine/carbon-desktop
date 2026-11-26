@@ -253,20 +253,23 @@ fn fixed_bounds(area: Bounds<gpui::Pixels>, saved: Option<&Placement>) -> Bounds
     result
 }
 
-pub fn initial_bounds(root: &Path, cx: &App) -> WindowBounds {
+pub fn initial_bounds(root: &Path, cx: &App) -> (WindowBounds, Option<gpui::DisplayId>) {
     let saved = read::<Placement>(root, "shell-placement.json");
-    let primary = cx.primary_display().map(|display| display.bounds());
-    let chosen_display = saved.as_ref().and_then(|pos| {
-        cx.displays()
-            .into_iter()
-            .map(|display| display.bounds())
-            .find(|area| area.contains(&point(px(pos.x), px(pos.y))))
-    });
-    let area = if chosen_display.is_some() && chosen_display != primary {
-        chosen_display
-    } else {
-        work_area::primary(cx).or(primary)
-    };
+    let primary = cx.primary_display();
+    let saved_origin = saved.as_ref().map(|pos| point(px(pos.x), px(pos.y)));
+    let chosen = primary
+        .as_ref()
+        .filter(|d| saved_origin.is_some_and(|pos| d.bounds().contains(&pos)))
+        .cloned()
+        .or_else(|| {
+            cx.displays()
+                .into_iter()
+                .find(|d| saved_origin.is_some_and(|pos| d.bounds().contains(&pos)))
+        })
+        .or(primary);
+    let area = chosen
+        .as_ref()
+        .map(|d| work_area::for_display(cx, d.id(), saved_origin).unwrap_or_else(|| d.bounds()));
     let bounds = area
         .map(|area| fixed_bounds(area, saved.as_ref()))
         .unwrap_or_else(|| {
@@ -275,7 +278,7 @@ pub fn initial_bounds(root: &Path, cx: &App) -> WindowBounds {
                 size(px(DEFAULT_CLIENT_WIDTH), px(DEFAULT_LAYOUT_HEIGHT)),
             )
         });
-    WindowBounds::Windowed(bounds)
+    (WindowBounds::Windowed(bounds), chosen.map(|d| d.id()))
 }
 
 impl Launcher {

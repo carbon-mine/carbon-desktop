@@ -6,22 +6,50 @@
 //! and X11 publishes `_NET_WORKAREA`. Query those here so the launcher geometry
 //! in `shell` stays platform independent.
 
+pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+    for_display(cx, cx.primary_display()?.id(), None)
+}
+
+type Position = Option<gpui::Point<gpui::Pixels>>;
+
 #[cfg(windows)]
-pub(super) fn primary(_cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+pub(super) fn for_display(
+    _cx: &gpui::App,
+    id: gpui::DisplayId,
+    _: Position,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
     use windows::Win32::{
-        Foundation::POINT,
-        Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint},
+        Foundation::{LPARAM, RECT},
+        Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO},
         UI::{
             HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
             WindowsAndMessaging::USER_DEFAULT_SCREEN_DPI,
         },
     };
 
-    // Match GPUI's monitor choice for a window that has no display id.
-    let monitor = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
-    if monitor.is_invalid() {
-        return None;
+    // GPUI 0.2.2 assigns Win32 DisplayId from this enumeration index.
+    // The chosen monitor supplies both its work area and effective DPI.
+    unsafe extern "system" fn collect(
+        monitor: HMONITOR,
+        _: HDC,
+        _: *mut RECT,
+        data: LPARAM,
+    ) -> windows::core::BOOL {
+        unsafe { (*(data.0 as *mut Vec<HMONITOR>)).push(monitor) };
+        true.into()
     }
+    let mut monitors = Vec::<HMONITOR>::new();
+    unsafe {
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(collect),
+            LPARAM(std::ptr::from_mut(&mut monitors) as isize),
+        )
+        .ok()
+        .ok()?;
+    }
+    let monitor = *monitors.get(u32::from(id) as usize)?;
     let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
         ..Default::default()
@@ -48,7 +76,11 @@ pub(super) fn primary(_cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+pub(super) fn for_display(
+    cx: &gpui::App,
+    id: gpui::DisplayId,
+    _: Position,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
     use gpui::{Bounds, point, px, size};
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSScreen;
@@ -56,6 +88,9 @@ pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
     // NSScreen is main-thread-only. AppKit uses a bottom-left origin while
     // GPUI display coordinates start at the top-left, so flip the Y axis.
     let mtm = MainThreadMarker::new()?;
+    if cx.primary_display()?.id() != id {
+        return None;
+    }
     let screen = NSScreen::screens(mtm).firstObject()?;
     let frame = screen.frame();
     let visible = screen.visibleFrame();
@@ -80,7 +115,11 @@ pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+pub(super) fn for_display(
+    cx: &gpui::App,
+    id: gpui::DisplayId,
+    origin: Position,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
     use gpui::{Bounds, point, px, size};
     use x11rb::connection::Connection;
     use x11rb::protocol::randr::ConnectionExt;
@@ -93,7 +132,7 @@ pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
         return None;
     }
 
-    let display = cx.primary_display()?.bounds();
+    let display = cx.displays().into_iter().find(|d| d.id() == id)?.bounds();
     let display_width = f32::from(display.size.width);
     let display_height = f32::from(display.size.height);
     if display_width <= 0.0 || display_height <= 0.0 {
@@ -129,7 +168,17 @@ pub(super) fn primary(cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
             r.monitors
                 .iter()
                 .filter(|m| m.width > 0 && m.height > 0)
-                .max_by_key(|m| (m.primary, m.x == 0 && m.y == 0))
+                .max_by_key(|m| {
+                    let inside = origin.is_some_and(|p| {
+                        let x = f32::from(p.x) * scale;
+                        let y = f32::from(p.y) * scale;
+                        x >= f32::from(m.x)
+                            && y >= f32::from(m.y)
+                            && x < f32::from(m.x) + f32::from(m.width)
+                            && y < f32::from(m.y) + f32::from(m.height)
+                    });
+                    (inside, m.primary, m.x == 0 && m.y == 0)
+                })
         })
         .and_then(|m| {
             intersect(
@@ -195,7 +244,11 @@ fn intersect(
 }
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-pub(super) fn primary(_cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+pub(super) fn for_display(
+    _cx: &gpui::App,
+    _: gpui::DisplayId,
+    _: Position,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
     // GPUI exposes no work area on other platforms. The caller falls back to
     // the primary display rectangle with a conservative frame inset.
     None
