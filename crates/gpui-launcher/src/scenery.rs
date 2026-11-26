@@ -289,6 +289,24 @@ impl Render for SceneView {
 mod tests {
     use super::*;
     #[test]
+    fn optimized_decode_preserves_poster_colors_and_alpha() {
+        for scene in Landscape::ALL {
+            let mut reference =
+                image::load_from_memory_with_format(scene.0.poster, image::ImageFormat::Jpeg)
+                    .unwrap()
+                    .into_rgba8();
+            for pixel in reference.pixels_mut() {
+                pixel.0.swap(0, 2);
+            }
+            assert_eq!(
+                decode(scene.0.poster).unwrap().as_bytes(0),
+                Some(reference.as_raw().as_slice()),
+                "{}",
+                scene.id()
+            );
+        }
+    }
+    #[test]
     fn prefetch_preserves_the_due_time_and_skips_missed_slots() {
         let due = Instant::now() + Duration::from_secs(1);
         let period = Duration::from_millis(40);
