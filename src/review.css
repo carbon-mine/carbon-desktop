@@ -65,7 +65,8 @@ button.primary:focus-visible { outline-color: var(--desktop-action-ink); outline
 #new-profile:hover:enabled { background: var(--desktop-hover) }
 #new-profile .desktop-icon { color: var(--desktop-focus) }
 .app-options { justify-content: end; padding-inline: 1rem; font-size: 0.82rem }
-.account { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--desktop-muted); white-space: nowrap }
+.account { color: var(--foreground); white-space: normal }
+.account[aria-disabled="true"] { cursor: default }
 .account .desktop-icon { inline-size: 0.9rem; block-size: 0.9rem }
 
 .split { min-block-size: 0; display: grid; grid-template-columns: clamp(13rem, 24vw, 16.5rem) minmax(0, 1fr) }
