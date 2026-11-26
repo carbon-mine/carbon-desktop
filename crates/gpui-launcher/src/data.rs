@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MPL-2.0 */
+use crate::progress::{Transfer, Update};
 use anyhow::{Context as _, Result};
 
 use carbon_runtime::RuntimeStatus;
@@ -72,13 +73,30 @@ pub fn client_verified(inspection: &Inspection) -> bool {
 #[derive(Clone, Default)]
 pub struct Activity {
     pub cancel: Arc<AtomicBool>,
-    line: Arc<Mutex<Option<String>>>,
+    line: Arc<Mutex<Option<Update>>>,
     prepared_jdk: Arc<Mutex<Option<(String, RuntimeStatus)>>>,
 }
 
 impl Activity {
-    pub fn text(&self) -> Option<String> {
-        self.line.lock().ok()?.clone()
+    pub fn latest(&self) -> Update {
+        self.line
+            .lock()
+            .ok()
+            .and_then(|line| *line)
+            .unwrap_or(Update::Busy("Starting…"))
+    }
+
+    pub fn java_progress(&self, received: u64, total: u64) -> bool {
+        let update = if total == 0 || received >= total {
+            Update::Busy("Verifying and preparing Java…")
+        } else {
+            Update::Transfer(Transfer {
+                phase: "Downloading managed JDK",
+                files: None,
+                bytes: (received, total),
+            })
+        };
+        self.progress(update)
     }
 
     pub fn prepared_jdk_release(&self, metadata_sha1: &str) -> Option<&'static str> {
@@ -99,9 +117,9 @@ impl Activity {
         None
     }
 
-    pub fn progress(&self, text: String) -> bool {
+    pub fn progress(&self, update: Update) -> bool {
         if let Ok(mut line) = self.line.lock() {
-            line.replace(text);
+            line.replace(update);
         }
         !self.cancel.load(Ordering::Acquire)
     }
@@ -132,18 +150,11 @@ pub fn prepare(
             inspection.managed_java,
             RuntimeStatus::Available { .. } | RuntimeStatus::RepairNeeded { .. }
         ) {
-            let major = carbon_setup::required_java(&inspection.metadata)?;
             let verified = carbon_setup::prepare_managed_java(
                 path,
                 profile,
                 metadata_sha1,
-                |received, total| {
-                    activity.progress(format!(
-                        "Preparing Java {major} JDK · {} / {}",
-                        size_label(received),
-                        size_label(total)
-                    ))
-                },
+                |received, total| activity.java_progress(received, total),
             )?;
             let status = verified.managed_java;
             if status.java_home().is_some()
@@ -151,6 +162,7 @@ pub fn prepare(
             {
                 prepared.replace((metadata_sha1.to_owned(), status));
             }
+            activity.progress(Update::Busy("Checking Minecraft files…"));
             if activity.cancel.load(Ordering::Acquire) {
                 return Err("Preparation cancelled after saving the JDK.".into());
             }
@@ -165,13 +177,11 @@ pub fn prepare(
                 "activatingView" => "Activating the game folder",
                 _ => "Verifying game files",
             };
-            activity.progress(format!(
-                "{phase} · {} / {} files · {} / {}",
-                p.completed_files,
-                p.total_files,
-                size_label(p.verified_bytes),
-                size_label(p.total_bytes)
-            ))
+            activity.progress(Update::Transfer(Transfer {
+                phase,
+                files: Some((p.completed_files as u64, p.total_files as u64)),
+                bytes: (p.verified_bytes, p.total_bytes),
+            }))
         })?;
     let refresh = inspect(path, profile, true).and_then(|report| {
         if report.metadata.metadata_sha1 == receipt.metadata_sha1 {
