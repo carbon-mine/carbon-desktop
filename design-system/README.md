@@ -124,7 +124,7 @@ The automatic artwork is a meadow block for vanilla, a field pack for an import 
 
 Store the chosen built-in ID in the profile. Keep these IDs stable across releases. If a newer ID is unavailable, display the automatic icon and preserve the stored preference until the player changes it.
 
-Windows GPUI captures show a [library with eight disposable instances](../docs/images/gpui-instance-sprites.png) and the [native icon picker in light appearance](../docs/images/gpui-instance-icon-picker.png).
+Windows GPUI captures show a [library with ordinary, imported and server-bound instances](../docs/images/gpui-instance-sprites.png) and the [native icon picker in light appearance](../docs/images/gpui-instance-icon-picker.png).
 
 ## Refresh and verify
 
