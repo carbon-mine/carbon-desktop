@@ -1,0 +1,67 @@
+/* SPDX-License-Identifier: MPL-2.0 */
+
+@font-face {
+  font-family: "Carbon system icons";
+  src: local("Segoe Fluent Icons"), local("Segoe MDL2 Assets");
+}
+
+:root {
+  --desktop-ui-font: system-ui, sans-serif;
+  --desktop-code-font: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --desktop-frame: #f2f2f2;
+  --desktop-surface: #ffffff;
+  --desktop-layer: #f8f8f8;
+  --desktop-line: #d2d2d2;
+  --desktop-control-line: #777777;
+  --desktop-hover: #e6e6e6;
+  --desktop-selected: #dedede;
+  --desktop-muted: #525252;
+  --desktop-disabled: #e2e2e2;
+  --desktop-disabled-text: #525252;
+  --desktop-instance: #e2e2e2;
+  --desktop-instance-ink: #363636;
+  --desktop-action: #353535;
+  --desktop-action-ink: #ffffff;
+  --desktop-action-hover: #191919;
+  --desktop-focus: #171717;
+  --desktop-radius-control: 0.25rem;
+  --desktop-radius-surface: 0.45rem;
+}
+
+:root[data-desktop-platform="windows"] {
+  --desktop-ui-font: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+}
+
+:root[data-carbon-theme="dark"] {
+  --desktop-action: #d7d7d7;
+  --desktop-action-ink: #181818;
+  --desktop-action-hover: #eeeeee;
+  --desktop-focus: #f4f4f4;
+  --desktop-frame: #202020;
+  --desktop-surface: #262626;
+  --desktop-layer: #2c2c2c;
+  --desktop-line: #424242;
+  --desktop-control-line: #909090;
+  --desktop-hover: #383838;
+  --desktop-selected: #404040;
+  --desktop-muted: #bdbdbd;
+  --desktop-disabled: #3b3b3b;
+  --desktop-disabled-text: #cdcdcd;
+  --desktop-instance: #414141;
+  --desktop-instance-ink: #e1e1e1;
+}
+
+.desktop-icon {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1rem;
+  block-size: 1rem;
+  flex: none;
+}
+.desktop-icon-fallback { inline-size: 100%; block-size: 100% }
+.desktop-icon-native {
+  display: none;
+  font: normal 1rem/1 "Carbon system icons";
+}
+:root[data-native-icons="true"] .desktop-icon-native { display: inline }
+:root[data-native-icons="true"] .desktop-icon-fallback { display: none }

@@ -1,0 +1,19 @@
+[package]
+name = "carbon-setup"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+carbon-profiles = { path = "../profiles" }
+carbon-runtime = { path = "../runtime" }
+carbon-session = { path = "../session" }
+carbon-vanilla = { path = "../vanilla" }
+serde = { version = "1", features = ["derive"] }
+uuid = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

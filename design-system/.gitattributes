@@ -1,0 +1,2 @@
+# Keep pinned source bytes stable through Windows and Linux checkouts.
+inherited/** -text

@@ -1,0 +1,1195 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+// SPDX-License-Identifier: MPL-2.0
+
+mod accessibility;
+mod account_panel;
+mod data;
+mod icons;
+mod popup;
+mod shell;
+mod theme;
+mod view;
+
+use carbon_profiles::Profile;
+use carbon_store::{Action, InstanceId, InstanceView, Snapshot};
+use carbon_vanilla::{GameFilePlan, GameFilesPrepared};
+use data::{Activity, DataRoot, Inspection, size_label};
+use gpui::{
+    AnyWindowHandle, App, Application, Context, Entity, FocusHandle, KeyBinding, TitlebarOptions,
+    Window, WindowDecorations, WindowOptions, actions, prelude::*, px, size,
+};
+use gpui_component::{Root, input::InputState};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::PathBuf,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
+use theme::Preference;
+use uuid::Uuid;
+
+actions!(
+    desktop,
+    [FindInstance, NewInstance, ImportPack, Back, FocusActivity]
+);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tab {
+    Overview,
+    Settings,
+    Storage,
+}
+
+impl Tab {
+    const fn index(self) -> usize {
+        match self {
+            Self::Overview => 0,
+            Self::Settings => 1,
+            Self::Storage => 2,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum Picker {
+    Pack,
+    Client,
+    Java,
+}
+
+enum Outcome {
+    Review(Inspection, GameFilePlan),
+    Files(GameFilesPrepared, Result<Inspection, String>),
+    Inspected(Inspection, &'static str),
+    OpenedFolder,
+    Sandbox(carbon_session::SessionReport),
+    Fixtures(Snapshot),
+    Profiles(Result<Vec<Profile>, String>),
+}
+
+struct Setup {
+    version: String,
+    inspection: Option<Inspection>,
+    plan: Option<GameFilePlan>,
+    receipt: Option<GameFilesPrepared>,
+    error: Option<String>,
+}
+
+struct Task {
+    label: &'static str,
+    profile: Option<Uuid>,
+    fixture: Option<InstanceId>,
+    activity: Activity,
+    can_cancel: bool,
+    protects_session: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ActivityTarget {
+    Personal(Uuid),
+    Fixture(InstanceId),
+}
+
+impl Task {
+    fn target(&self) -> Option<ActivityTarget> {
+        self.profile
+            .map(ActivityTarget::Personal)
+            .or_else(|| self.fixture.map(ActivityTarget::Fixture))
+    }
+}
+
+struct Launcher {
+    accessibility: accessibility::Accessibility,
+    root: DataRoot,
+    account: Entity<account_panel::AccountPanel>,
+    profiles: Vec<Profile>,
+    profile_issue: Option<String>,
+    fixtures: Option<Snapshot>,
+    fixture_issue: Option<String>,
+    search: Entity<InputState>,
+    root_focus: FocusHandle,
+    activity_focus: FocusHandle,
+    task_focus: FocusHandle,
+    tab_focus: [FocusHandle; 3],
+    review: bool,
+    personal: Option<Uuid>,
+    fixture: InstanceId,
+    fixture_play_checked: Option<InstanceId>,
+    tab: Tab,
+    diagnostics_open: bool,
+    show_detail: bool,
+    preference: Preference,
+    #[cfg(windows)]
+    native_menu: Option<shell::NativeMenu>,
+    applied_dark: Option<bool>,
+    popup: Option<AnyWindowHandle>,
+    picker_open: bool,
+    task: Option<Task>,
+    fixture_task: Option<Task>,
+    last_activity: Option<ActivityTarget>,
+    setup: HashMap<Uuid, Setup>,
+    message: String,
+    readiness: Option<(Instant, Option<PathBuf>)>,
+}
+
+impl Launcher {
+    fn new(
+        root: DataRoot,
+        readiness: (Instant, Option<PathBuf>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let profiles = carbon_profiles::list(&root.path);
+        let fixtures = carbon_store::snapshot(&root.path);
+        let personal = profiles
+            .as_ref()
+            .ok()
+            .and_then(|profiles| profiles.first())
+            .map(|profile| profile.id);
+        let profile_issue = profiles.as_ref().err().cloned();
+        let fixture_issue = fixtures.as_ref().err().cloned();
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find an instance"));
+        cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        cx.subscribe_in(
+            &search,
+            window,
+            |this, input, event: &gpui_component::input::InputEvent, window, cx| {
+                if matches!(event, gpui_component::input::InputEvent::PressEnter { .. }) {
+                    let query = input.read(cx).value().trim().to_lowercase();
+                    if this.review {
+                        if let Some(id) = this
+                            .fixtures
+                            .iter()
+                            .flat_map(|store| &store.instances)
+                            .find(|item| item.name.to_lowercase().contains(&query))
+                            .map(|item| item.id)
+                        {
+                            this.choose_fixture(id);
+                        }
+                    } else if let Some(id) = this
+                        .profiles
+                        .iter()
+                        .find(|item| {
+                            format!("{} {}", item.name, item.version.id())
+                                .to_lowercase()
+                                .contains(&query)
+                        })
+                        .map(|item| item.id)
+                    {
+                        this.choose_personal(id, cx);
+                    }
+                    this.focus_detail(window);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.observe_window_activation(window, |this, win, cx| {
+            if win.is_window_active() {
+                this.account
+                    .update(cx, account_panel::AccountPanel::refresh);
+                if let Some(child) = this.popup {
+                    let _ = child.update(cx, |_, popup, _| popup.activate_window());
+                }
+            }
+        })
+        .detach();
+        cx.observe_window_appearance(window, |_, _, cx| cx.notify())
+            .detach();
+        let root_focus = cx.focus_handle();
+        root_focus.focus(window);
+        let mut was_narrow = is_narrow(window);
+        cx.observe_window_bounds(window, move |this, window, _| {
+            let narrow = is_narrow(window);
+            if narrow && !was_narrow {
+                this.root_focus.focus(window);
+            }
+            was_narrow = narrow;
+        })
+        .detach();
+        let account = cx.new(|_| account_panel::AccountPanel::new(&root.path));
+        cx.observe(&account, |_, _, cx| cx.notify()).detach();
+        account.update(cx, account_panel::AccountPanel::refresh);
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.account
+                    .update(cx, account_panel::AccountPanel::refresh);
+            }
+        })
+        .detach();
+        let preference = shell::preference(&root.path);
+        #[cfg(windows)]
+        let native_menu = shell::NativeMenu::install(window, cx, preference);
+        #[cfg(windows)]
+        let initial_message = native_menu.as_ref().err().map_or_else(
+            || "No active tasks".to_owned(),
+            |err| format!("Application menus could not be attached: {err}"),
+        );
+        #[cfg(not(windows))]
+        let initial_message = "No active tasks".to_owned();
+        let mut launcher = Self {
+            accessibility: accessibility::Accessibility::new(window, cx, "Carbon Desktop".into()),
+            root,
+            account,
+            profiles: profiles.unwrap_or_default(),
+            profile_issue,
+            fixtures: fixtures.ok(),
+            fixture_issue,
+            search,
+            root_focus,
+            activity_focus: cx.focus_handle(),
+            task_focus: cx.focus_handle(),
+            tab_focus: std::array::from_fn(|_| cx.focus_handle()),
+            review: false,
+            personal,
+            fixture: InstanceId::Sample,
+            fixture_play_checked: None,
+            tab: Tab::Overview,
+            diagnostics_open: false,
+            show_detail: false,
+            preference,
+            #[cfg(windows)]
+            native_menu: native_menu.ok(),
+            applied_dark: None,
+            popup: None,
+            picker_open: false,
+            task: None,
+            fixture_task: None,
+            last_activity: None,
+            setup: HashMap::new(),
+            message: initial_message,
+            readiness: Some(readiness),
+        };
+        if let Some(id) = personal {
+            launcher.choose_personal(id, cx);
+            launcher.show_detail = false;
+        }
+        launcher
+    }
+
+    fn open_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_none() && !self.picker_open {
+            self.account
+                .update(cx, account_panel::AccountPanel::refresh);
+            popup::open(self, popup::Kind::Account(self.account.clone()), window, cx);
+        }
+    }
+
+    fn busy(&self) -> bool {
+        self.task.is_some() || self.picker_open
+    }
+
+    fn fixture_busy(&self) -> bool {
+        self.fixture_task.is_some() || self.picker_open
+    }
+    fn selected_profile(&self) -> Option<&Profile> {
+        self.profiles
+            .iter()
+            .find(|profile| Some(profile.id) == self.personal)
+    }
+    fn selected_fixture(&self) -> Option<&InstanceView> {
+        self.fixtures
+            .as_ref()?
+            .instances
+            .iter()
+            .find(|item| item.id == self.fixture)
+    }
+    fn switch_view(&mut self, review: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = Tab::Overview;
+        self.review = review;
+        self.show_detail = false;
+        self.search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+    fn find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_some() || self.picker_open {
+            return;
+        }
+        let reveal_search = self.show_detail && is_narrow(window);
+        self.show_detail = false;
+        if reveal_search {
+            let input = self.search.clone();
+            window.on_next_frame(move |window, cx| {
+                input.update(cx, |input, cx| input.focus(window, cx));
+            });
+        } else {
+            self.search.update(cx, |input, cx| input.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    fn focus_detail(&self, window: &mut Window) {
+        if self.show_detail && is_narrow(window) {
+            self.root_focus.focus(window);
+        }
+    }
+
+    fn cancel_task(&self) {
+        if let Some(task) = &self.task {
+            task.activity.cancel.store(true, Ordering::Release);
+        }
+    }
+
+    fn choose_personal(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.personal != Some(id) || self.review {
+            self.tab = Tab::Overview;
+            self.diagnostics_open = false;
+        }
+        self.personal = Some(id);
+        self.review = false;
+        self.show_detail = true;
+        let Some(profile) = self.selected_profile().cloned() else {
+            return;
+        };
+        if pack_has_requirements(&profile) {
+            return;
+        }
+        if self
+            .setup
+            .get(&id)
+            .is_some_and(|setup| setup.version == profile.version.id())
+        {
+            return;
+        }
+        self.setup.remove(&id);
+        let path = self.root.path.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { data::inspect(&path, id, true) });
+        cx.spawn(async move |this, cx| {
+            if let Ok(inspection) = work.await {
+                this.update(cx, |this, cx| {
+                    if this
+                        .profiles
+                        .iter()
+                        .any(|current| current.id == id && current.version == profile.version)
+                    {
+                        this.setup.entry(id).or_insert(Setup {
+                            version: profile.version.id().into(),
+                            inspection: Some(inspection),
+                            plan: None,
+                            receipt: None,
+                            error: None,
+                        });
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn choose_fixture(&mut self, id: InstanceId) {
+        if !self.review || self.fixture != id {
+            self.tab = Tab::Overview;
+        }
+        self.fixture = id;
+        self.review = true;
+        self.show_detail = true;
+    }
+
+    fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.tab_focus[tab.index()].focus(window);
+        cx.notify();
+    }
+
+    fn check_fixture_play(&mut self, cx: &mut Context<Self>) {
+        if self.selected_fixture().is_some() && !self.fixture_busy() {
+            self.fixture_play_checked = Some(self.fixture);
+            self.last_activity = Some(ActivityTarget::Fixture(self.fixture));
+            self.message = "This synthetic fixture cannot launch Minecraft.".to_owned();
+            cx.notify();
+        }
+    }
+
+    fn activity_target(&self) -> Option<ActivityTarget> {
+        self.task
+            .as_ref()
+            .and_then(Task::target)
+            .or_else(|| self.fixture_task.as_ref().and_then(Task::target))
+            .or(self.last_activity)
+    }
+
+    fn activity_name(&self, target: ActivityTarget) -> Option<&str> {
+        match target {
+            ActivityTarget::Personal(id) => self
+                .profiles
+                .iter()
+                .find(|row| row.id == id)
+                .map(|row| row.name.as_str()),
+            ActivityTarget::Fixture(id) => self
+                .fixtures
+                .as_ref()?
+                .instances
+                .iter()
+                .find(|row| row.id == id)
+                .map(|row| row.name),
+        }
+    }
+
+    fn show_activity_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_some() || self.picker_open {
+            return;
+        }
+        match self.activity_target() {
+            Some(ActivityTarget::Personal(id))
+                if self.profiles.iter().any(|profile| profile.id == id) =>
+            {
+                self.choose_personal(id, cx);
+                self.tab = Tab::Overview;
+            }
+            Some(ActivityTarget::Fixture(id)) => self.choose_fixture(id),
+            _ => return,
+        }
+        self.search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.focus_detail(window);
+        cx.notify();
+    }
+
+    fn work<F>(
+        &mut self,
+        profile: Option<Profile>,
+        label: &'static str,
+        can_cancel: bool,
+        cx: &mut Context<Self>,
+        f: F,
+    ) where
+        F: FnOnce(PathBuf, Activity) -> Result<Outcome, String> + Send + 'static,
+    {
+        self.start_work(profile, None, label, can_cancel, cx, f);
+    }
+
+    fn start_work<F>(
+        &mut self,
+        profile: Option<Profile>,
+        fixture: Option<InstanceId>,
+        label: &'static str,
+        can_cancel: bool,
+        cx: &mut Context<Self>,
+        f: F,
+    ) where
+        F: FnOnce(PathBuf, Activity) -> Result<Outcome, String> + Send + 'static,
+    {
+        let fixture_work = fixture.is_some();
+        let busy = if fixture_work {
+            self.fixture_busy()
+        } else {
+            self.busy()
+        };
+        if busy || self.popup.is_some() {
+            return;
+        }
+        let activity = Activity::default();
+        let path = self.root.path.clone();
+        let operation = activity.clone();
+        let task = Task {
+            label,
+            profile: profile.as_ref().map(|profile| profile.id),
+            fixture,
+            activity,
+            can_cancel,
+            protects_session: false,
+        };
+        if fixture_work {
+            self.fixture_task = Some(task);
+        } else {
+            self.task = Some(task);
+        }
+        if let Some(profile) = &profile {
+            let setup = self.setup.entry(profile.id).or_insert(Setup {
+                version: profile.version.id().into(),
+                inspection: None,
+                plan: None,
+                receipt: None,
+                error: None,
+            });
+            setup.error = None;
+        }
+        let work = cx
+            .background_executor()
+            .spawn(async move { f(path, operation) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                this.complete(profile.as_ref(), fixture_work, result);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        let timer = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                timer.timer(Duration::from_millis(150)).await;
+                if !this
+                    .update(cx, |this, cx| {
+                        let active = if fixture_work {
+                            this.fixture_task.is_some()
+                        } else {
+                            this.task.is_some()
+                        };
+                        if !active {
+                            return false;
+                        }
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn complete(
+        &mut self,
+        profile: Option<&Profile>,
+        fixture_work: bool,
+        result: Result<Outcome, String>,
+    ) {
+        let task = if fixture_work {
+            self.fixture_task.take()
+        } else {
+            self.task.take()
+        };
+        self.last_activity = task.as_ref().and_then(Task::target);
+        let cancelled = task
+            .as_ref()
+            .is_some_and(|task| task.activity.cancel.load(Ordering::Acquire));
+        let requires_recheck = task.as_ref().is_some_and(|task| {
+            matches!(
+                task.label,
+                "Checking setup"
+                    | "Checking selected Java folder"
+                    | "Preparing managed JDK"
+                    | "Verifying client JAR"
+            )
+        });
+        let setup = profile.and_then(|profile| self.setup.get_mut(&profile.id));
+        match result {
+            Ok(Outcome::Review(inspection, plan)) => {
+                if let Some(setup) = setup {
+                    setup.inspection = Some(inspection);
+                    setup.plan = Some(plan);
+                }
+                self.message = "Install review is ready.".to_owned();
+            }
+            Ok(Outcome::Files(receipt, refresh)) => {
+                self.message = format!(
+                    "{} game files verified for Minecraft {}.",
+                    receipt.unique_files, receipt.version
+                );
+                if let Some(setup) = setup {
+                    setup.plan = None;
+                    setup.receipt = Some(receipt);
+                    match refresh {
+                        Ok(inspection) => setup.inspection = Some(inspection),
+                        Err(error) => {
+                            setup.inspection = None;
+                            let failure = format!(
+                                "{} The instance could not be confirmed. Review setup again. {error}",
+                                self.message
+                            );
+                            self.message = failure.clone();
+                            setup.error = Some(failure);
+                        }
+                    }
+                }
+            }
+            Ok(Outcome::Inspected(inspection, message)) => {
+                if let Some(setup) = setup {
+                    if setup
+                        .plan
+                        .as_ref()
+                        .is_some_and(|plan| plan.metadata_sha1 != inspection.metadata.metadata_sha1)
+                    {
+                        setup.plan = None;
+                    }
+                    setup.inspection = Some(inspection);
+                }
+                self.message = message.to_owned();
+            }
+            Ok(Outcome::OpenedFolder) => {
+                self.message = "Opened this instance's game folder.".to_owned();
+            }
+            Ok(Outcome::Sandbox(report)) => {
+                self.message = if report.saved {
+                    format!("Sandbox sample saved · Count {}.", report.sample_count)
+                } else {
+                    "Sandbox test closed without saving.".into()
+                };
+            }
+            Ok(Outcome::Fixtures(snapshot)) => {
+                self.message = snapshot.message.clone();
+                self.fixture_issue = None;
+                self.fixtures = Some(snapshot);
+                if self.selected_fixture().is_none() {
+                    self.fixture = InstanceId::Sample;
+                }
+            }
+            Ok(Outcome::Profiles(profiles)) => {
+                match profiles {
+                    Ok(profiles) => {
+                        self.profiles = profiles;
+                        self.profile_issue = None;
+                        if self.selected_profile().is_none() {
+                            self.personal = self.profiles.first().map(|profile| profile.id);
+                        }
+                        self.setup.retain(|id, setup| {
+                            self.profiles.iter().any(|profile| {
+                                profile.id == *id && profile.version.id() == setup.version
+                            })
+                        });
+                    }
+                    Err(error) => self.profile_issue = Some(error),
+                }
+                self.message = "Library refresh completed.".to_owned();
+            }
+            Err(error) => {
+                if let Some(setup) = setup {
+                    if let Some(inspection) = &mut setup.inspection
+                        && let Some(jdk) = task.and_then(|task| {
+                            task.activity
+                                .take_prepared_jdk(&inspection.metadata.metadata_sha1)
+                        })
+                    {
+                        inspection.managed_java = jdk;
+                    }
+                    if !cancelled {
+                        setup.error = Some(error.clone());
+                        if requires_recheck || setup.plan.is_none() {
+                            setup.plan = None;
+                            setup.receipt = None;
+                            setup.inspection = None;
+                        }
+                    }
+                }
+                if fixture_work {
+                    self.fixture_issue = Some(error.clone());
+                }
+                self.message = error;
+            }
+        }
+    }
+
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.review {
+            self.start_work(
+                None,
+                Some(self.fixture),
+                "Reading review fixtures",
+                false,
+                cx,
+                |path, _| carbon_store::snapshot(&path).map(Outcome::Fixtures),
+            );
+        } else {
+            self.work(None, "Reading library", false, cx, |path, _| {
+                Ok(Outcome::Profiles(carbon_profiles::list(&path)))
+            });
+        }
+    }
+
+    fn open_game_folder(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_profile().map(|profile| profile.id) else {
+            return;
+        };
+        self.work(None, "Opening game folder", false, cx, move |root, _| {
+            carbon_profiles::open_game_folder(&root, id).map(|()| Outcome::OpenedFolder)
+        });
+    }
+
+    fn review_install(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_profile().cloned() else {
+            return;
+        };
+        if pack_has_requirements(&profile) || self.profile_issue.is_some() {
+            return;
+        }
+        let id = profile.id;
+        self.tab = Tab::Overview;
+        self.work(
+            Some(profile),
+            "Reviewing install",
+            false,
+            cx,
+            move |path, _| {
+                let (inspection, plan) = data::review(&path, id)?;
+                Ok(Outcome::Review(inspection, plan))
+            },
+        );
+    }
+
+    fn check_setup(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_profile().cloned() else {
+            return;
+        };
+        if pack_has_requirements(&profile) || self.profile_issue.is_some() {
+            return;
+        }
+        let id = profile.id;
+        self.work(
+            Some(profile),
+            "Checking setup",
+            false,
+            cx,
+            move |path, _| {
+                data::inspect(&path, id, false)
+                    .map(|report| Outcome::Inspected(report, "Instance setup checked."))
+            },
+        );
+    }
+
+    fn select_java(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pick(Picker::Java, window, cx);
+    }
+
+    fn prepare_jdk(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_profile().cloned() else {
+            return;
+        };
+        if pack_has_requirements(&profile) || self.profile_issue.is_some() {
+            return;
+        }
+        let Some(report) = self
+            .setup
+            .get(&profile.id)
+            .and_then(|setup| setup.inspection.as_ref())
+        else {
+            return;
+        };
+        let digest = report.metadata.metadata_sha1.clone();
+        let id = profile.id;
+        self.work(
+            Some(profile),
+            "Preparing managed JDK",
+            true,
+            cx,
+            move |path, activity| {
+                carbon_setup::prepare_managed_java(&path, id, &digest, |received, total| {
+                    activity.progress(format!(
+                        "Managed JDK · {} / {}",
+                        size_label(received),
+                        size_label(total)
+                    ))
+                })
+                .map(|report| Outcome::Inspected(report, "Managed JDK verified and selected."))
+            },
+        );
+    }
+
+    fn prepare_files(&mut self, offline: bool, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_profile().cloned() else {
+            return;
+        };
+        if pack_has_requirements(&profile) || self.profile_issue.is_some() {
+            return;
+        }
+        let Some(state) = self.setup.get(&profile.id) else {
+            return;
+        };
+        let digest = if offline {
+            state
+                .inspection
+                .as_ref()
+                .map(|i| i.metadata.metadata_sha1.clone())
+        } else {
+            state.plan.as_ref().map(|p| p.metadata_sha1.clone())
+        };
+        let Some(digest) = digest else { return };
+        let id = profile.id;
+        self.work(
+            Some(profile),
+            if offline {
+                "Verifying files"
+            } else {
+                "Installing instance"
+            },
+            true,
+            cx,
+            move |path, activity| {
+                let (receipt, refresh) = data::prepare(&path, id, &digest, offline, &activity)?;
+                Ok(Outcome::Files(receipt, refresh))
+            },
+        );
+    }
+    fn launch_sandbox(&mut self, cx: &mut Context<Self>) {
+        if self.busy() || self.popup.is_some() {
+            return;
+        }
+        let Some(profile) = self.selected_profile().cloned() else {
+            return;
+        };
+        let id = profile.id;
+        let version = profile.version;
+        self.work(
+            Some(profile),
+            "Running the protected sandbox sample",
+            false,
+            cx,
+            move |path, _| {
+                let report = data::inspect(&path, id, true)?;
+                if report.metadata.version != version.id() {
+                    return Err("The profile version changed. Recheck setup.".into());
+                }
+                let major = u16::try_from(report.metadata.java_major)
+                    .map_err(|_| "Unsupported Java major.")?;
+                carbon_session::run(&path, id, major)
+                    .map(Outcome::Sandbox)
+                    .map_err(|e| e.to_string())
+            },
+        );
+        if let Some(task) = self.task.as_mut() {
+            task.protects_session = true;
+        }
+    }
+
+    fn fixture_action(&mut self, action: Action, cx: &mut Context<Self>) {
+        if self.fixture_issue.is_some() || self.fixture_busy() || self.popup.is_some() {
+            return;
+        }
+        let target = match action {
+            Action::CreateSample => InstanceId::Sample,
+            Action::CreateRepeat => InstanceId::Repeat,
+            Action::CreateOverlap => InstanceId::Overlap,
+            Action::Review { instance }
+            | Action::Stage { instance }
+            | Action::Cancel { instance }
+            | Action::Interrupt { instance }
+            | Action::Resume { instance }
+            | Action::Activate { instance }
+            | Action::Rollback { instance }
+            | Action::Repair { instance }
+            | Action::SimulateMissing { instance }
+            | Action::SimulateCorruption { instance }
+            | Action::EditSetting { instance }
+            | Action::EditSave { instance } => instance,
+        };
+        if matches!(
+            action,
+            Action::CreateSample | Action::CreateRepeat | Action::CreateOverlap
+        ) {
+            self.choose_fixture(target);
+        }
+        self.start_work(
+            None,
+            Some(target),
+            "Changing fixture",
+            false,
+            cx,
+            move |path, _| carbon_store::apply(&path, action).map(Outcome::Fixtures),
+        );
+    }
+
+    fn pick(&mut self, kind: Picker, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy() || self.popup.is_some() || self.profile_issue.is_some() {
+            return;
+        }
+        let profile = match kind {
+            Picker::Client | Picker::Java => self.selected_profile().cloned(),
+            Picker::Pack => None,
+        };
+        if !matches!(kind, Picker::Pack) && profile.as_ref().is_none_or(pack_has_requirements) {
+            return;
+        }
+        let digest = profile
+            .as_ref()
+            .and_then(|profile| self.setup.get(&profile.id))
+            .and_then(|setup| setup.inspection.as_ref())
+            .map(|report| report.metadata.metadata_sha1.clone());
+        if matches!(kind, Picker::Java) && digest.is_none() {
+            return;
+        }
+        let (title, suffix) = match kind {
+            Picker::Pack => ("Import a local Minecraft pack", Some("mrpack")),
+            Picker::Client => ("Import the selected Minecraft client JAR", Some("jar")),
+            Picker::Java => ("Choose the Java home folder", None),
+        };
+        self.picker_open = true;
+        self.last_activity = None;
+        #[cfg(target_os = "linux")]
+        let selection = {
+            let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+                files: suffix.is_some(),
+                directories: suffix.is_none(),
+                multiple: false,
+                prompt: Some(title.into()),
+            });
+            async move {
+                match receiver.await {
+                    Ok(Ok(paths)) => Ok(paths.and_then(|paths| paths.into_iter().next())),
+                    Ok(Err(error)) => Err(format!("The desktop picker could not open. {error}")),
+                    Err(_) => Err("The desktop picker was interrupted.".to_owned()),
+                }
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let selection = {
+            let dialog = parent_file_dialog(rfd::AsyncFileDialog::new().set_title(title), window);
+            async move {
+                let result = if let Some(suffix) = suffix {
+                    dialog.add_filter(title, &[suffix]).pick_file().await
+                } else {
+                    dialog.pick_folder().await
+                };
+                Ok::<_, String>(result.map(|file| file.path().to_owned()))
+            }
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let selected = selection.await;
+            let _ = this.update_in(cx, move |this, window, cx| {
+                this.picker_open = false;
+                let selected = match selected {
+                    Ok(selected) => selected,
+                    Err(error) => {
+                        this.message = error;
+                        cx.notify();
+                        return;
+                    }
+                };
+                if let Some(path) = selected {
+                    match kind {
+                        Picker::Pack => this.review_pack(path, window, cx),
+                        Picker::Client => {
+                            let profile = profile.expect("client picker has an owning profile");
+                            let id = profile.id;
+                            this.work(
+                                Some(profile),
+                                "Verifying client JAR",
+                                false,
+                                cx,
+                                move |root, _| {
+                                    let file = carbon_vanilla::open_client_file(&path)?;
+                                    carbon_vanilla::import_client(&root, id, file)?;
+                                    data::inspect(&root, id, true).map(|report| Outcome::Inspected(report, "Client JAR verified and added to the shared cache."))
+                                },
+                            );
+                        }
+                        Picker::Java => {
+                            let (Some(profile), Some(digest)) = (profile, digest) else { return };
+                            let id = profile.id;
+                            this.work(Some(profile), "Checking selected Java folder", false, cx, move |root, _| {
+                                let metadata = carbon_vanilla::prepare(&root, id, true)?;
+                                if metadata.metadata_sha1 != digest {
+                                    return Err("The instance version changed. Check setup before choosing Java.".into());
+                                }
+                                carbon_setup::select_java_home(&root, metadata, path)
+                                    .map(|report| Outcome::Inspected(report, "Java folder verified and selected for this instance."))
+                            });
+                        }
+                    }
+                } else {
+                    this.message = "Selection cancelled.".into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn review_pack(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let work = cx
+            .background_executor()
+            .spawn(async move { carbon_pack::review_file(&path).map(|review| (path, review)) });
+        self.picker_open = true;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, move |this, window, cx| {
+                this.picker_open = false;
+                match result {
+                    Ok((path, review)) => {
+                        popup::open(this, popup::Kind::ImportPack(path, review), window, cx)
+                    }
+                    Err(error) => {
+                        this.message = error;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn editor(&mut self, mode: popup::Mode, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy() || self.popup.is_some() || self.profile_issue.is_some() {
+            return;
+        }
+        let profile = (mode != popup::Mode::Create)
+            .then(|| self.selected_profile().cloned())
+            .flatten();
+        if mode != popup::Mode::Create && profile.is_none() {
+            return;
+        }
+        if mode == popup::Mode::Clone && profile.as_ref().is_some_and(|p| p.imported_pack.is_some())
+        {
+            return;
+        }
+        popup::open(self, popup::Kind::Profile(mode, profile), window, cx);
+    }
+
+    fn set_profiles(&mut self, profiles: Vec<Profile>, id: Uuid, cx: &mut Context<Self>) {
+        self.profiles = profiles;
+        self.last_activity = Some(ActivityTarget::Personal(id));
+        self.message = "Instance saved.".to_owned();
+        self.choose_personal(id, cx);
+    }
+
+    fn pack_imported(
+        &mut self,
+        profile: Profile,
+        profiles: Result<Vec<Profile>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let id = profile.id;
+        match profiles {
+            Ok(profiles) => {
+                self.set_profiles(profiles, id, cx);
+                self.message =
+                    "Pack imported. Review the instance's remaining requirements.".into();
+            }
+            Err(error) => {
+                if !self.profiles.iter().any(|profile| profile.id == id) {
+                    self.profiles.push(profile);
+                }
+                self.choose_personal(id, cx);
+                self.profile_issue = Some(error);
+                self.message = "Pack imported. Reload the library to resume editing.".into();
+            }
+        }
+    }
+
+    fn frame_ready(&mut self, window: &mut Window) {
+        if self.profiles.is_empty() || self.selected_profile().is_none() {
+            return;
+        }
+        if let Some((began, destination)) = self.readiness.take() {
+            window.on_next_frame(move |_, _| {
+                let marker = format!("CARBON_LIBRARY_READY {}\n", began.elapsed().as_millis());
+                print!("{marker}");
+                let _ = std::io::stdout().flush();
+                if let Some(path) = destination
+                    && let Ok(mut file) = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path)
+                {
+                    let _ = file.write_all(marker.as_bytes());
+                }
+            });
+        }
+    }
+}
+
+fn pack_has_requirements(profile: &Profile) -> bool {
+    profile
+        .imported_pack
+        .as_ref()
+        .is_some_and(|pack| pack.loader.is_some() || pack.pending_files > 0)
+}
+
+fn is_narrow(window: &Window) -> bool {
+    window.viewport_size().width < px(736.)
+}
+
+#[cfg(windows)]
+fn parent_file_dialog(dialog: rfd::AsyncFileDialog, window: &Window) -> rfd::AsyncFileDialog {
+    use raw_window_handle::{
+        DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
+    };
+
+    struct Owner<'a>(&'a Window);
+
+    impl HasWindowHandle for Owner<'_> {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            HasWindowHandle::window_handle(self.0)
+        }
+    }
+
+    impl HasDisplayHandle for Owner<'_> {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            // GPUI 0.2.2 does not implement this on Windows. The Windows display
+            // handle is empty and can be constructed without borrowing native state.
+            Ok(DisplayHandle::windows())
+        }
+    }
+
+    dialog.set_parent(&Owner(window))
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn parent_file_dialog(dialog: rfd::AsyncFileDialog, window: &Window) -> rfd::AsyncFileDialog {
+    dialog.set_parent(window)
+}
+
+fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    shell::configure_renderer();
+    let began = Instant::now();
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let comparison = args.iter().any(|a| a == "--comparison-review");
+    let temporary = comparison || args.iter().any(|a| a == "--temporary-review");
+    let seed = comparison || args.iter().any(|a| a == "--seed-review");
+    let ready_file = args
+        .windows(2)
+        .find(|pair| pair[0] == "--ready-file")
+        .map(|pair| PathBuf::from(&pair[1]));
+    let data = DataRoot::open(temporary, seed, comparison)?;
+    let app = Application::new().with_assets(icons::Assets);
+    app.run(move |cx: &mut App| {
+        gpui_component::init(cx);
+        cx.bind_keys([
+            KeyBinding::new("ctrl-f", FindInstance, Some("CarbonDesktop")),
+            KeyBinding::new("ctrl-n", NewInstance, Some("CarbonDesktop")),
+            KeyBinding::new("ctrl-o", ImportPack, Some("CarbonDesktop")),
+            KeyBinding::new("ctrl-w", shell::CloseLauncher, Some("CarbonDesktop")),
+            KeyBinding::new("escape", Back, Some("CarbonDesktop")),
+            KeyBinding::new("f6", FocusActivity, Some("CarbonDesktop")),
+            KeyBinding::new("escape", popup::Close, Some("CarbonPopup")),
+            KeyBinding::new("enter", popup::Save, Some("CarbonPopup")),
+        ]);
+        shell::bind_menu_keys(cx);
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+        cx.open_window(
+            WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Carbon Desktop · GPUI".into()),
+                    ..Default::default()
+                }),
+                window_bounds: Some(shell::initial_bounds(&data.path, cx)),
+                window_min_size: Some(size(px(380.), px(420.))),
+                window_decorations: Some(WindowDecorations::Server),
+                app_id: Some("dev.carbonmine.gpui".into()),
+                show: !cfg!(windows),
+                focus: !cfg!(windows),
+                ..Default::default()
+            },
+            |window, cx| {
+                popup::set_app_icon(window);
+                let view = cx.new(|cx| Launcher::new(data, (began, ready_file), window, cx));
+                let weak = view.downgrade();
+                window.on_window_should_close(cx, move |window, cx| {
+                    weak.update(cx, |view, cx| view.allow_close(window, cx))
+                        .unwrap_or(true)
+                });
+                let root = cx.new(|cx| Root::new(view, window, cx));
+                #[cfg(windows)]
+                window.activate_window();
+                root
+            },
+        )
+        .expect("Open Carbon Desktop GPUI");
+        cx.activate(true);
+    });
+    Ok(())
+}

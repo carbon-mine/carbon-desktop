@@ -1,0 +1,4 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M8 2 2.5 5.2v5.6L8 14l5.5-3.2V5.2L8 2ZM2.5 5.2 8 8.4l5.5-3.2M8 8.4V14"/>
+</svg>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-carbon-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Carbon Desktop · Layout review</title>
+    <link rel="stylesheet" href="../../design-system/inherited/tokens.css">
+    <link rel="stylesheet" href="../../design-system/fonts.css">
+    <link rel="stylesheet" href="./layout-options.css">
+    <script defer src="./layout-options.js"></script>
+</head>
+<body>
+    <main>
+        <header class="review-intro">
+            <p class="eyebrow">Carbon Desktop · M0 owner review</p>
+            <h1>Choose the launcher layout</h1>
+            <p>Play a familiar instance, find one in a large library, and recover a download while doing something else. Each direction uses the same sample data.</p>
+        </header>
+        <section class="controls" aria-label="Compare layouts">
+            <label>Direction
+                <select id="direction">
+                    <option value="a">A · Split library</option>
+                    <option value="b">B · Library grid</option>
+                    <option value="c">C · Play home</option>
+                </select>
+            </label>
+            <label>Window
+                <select id="width">
+                    <option value="wide">Wide · up to 1,200 px</option>
+                    <option value="narrow">Narrow · 560 px</option>
+                    <option value="min">Reflow check · 320 px</option>
+                </select>
+            </label>
+            <label>Library
+                <select id="size">
+                    <option value="small">6 instances</option>
+                    <option value="large">72 instances</option>
+                    <option value="single">1 instance</option>
+                    <option value="empty">Empty · first launch</option>
+                </select>
+            </label>
+            <label>Theme
+                <select id="theme">
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                    <option value="system">System</option>
+                </select>
+            </label>
+        </section>
+        <p id="summary" class="comparison"></p>
+        <div class="signal" id="announce" role="status" aria-atomic="true"></div>
+        <div class="preview" id="preview" role="region" aria-label="Interactive launcher layout"></div>
+        <section class="notes" aria-labelledby="notes-heading">
+            <h2 id="notes-heading">Walk through the decision</h2>
+            <ol id="notes"></ol>
+            <p><a href="./README.md">Research, annotations and acceptance checks</a></p>
+        </section>
+    </main>
+    <dialog id="review" aria-labelledby="dialog-title">
+        <div id="dialog-content"></div>
+    </dialog>
+</body>
+</html>

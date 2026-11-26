@@ -1,0 +1,31 @@
+/* Carbon desktop control and surface colors from workspace.css and inherited/tokens.css. */
+.carbon-dialog {font-family: sans-serif; font-size: 14px;}
+.carbon-dialog.carbon-light {background-color:#f2f2f2; color:#161616;}
+.carbon-dialog.carbon-dark {background-color:#202020; color:#f4f4f4;}
+.carbon-dialog label {color:inherit;}
+.carbon-dialog .dialog-action-area {padding:0; margin:0;}
+.carbon-dialog entry, .carbon-dialog spinbutton, .carbon-dialog button {
+    border-radius:4px; border-width:1px; border-style:solid; min-height:28px;
+    background-image:none; text-shadow:none; box-shadow:none;
+}
+.carbon-dialog button {padding:2px 12px;}
+.carbon-dialog .dialog-action-area button {border-radius:0; min-height:38px;}
+.carbon-dialog entry {padding:1px 7px;}
+.carbon-dialog spinbutton entry {border:0;}
+.carbon-dialog.carbon-light entry, .carbon-dialog.carbon-light spinbutton, .carbon-dialog.carbon-light button {
+    background-color:#fff; color:#161616; border-color:#777777;
+}
+.carbon-dialog.carbon-dark entry, .carbon-dialog.carbon-dark spinbutton, .carbon-dialog.carbon-dark button {
+    background-color:#262626; color:#f4f4f4; border-color:#909090;
+}
+.carbon-dialog.carbon-light button:hover {background-color:#e6e6e6;}
+.carbon-dialog.carbon-dark button:hover {background-color:#383838;}
+.carbon-dialog.carbon-light button.suggested-action {color:#fff; background-color:#353535; border-color:#353535; font-weight:600;}
+.carbon-dialog.carbon-dark button.suggested-action {color:#181818; background-color:#d7d7d7; border-color:#d7d7d7; font-weight:600;}
+.carbon-dialog.carbon-light button.suggested-action:hover {background-color:#191919;}
+.carbon-dialog.carbon-dark button.suggested-action:hover {background-color:#eee;}
+.carbon-dialog.carbon-light *:focus {outline:2px solid #171717; outline-offset:-2px;}
+.carbon-dialog.carbon-dark *:focus {outline:2px solid #f4f4f4; outline-offset:-2px;}
+.carbon-dialog.carbon-light button.suggested-action:focus {outline-color:#fff; outline-offset:-4px;}
+.carbon-dialog.carbon-dark button.suggested-action:focus {outline-color:#181818; outline-offset:-4px;}
+.carbon-dialog .validation {color:inherit; font-weight:600;}

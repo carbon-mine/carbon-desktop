@@ -1,0 +1,22 @@
+{
+  "formatVersion": 1,
+  "game": "minecraft",
+  "name": "Forest preview fixture",
+  "versionId": "fixture-a",
+  "dependencies": {
+    "minecraft": "1.21.1"
+  },
+  "files": [
+    {
+      "path": "mods/forest.txt",
+      "fileSize": 14,
+      "hashes": {
+        "sha1": "1405f71d09f4bb2ddec7ac1b1b86e4dc414a9fcb",
+        "sha512": "54e9cbff620dd44b88d61ae04859d808f6d21b5127b061343eb6928604d123d14432d051dd1783f263299e4f2b25a8ea9628967c837e6e10334eb251860bd524"
+      },
+      "downloads": [
+        "https://example.invalid/forest.txt"
+      ]
+    }
+  ]
+}

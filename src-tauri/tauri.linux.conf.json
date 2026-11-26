@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "shortDescription": "Carbon Desktop Minecraft Java launcher",
+    "linux": {
+      "deb": {
+        "depends": ["libssl3t64 | libssl3", "ca-certificates", "xdg-utils", "xdg-desktop-portal", "xdg-desktop-portal-gtk | xdg-desktop-portal-backend"]
+      }
+    }
+  }
+}
