@@ -81,7 +81,6 @@ pub(super) fn for_display(
     id: gpui::DisplayId,
     _: Position,
 ) -> Option<gpui::Bounds<gpui::Pixels>> {
-    use gpui::{Bounds, point, px, size};
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSScreen;
 
@@ -107,8 +106,24 @@ pub(super) fn for_display(
 
     let left = visible.origin.x - frame.origin.x;
     let top = frame.size.height - (visible.origin.y - frame.origin.y) - visible.size.height;
-    let width = visible.size.width;
-    let height = visible.size.height;
+    screen_relative_area(display, left, top, visible.size.width, visible.size.height)
+}
+
+/// Places an AppKit work area onto GPUI's global top-left coordinates.
+///
+/// `NSScreen` reports `frame` and `visibleFrame` relative to that screen's own
+/// origin, while GPUI display bounds are global. Offset by the display origin
+/// before intersecting; on the primary display the offset is zero.
+#[cfg(any(target_os = "macos", test))]
+fn screen_relative_area(
+    display: gpui::Bounds<gpui::Pixels>,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    use gpui::{Bounds, point, px, size};
+
     if !(left.is_finite() && top.is_finite() && width.is_finite() && height.is_finite())
         || width <= 0.0
         || height <= 0.0
@@ -117,7 +132,10 @@ pub(super) fn for_display(
     }
 
     let work_area = Bounds::new(
-        point(px(left as f32), px(top as f32)),
+        point(
+            px(f32::from(display.origin.x) + left as f32),
+            px(f32::from(display.origin.y) + top as f32),
+        ),
         size(px(width as f32), px(height as f32)),
     );
     intersect(work_area, display)
@@ -244,7 +262,7 @@ fn x11_desktop_area(
     ))
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn intersect(
     a: gpui::Bounds<gpui::Pixels>,
     b: gpui::Bounds<gpui::Pixels>,
@@ -261,4 +279,34 @@ pub(super) fn for_display(
     // GPUI exposes no work area on other platforms. The caller falls back to
     // the primary display rectangle with a conservative frame inset.
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Bounds, point, px, size};
+
+    #[test]
+    fn a_secondary_screen_moves_its_work_area_onto_global_coordinates() {
+        // A screen left of the primary with a Dock along its bottom edge.
+        let display = Bounds::new(point(px(-1920.), px(0.)), size(px(1920.), px(1080.)));
+        let area = screen_relative_area(display, 0., 0., 1920., 1020.).unwrap();
+        assert_eq!(area.origin, point(px(-1920.), px(0.)));
+        assert_eq!(area.size, size(px(1920.), px(1020.)));
+    }
+
+    #[test]
+    fn a_left_dock_inset_stays_on_its_own_screen() {
+        let display = Bounds::new(point(px(-1920.), px(0.)), size(px(1920.), px(1080.)));
+        let area = screen_relative_area(display, 70., 0., 1850., 1080.).unwrap();
+        assert_eq!(area.origin, point(px(-1850.), px(0.)));
+        assert_eq!(area.size, size(px(1850.), px(1080.)));
+    }
+
+    #[test]
+    fn an_invalid_visible_frame_has_no_work_area() {
+        let display = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
+        assert!(screen_relative_area(display, 0., 0., 0., 1080.).is_none());
+        assert!(screen_relative_area(display, f64::NAN, 0., 1920., 1080.).is_none());
+    }
 }
