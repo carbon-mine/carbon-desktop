@@ -202,3 +202,77 @@ fn preexisting_package_access_is_preserved_and_blocks_preparation() {
     assert_eq!(lease.unfinished_run().unwrap(), None);
     assert_eq!(digest(&lease.state_path), scoped.digest());
 }
+
+#[test]
+fn atomic_save_replacement_retains_state_and_blocks_retirement_and_relaunch() {
+    let (root, id, instance) = fixture();
+    let mut lease = StateLease::acquire(root.path(), id).unwrap();
+    let initial_run = Uuid::new_v4();
+    let state = lease.prepare(initial_run).unwrap();
+    let world = state.join("saves").join("sample");
+    fs::create_dir_all(&world).unwrap();
+    let level = world.join("level.dat");
+    fs::write(&level, b"first save").unwrap();
+    lease.retire_after_drain(initial_run).unwrap();
+
+    let run = Uuid::new_v4();
+    lease.prepare(run).unwrap();
+    let old_identity = acl::open(&level, false).unwrap().identity;
+    let staged = world.join("level.dat_new");
+    fs::write(&staged, b"replacement save").unwrap();
+    let replacement = acl::open(&staged, false).unwrap().identity;
+    assert_ne!(old_identity, replacement);
+    fs::rename(&staged, &level).unwrap();
+    assert_eq!(acl::open(&level, false).unwrap().identity, replacement);
+
+    let canary = instance.join("game").join("untouched.dat");
+    fs::write(&canary, b"prior authored state").unwrap();
+    let before = [
+        digest(&state),
+        digest(&world),
+        digest(&level),
+        digest(&canary),
+    ];
+    assert!(lease
+        .retire_after_drain(run)
+        .unwrap_err()
+        .to_string()
+        .contains("identity changed"));
+    drop(lease);
+    let mut lease = StateLease::acquire(root.path(), id).unwrap();
+    assert_eq!(lease.unfinished_run().unwrap(), Some(run));
+    assert!(!lease.journal().unwrap().unwrap().armed);
+    assert!(lease.recover_unarmed().is_err());
+    assert!(lease.prepare(Uuid::new_v4()).is_err());
+    assert_eq!(lease.unfinished_run().unwrap(), Some(run));
+    assert_eq!(
+        [
+            digest(&state),
+            digest(&world),
+            digest(&level),
+            digest(&canary),
+        ],
+        before
+    );
+    assert_eq!(fs::read(&level).unwrap(), b"replacement save");
+    assert_eq!(fs::read(&canary).unwrap(), b"prior authored state");
+    assert!(!staged.exists());
+}
+
+#[test]
+fn unmarked_state_survives_an_interrupted_initial_enrollment() {
+    let (root, id, instance) = fixture();
+    let state = instance.join(STATE);
+    acl::create_low_directory(&state).unwrap();
+    let unfinished = state.join("options.txt");
+    fs::write(&unfinished, b"orphan canary").unwrap();
+    let before = (digest(&state), digest(&unfinished));
+
+    for _ in 0..2 {
+        assert!(StateLease::acquire(root.path(), id).is_err());
+        assert!(!instance.join(CONTROL).join(OWNER).exists());
+        assert!(!instance.join(CONTROL).join(JOURNAL).exists());
+        assert_eq!((digest(&state), digest(&unfinished)), before);
+        assert_eq!(fs::read(&unfinished).unwrap(), b"orphan canary");
+    }
+}
