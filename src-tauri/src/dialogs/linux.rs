@@ -435,40 +435,23 @@ pub(super) fn show_icon(
     label.set_mnemonic_widget(Some(&combo));
     combo.append_text("Automatic");
     for icon in catalog() {
-        combo.append_text(&icon.label);
+        combo.append_text(icon.label);
     }
     combo.set_active(Some(original.selected_index() as u32));
     let draft = Rc::new(RefCell::new(original.clone()));
-    let area = gtk::DrawingArea::new();
-    area.set_size_request(240, 84);
-    area.connect_draw({
-        let draft = draft.clone();
-        move |area, context| {
-            let art = draft.borrow().preview();
-            let bounds = area.allocation();
-            let scale = (bounds.width().min(bounds.height()) / 16).max(1) as f64;
-            let x0 = (f64::from(bounds.width()) - 12. * scale) / 2.;
-            let y0 = (f64::from(bounds.height()) - 12. * scale) / 2.;
-            let style = area.style_context();
-            let ink = style.color(style.state());
-            context.set_source_rgba(ink.red(), ink.green(), ink.blue(), ink.alpha());
-            for (y, row) in art.rows.iter().enumerate() {
-                for x in 0..12 {
-                    if row & (1 << (11 - x)) != 0 {
-                        context.rectangle(
-                            x0 + f64::from(x) * scale,
-                            y0 + y as f64 * scale,
-                            scale,
-                            scale,
-                        );
-                    }
-                }
-            }
-            let _ = context.fill();
-            gtk::glib::Propagation::Proceed
-        }
-    });
-    let description = Label::new(Some(&original.preview().label));
+    let previews: std::collections::HashMap<_, _> = catalog()
+        .iter()
+        .map(|icon| {
+            let image = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(icon.png))
+                .map_err(|_| "Could not display the instance icon.")?;
+            let scaled = image
+                .scale_simple(64, 64, gtk::gdk_pixbuf::InterpType::Nearest)
+                .ok_or("Could not size the instance icon.")?;
+            Ok::<_, String>((icon.id, scaled))
+        })
+        .collect::<Result<_, _>>()?;
+    let area = gtk::Image::from_pixbuf(previews.get(original.preview().id));
+    let description = Label::new(Some(original.preview().label));
     let reset = gtk::Button::with_mnemonic("Use _default");
     reset.set_halign(gtk::Align::Start);
     content.add(&label);
@@ -485,8 +468,9 @@ pub(super) fn show_icon(
         move |combo| {
             if let Some(index) = combo.active() {
                 draft.borrow_mut().choose(index as usize);
-                description.set_text(&draft.borrow().preview().label);
-                area.queue_draw();
+                let preview = draft.borrow().preview();
+                description.set_text(preview.label);
+                area.set_from_pixbuf(previews.get(preview.id));
             }
         }
     });

@@ -19,21 +19,22 @@ impl Popup {
                 Partition::Neutral
             };
             let button = compact_action(id.clone(), p, treatment, false, cx)
-                .w(px(95.))
-                .h(px(46.))
+                .w(px(101.))
+                .h(px(54.))
+                .when(selected, |button| button.border_2().border_color(p.accent))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .items_center()
                         .gap_1()
-                        .child(Icon::Builtin(icon).render(px(16.), p.ink))
-                        .child(icon.label.clone()),
+                        .child(Icon::Builtin(icon).render(px(24.), p.ink))
+                        .child(icon.label),
                 );
             choices = choices.child(self.control(
                 button,
                 id,
-                &icon.label,
+                icon.label,
                 Role::RadioButton,
                 false,
                 Some(selected),
@@ -74,7 +75,7 @@ impl Popup {
                             .items_center()
                             .justify_center()
                             .bg(p.layer)
-                            .child(Icon::Builtin(preview).render(px(30.), p.ink)),
+                            .child(Icon::Builtin(preview).render(px(36.), p.ink)),
                     )
                     .child(self.accessibility.text(
                         div().font_semibold().child(description.clone()),

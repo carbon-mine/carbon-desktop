@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use carbon_profiles::icons::{InstanceIcon, catalog};
-use gpui::{AssetSource, Pixels, Rgba, SharedString, Svg, prelude::*, svg};
+use gpui::{AnyElement, AssetSource, Pixels, Rgba, SharedString, img, prelude::*, svg};
 use std::borrow::Cow;
 
 #[derive(Clone, Copy)]
@@ -16,7 +16,7 @@ pub enum Icon {
 impl Icon {
     fn path(self) -> SharedString {
         match self {
-            Self::Builtin(icon) => return format!("instances/{}.svg", icon.id).into(),
+            Self::Builtin(icon) => return format!("instances/{}.png", icon.id).into(),
             Self::Add => "icons/add.svg",
             Self::Account => "icons/account.svg",
             Self::Play => "icons/play.svg",
@@ -26,12 +26,16 @@ impl Icon {
         .into()
     }
 
-    pub fn render(self, size: Pixels, color: Rgba) -> Svg {
+    pub fn render(self, size: Pixels, color: Rgba) -> AnyElement {
+        if let Self::Builtin(_) = self {
+            return img(self.path()).flex_none().size(size).into_any_element();
+        }
         svg()
             .path(self.path())
             .flex_none()
             .size(size)
             .text_color(color)
+            .into_any_element()
     }
 }
 
@@ -52,23 +56,12 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         if let Some(id) = path
             .strip_prefix("instances/")
-            .and_then(|id| id.strip_suffix(".svg"))
+            .and_then(|id| id.strip_suffix(".png"))
         {
-            return Ok(catalog().iter().find(|icon| icon.id == id).map(|icon| {
-                use std::fmt::Write;
-                let mut svg = String::from(
-                    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d=""#,
-                );
-                for (y, row) in icon.rows.iter().enumerate() {
-                    for x in 0..12 {
-                        if row & (1 << (11 - x)) != 0 {
-                            write!(svg, "M{x} {y}h1v1h-1z").expect("write SVG path");
-                        }
-                    }
-                }
-                svg.push_str(r#""/></svg>"#);
-                Cow::Owned(svg.into_bytes())
-            }));
+            return Ok(catalog()
+                .iter()
+                .find(|icon| icon.id == id)
+                .map(|icon| Cow::Borrowed(icon.png)));
         }
         Ok(ICONS.iter().find_map(|(icon, bytes)| {
             (icon.path().as_ref() == path).then_some(Cow::Borrowed(*bytes))

@@ -89,7 +89,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
     let result = attached.clone();
     let width = px(480.);
     let (height, minimum_height) = match &kind {
-        Kind::Icon(_) => (368., 315.),
+        Kind::Icon(_) => (466., 330.),
         Kind::Profile(..) => (417., 340.),
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),

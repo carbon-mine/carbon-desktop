@@ -57,11 +57,11 @@ impl Style {
         }
     }
 
-    pub(super) unsafe fn preview_colors(self) -> (u32, u32) {
+    pub(super) unsafe fn preview_background(self) -> u32 {
         if self.native {
-            (GetSysColor(COLOR_WINDOW), GetSysColor(COLOR_WINDOWTEXT))
+            GetSysColor(COLOR_WINDOW)
         } else {
-            (self.surface, self.ink)
+            self.surface
         }
     }
 

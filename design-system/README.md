@@ -118,7 +118,11 @@ keyboard paths, theme checks and the packaged-app verification still required.
 
 ## Instance icons
 
-The eight 12×12 pixel masks in `instance-icons.json` are original Carbon Desktop artwork, distributed under this repository’s MPL-2.0 license. Each mask is drawn in the foreground color of its surface. The leftmost pixel is bit 11 of each row. The GPUI, WebView and native platform pickers use this same catalog. IDs are persistent profile preferences and must remain stable. A profile with an unavailable ID displays its automatic icon until the player chooses a replacement.
+The 16 illustrations in `instance-icons/` are original Carbon Desktop artwork licensed under MPL-2.0. Each PNG preserves a 16-by-16 pixel drawing at six times its original size. Creature portraits, tools and magical or mechanical objects share a dark outline, upper-left light and cool shadow. Both libraries, detail headers and native pickers display the same colored artwork in light and dark appearances. Command glyphs retain the shell foreground color.
+
+Store the chosen built-in ID in the profile. Keep these IDs stable across releases. If a newer ID is unavailable, display the automatic icon and preserve the stored preference until the player changes it.
+
+Windows GPUI captures show a [library with eight disposable instances](../docs/images/gpui-instance-sprites.png) and the [native icon picker in light appearance](../docs/images/gpui-instance-icon-picker.png).
 
 ## Refresh and verify
 

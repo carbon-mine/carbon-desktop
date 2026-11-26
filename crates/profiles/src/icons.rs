@@ -1,23 +1,48 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Original Carbon instance artwork shared by both desktop editions.
 use super::{storage, Profile};
-use serde::Deserialize;
-use std::{path::Path, sync::LazyLock};
+use std::path::Path;
 use uuid::Uuid;
 
-#[derive(Deserialize)]
 pub struct InstanceIcon {
-    pub id: String,
-    pub label: String,
-    pub rows: [u16; 12],
+    pub id: &'static str,
+    pub label: &'static str,
+    pub png: &'static [u8],
+}
+
+macro_rules! icon {
+    ($id:literal, $label:literal) => {
+        InstanceIcon {
+            id: $id,
+            label: $label,
+            png: include_bytes!(concat!(
+                "../../../design-system/instance-icons/",
+                $id,
+                ".png"
+            )),
+        }
+    };
 }
 
 pub fn catalog() -> &'static [InstanceIcon] {
-    static ICONS: LazyLock<Vec<InstanceIcon>> = LazyLock::new(|| {
-        serde_json::from_str(include_str!("../../../design-system/instance-icons.json"))
-            .expect("the built-in icon catalog must be valid")
-    });
-    &ICONS
+    &[
+        icon!("block", "Meadow block"),
+        icon!("fox", "Red fox"),
+        icon!("frog", "Pond frog"),
+        icon!("pack", "Field pack"),
+        icon!("pine", "Pine"),
+        icon!("golem", "Copper golem"),
+        icon!("pickaxe", "Prism pick"),
+        icon!("beacon", "Beacon"),
+        icon!("ember", "Campfire"),
+        icon!("potion", "Elixir"),
+        icon!("gear", "Copper gear"),
+        icon!("crystal", "Amethyst"),
+        icon!("summit", "Alpine peak"),
+        icon!("compass", "Compass"),
+        icon!("tome", "Spellbook"),
+        icon!("mooncap", "Mooncap"),
+    ]
 }
 
 fn known(id: &str) -> Option<&'static InstanceIcon> {
@@ -63,7 +88,7 @@ impl IconDraft {
     pub fn selected_index(&self) -> usize {
         catalog()
             .iter()
-            .position(|icon| Some(icon.id.as_str()) == self.selected.as_deref())
+            .position(|icon| Some(icon.id) == self.selected.as_deref())
             .map_or(0, |index| index + 1)
     }
 
@@ -71,7 +96,7 @@ impl IconDraft {
         if index == 0 {
             self.selected = None;
         } else if let Some(icon) = catalog().get(index - 1) {
-            self.selected = Some(icon.id.clone());
+            self.selected = Some(icon.id.to_owned());
         }
     }
 
