@@ -28,6 +28,33 @@ fn add(name: &str, address: &str) -> TargetAction {
     }
 }
 
+fn save_root(root: &Path, id: Uuid) -> PathBuf {
+    root.join("instances-v1")
+        .join(id.to_string())
+        .join("game/saves")
+}
+
+fn add_world(saves: &Path, name: &str) {
+    let world = saves.join(name);
+    fs::create_dir_all(&world).unwrap();
+    fs::write(world.join("level.dat"), b"synthetic level").unwrap();
+}
+
+fn preferences_path(root: &Path, id: Uuid) -> PathBuf {
+    root.join("personal").join(format!("targets-{id}.json"))
+}
+
+fn world_key(name: &str) -> TargetKey {
+    TargetKey::World(name.to_owned())
+}
+
+fn world_label(directory: &str, label: Option<&str>) -> TargetAction {
+    TargetAction::LabelWorld {
+        directory: directory.to_owned(),
+        label: label.map(str::to_owned),
+    }
+}
+
 #[test]
 fn mixed_targets_and_selection_remain_private_across_reloads_and_binding_changes() {
     let temp = tempfile::tempdir().unwrap();
@@ -324,4 +351,407 @@ fn clearing_an_unavailable_selection_survives_restoring_the_directory() {
     fs::rename(moved, &world).unwrap();
     assert!(instance_targets(root, id).unwrap().selected.is_none());
     assert_eq!(fs::read(world.join("level.dat")).unwrap(), b"Player canary");
+}
+
+#[test]
+fn label_capacity_survives_a_missing_save_until_explicitly_forgotten() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let id = create(&root, "Label capacity");
+    let saves = save_root(&root, id);
+    for index in 0..MAX_WORLD_LABELS {
+        add_world(&saves, &format!("World {index:02}"));
+    }
+    let mut snapshot = instance_targets(&root, id).unwrap();
+    assert_eq!(snapshot.worlds.len(), MAX_WORLD_LABELS);
+    assert!(snapshot.world_issue.is_none());
+    assert!(snapshot.missing_labels.is_empty());
+
+    for index in 0..MAX_WORLD_LABELS {
+        let directory = format!("World {index:02}");
+        snapshot = change_instance_targets(
+            &root,
+            id,
+            snapshot.revision,
+            world_label(&directory, Some(&format!("Named {index:02}"))),
+        )
+        .unwrap();
+    }
+    assert_eq!(snapshot.worlds.len(), MAX_WORLD_LABELS);
+    assert!(snapshot.worlds.iter().all(|world| match &world.key {
+        TargetKey::World(directory) => world.name != *directory,
+        TargetKey::Server(_) => false,
+    }));
+    assert!(snapshot.missing_labels.is_empty());
+
+    // A folder that disappears keeps its label and its slot.
+    fs::remove_dir_all(saves.join("World 00")).unwrap();
+    add_world(&saves, "World new");
+    let missing = instance_targets(&root, id).unwrap();
+    assert_eq!(missing.worlds.len(), MAX_WORLD_LABELS);
+    assert_eq!(
+        missing.missing_labels.get("World 00").map(String::as_str),
+        Some("Named 00")
+    );
+    assert!(change_instance_targets(
+        &root,
+        id,
+        missing.revision,
+        world_label("World new", Some("Named new")),
+    )
+    .is_err());
+
+    // A save that returns must not lose its label to a stale cleanup request.
+    add_world(&saves, "World 00");
+    let returned = instance_targets(&root, id).unwrap();
+    assert!(returned.missing_labels.is_empty());
+    assert!(change_instance_targets(
+        &root,
+        id,
+        missing.revision,
+        TargetAction::ForgetMissingLabel("World 00".into()),
+    )
+    .is_err());
+    assert_eq!(
+        instance_targets(&root, id)
+            .unwrap()
+            .worlds
+            .into_iter()
+            .find(|world| world.key == world_key("World 00"))
+            .unwrap()
+            .name,
+        "Named 00"
+    );
+
+    // Once confirmed missing again, the explicit cleanup reclaims the slot.
+    fs::remove_dir_all(saves.join("World 00")).unwrap();
+    let forgotten = change_instance_targets(
+        &root,
+        id,
+        missing.revision,
+        TargetAction::ForgetMissingLabel("World 00".into()),
+    )
+    .unwrap();
+    assert!(!forgotten.missing_labels.contains_key("World 00"));
+    let added = change_instance_targets(
+        &root,
+        id,
+        forgotten.revision,
+        world_label("World new", Some("Named new")),
+    )
+    .unwrap();
+    assert!(added
+        .worlds
+        .iter()
+        .any(|world| world.key == world_key("World new") && world.name == "Named new"));
+
+    // Removing a label through the explicit label action is also allowed for a
+    // confirmed missing world and only then reclaims the slot.
+    fs::remove_dir_all(saves.join("World 01")).unwrap();
+    let missing_again = instance_targets(&root, id).unwrap();
+    assert_eq!(
+        missing_again
+            .missing_labels
+            .get("World 01")
+            .map(String::as_str),
+        Some("Named 01")
+    );
+    let reclaimed = change_instance_targets(
+        &root,
+        id,
+        missing_again.revision,
+        world_label("World 01", None),
+    )
+    .unwrap();
+    assert!(!reclaimed.missing_labels.contains_key("World 01"));
+}
+
+#[test]
+fn over_limit_save_scan_keeps_destination_crud_and_revision_guards() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let id = create(&root, "Busy saves");
+    let saves = save_root(&root, id);
+    fs::create_dir_all(&saves).unwrap();
+    for index in 0..=MAX_WORLD_ENTRIES {
+        fs::File::create(saves.join(format!("entry-{index:04}"))).unwrap();
+    }
+    let start = instance_targets(&root, id).unwrap();
+    assert!(start.world_issue.is_some());
+    assert!(start.worlds.is_empty());
+    assert!(start.missing_labels.is_empty());
+    assert!(start.destinations.is_empty());
+
+    let first =
+        change_instance_targets(&root, id, start.revision, add("One", "one.example.net")).unwrap();
+    let second = change_instance_targets(
+        &root,
+        id,
+        first.revision,
+        add("Two", "two.example.net:25566"),
+    )
+    .unwrap();
+    let first_id = second.destinations[0].id;
+    let second_id = second.destinations[1].id;
+    let chosen = change_instance_targets(
+        &root,
+        id,
+        second.revision,
+        TargetAction::Select(Some(TargetKey::Server(first_id))),
+    )
+    .unwrap();
+    assert_eq!(chosen.selected, Some(TargetKey::Server(first_id)));
+    let removed = change_instance_targets(
+        &root,
+        id,
+        chosen.revision,
+        TargetAction::RemoveDestination(first_id),
+    )
+    .unwrap();
+    assert_eq!(removed.selected, None);
+    assert_eq!(removed.destinations[0].id, second_id);
+    let remaining = change_instance_targets(
+        &root,
+        id,
+        removed.revision,
+        TargetAction::Select(Some(TargetKey::Server(second_id))),
+    )
+    .unwrap();
+    let cleared =
+        change_instance_targets(&root, id, remaining.revision, TargetAction::Select(None)).unwrap();
+    assert_eq!(cleared.selected, None);
+
+    // Stale revisions still guard destination changes.
+    assert!(change_instance_targets(
+        &root,
+        id,
+        second.revision,
+        TargetAction::RemoveDestination(second_id),
+    )
+    .is_err());
+    // Save targets stay fail closed while the scan is over the limit.
+    assert!(change_instance_targets(
+        &root,
+        id,
+        cleared.revision,
+        TargetAction::Select(Some(world_key("entry-0000"))),
+    )
+    .is_err());
+    assert!(change_instance_targets(
+        &root,
+        id,
+        cleared.revision,
+        world_label("entry-0000", Some("Hidden")),
+    )
+    .is_err());
+    assert_eq!(fs::read_dir(&saves).unwrap().count(), MAX_WORLD_ENTRIES + 1);
+    assert!(instance_targets(&root, id).unwrap().world_issue.is_some());
+}
+
+#[test]
+fn incomplete_scan_is_distinct_from_empty_and_restores_the_saved_world_choice() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+
+    let empty_id = create(&root, "Empty saves");
+    fs::create_dir_all(save_root(&root, empty_id)).unwrap();
+    let empty = instance_targets(&root, empty_id).unwrap();
+    assert!(empty.world_issue.is_none());
+    assert!(empty.worlds.is_empty());
+    assert!(empty.missing_labels.is_empty());
+
+    let id = create(&root, "Incomplete saves");
+    let saves = save_root(&root, id);
+    add_world(&saves, "Home");
+    let listed = instance_targets(&root, id).unwrap();
+    assert!(listed.world_issue.is_none());
+    let chosen = change_instance_targets(
+        &root,
+        id,
+        listed.revision,
+        TargetAction::Select(Some(world_key("Home"))),
+    )
+    .unwrap();
+    let with_server = change_instance_targets(
+        &root,
+        id,
+        chosen.revision,
+        add("Early", "early.example.net"),
+    )
+    .unwrap();
+    let preferences = preferences_path(&root, id);
+    let before = fs::read(&preferences).unwrap();
+
+    let backup = root.join("saves-backup");
+    fs::rename(&saves, &backup).unwrap();
+    fs::write(&saves, b"not a directory").unwrap();
+
+    let broken = instance_targets(&root, id).unwrap();
+    assert!(broken.world_issue.is_some());
+    assert!(broken.worlds.is_empty());
+    assert_eq!(broken.selected, Some(world_key("Home")));
+    assert!(broken.missing_labels.is_empty());
+    assert_eq!(broken.revision, with_server.revision);
+    assert_eq!(broken.destinations.len(), 1);
+    // Reads never write.
+    assert_eq!(fs::read(&preferences).unwrap(), before);
+    assert!(instance_targets(&root, id).unwrap().world_issue.is_some());
+    assert_eq!(fs::read(&preferences).unwrap(), before);
+
+    // Save operations fail closed while destinations remain revision guarded.
+    assert!(change_instance_targets(
+        &root,
+        id,
+        with_server.revision,
+        TargetAction::Select(Some(world_key("Home"))),
+    )
+    .is_err());
+    assert!(change_instance_targets(
+        &root,
+        id,
+        with_server.revision,
+        world_label("Home", Some("Mine")),
+    )
+    .is_err());
+    let later = change_instance_targets(
+        &root,
+        id,
+        with_server.revision,
+        add("Late", "late.example.net"),
+    )
+    .unwrap();
+    assert_eq!(later.destinations.len(), 2);
+    assert_eq!(later.selected, Some(world_key("Home")));
+    // The failed save operations did not overwrite the stored world choice.
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&preferences).unwrap()).unwrap();
+    assert_eq!(stored["selected"]["id"], "Home");
+    assert!(change_instance_targets(
+        &root,
+        id,
+        with_server.revision,
+        add("Stale", "stale.example.net"),
+    )
+    .is_err());
+
+    fs::remove_file(&saves).unwrap();
+    fs::rename(&backup, &saves).unwrap();
+    let recovered = instance_targets(&root, id).unwrap();
+    assert!(recovered.world_issue.is_none());
+    assert_eq!(recovered.worlds.len(), 1);
+    assert_eq!(recovered.selected, Some(world_key("Home")));
+    assert_eq!(recovered.revision, later.revision);
+    assert_eq!(recovered.destinations.len(), 2);
+}
+
+#[test]
+fn absent_and_special_level_data_are_not_worlds_or_scan_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let id = create(&root, "Level data");
+    let saves = save_root(&root, id);
+    add_world(&saves, "Good");
+    fs::create_dir_all(saves.join("No level.dat")).unwrap();
+    fs::create_dir_all(saves.join("Directory level.dat/level.dat")).unwrap();
+
+    let targets = instance_targets(&root, id).unwrap();
+    assert!(targets.world_issue.is_none());
+    assert_eq!(
+        targets
+            .worlds
+            .iter()
+            .map(|world| world.key.clone())
+            .collect::<Vec<_>>(),
+        vec![world_key("Good")]
+    );
+    assert!(targets.missing_labels.is_empty());
+    // A present folder without usable level data cannot be mistaken for a missing
+    // labeled save or labeled as a world.
+    assert!(change_instance_targets(
+        &root,
+        id,
+        targets.revision,
+        world_label("No level.dat", None),
+    )
+    .is_err());
+    assert!(change_instance_targets(
+        &root,
+        id,
+        targets.revision,
+        world_label("No level.dat", Some("Nope")),
+    )
+    .is_err());
+
+    let file = root.join("plain-file");
+    fs::write(&file, b"").unwrap();
+    assert_eq!(inspect(&file), Ok(EntryKind::File));
+    assert_eq!(inspect(&root.join("absent")), Ok(EntryKind::Absent));
+    assert!(inspect(Path::new("invalid\0path")).is_err());
+}
+
+#[test]
+fn server_changes_and_reads_leave_world_labels_and_saves_untouched() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let id = create(&root, "Labels stay");
+    let saves = save_root(&root, id);
+    add_world(&saves, "Home");
+    add_world(&saves, "Gone");
+
+    let targets = instance_targets(&root, id).unwrap();
+    let targets = change_instance_targets(
+        &root,
+        id,
+        targets.revision,
+        world_label("Home", Some("My home")),
+    )
+    .unwrap();
+    change_instance_targets(
+        &root,
+        id,
+        targets.revision,
+        world_label("Gone", Some("Keep me")),
+    )
+    .unwrap();
+    fs::remove_dir_all(saves.join("Gone")).unwrap();
+
+    let preferences = preferences_path(&root, id);
+    let before_read = fs::read(&preferences).unwrap();
+    let missing = instance_targets(&root, id).unwrap();
+    assert_eq!(
+        missing.missing_labels.get("Gone").map(String::as_str),
+        Some("Keep me")
+    );
+    assert_eq!(fs::read(&preferences).unwrap(), before_read);
+
+    let added = change_instance_targets(
+        &root,
+        id,
+        missing.revision,
+        add("Server", "server.example.net"),
+    )
+    .unwrap();
+    let server = added.destinations[0].id;
+    let selected = change_instance_targets(
+        &root,
+        id,
+        added.revision,
+        TargetAction::Select(Some(TargetKey::Server(server))),
+    )
+    .unwrap();
+    assert_eq!(selected.selected, Some(TargetKey::Server(server)));
+    assert_eq!(
+        selected.missing_labels.get("Gone").map(String::as_str),
+        Some("Keep me")
+    );
+    assert_eq!(
+        fs::read(saves.join("Home/level.dat")).unwrap(),
+        b"synthetic level"
+    );
+    assert!(!saves.join("Gone").exists());
+
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&preferences).unwrap()).unwrap();
+    assert_eq!(stored["world_labels"]["Gone"], "Keep me");
+    assert_eq!(stored["world_labels"]["Home"], "My home");
 }
