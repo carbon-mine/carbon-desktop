@@ -930,26 +930,19 @@ impl Launcher {
             "Setup required"
         };
         let primary_label = Self::primary_label(profile);
-        let play = compact_action("play", p, Partition::Neutral, self.popup.is_some(), cx)
-            .min_w(px(82.))
-            .child(
-                row()
-                    .gap_1()
-                    .font_semibold()
-                    .text_color(p.ink)
-                    .child(Icon::Play.render(px(16.), p.ink))
-                    .child(primary_label),
-            );
-        let play = self.control(
-            play,
-            "play",
-            primary_label,
-            Role::Button,
-            self.popup.is_some(),
-            None,
-            cx,
-            Self::activate_primary,
-        );
+        let play = theme::launch_action(primary_label, p, self.popup.is_some(), cx);
+        let play = self
+            .control(
+                play,
+                "play",
+                primary_label,
+                Role::Button,
+                self.popup.is_some(),
+                None,
+                cx,
+                Self::activate_primary,
+            )
+            .with_focus_outline(p.ink());
         col()
             .child(
                 div()
@@ -958,7 +951,7 @@ impl Launcher {
                     .gap_3()
                     .px_5()
                     .py_4()
-                    .bg(p.instance_background())
+                    .bg(p.layer)
                     .child(
                         row()
                             .min_w_0()
