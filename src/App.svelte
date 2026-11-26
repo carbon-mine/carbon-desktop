@@ -115,7 +115,7 @@
   let accountRequirement = $derived.by(() => {
     switch (accountStatus) {
       case 'unsupported': return 'Minecraft account controls are unavailable on this platform.'
-      case 'unavailable': return 'Microsoft sign-in requires Carbon’s approved application registration.'
+      case 'unavailable': return 'Microsoft sign-in is unavailable. Open Microsoft account for details.'
       case 'verified': return 'Microsoft account verified.'
       case 'signIn':
       case 'available': return 'Verify your Minecraft account to check Java Edition entitlement.'
