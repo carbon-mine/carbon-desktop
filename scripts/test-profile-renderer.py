@@ -12,7 +12,6 @@ from playwright.sync_api import expect, sync_playwright
 BRIDGE = """
 (() => {
   const id = '0ddfed53-76d4-47f4-ab31-8cd392aa4a03';
-  const addedId = 'a1cb6fd0-42cb-475a-a198-177a28cc4c15';
   const profiles = [{id, name:'Personal world', version:'1.21.1',
     memoryMiB:2048, windowWidth:1280, windowHeight:720},
     {id:'d8221151-316b-41d2-b3ce-3db6072ac886', name:'Legacy creative', version:'1.20.4',
@@ -30,6 +29,7 @@ BRIDGE = """
     requests: [],
     installReject: null,
     clientPicks: 0,
+    dialogName: null,
     emit(event, payload) { handlers[listeners[event]]({event, payload}); }
   };
   const report = {
@@ -37,7 +37,7 @@ BRIDGE = """
     clientBytes:27117745, assetIndexBytes:434760, libraryCount:45, metadataSha1:'test-digest',
     origin:'network', runtime:{state:'missing', version:null, source:null},
     managedJava:{status:'available', major:21, release:'21.0.9+10', downloadBytes:5000},
-    clientFile:{status:'missing'},
+    clientFile:{status:'missing'}, gameFilesPrepared:false, gameFilesCached:false, sessionSupported:false,
     blockedReasons:['Minecraft game installation and protected game launch are pending.', 'Microsoft sign-in is pending approval.']
   };
   window.reviewTest = state;
@@ -57,7 +57,7 @@ BRIDGE = """
         return structuredClone(command === 'fixture_library' ? library : profiles);
       }
       if (command === 'inspect_vanilla_profile') {
-        if (args.offline) throw 'No verified Minecraft metadata in the cache.';
+        if (args.offline && (!report.gameFilesPrepared || args.profileId !== id)) throw 'No verified Minecraft metadata in the cache.';
         if (state.failedAction === command) throw 'Could not verify the cached version metadata.';
         return structuredClone(report);
       }
@@ -75,6 +75,17 @@ BRIDGE = """
       }
       if (command === 'cancel_java_install') {
         state.installReject('Java preparation was cancelled. You can retry from the profile.');
+        return;
+      }
+      if (command === 'plan_game_files' || command === 'prepare_game_files') {
+        const files = {profileId:id, version:report.version, platform:'windows-x64',
+          metadataSha1:report.metadataSha1, uniqueFiles:7, totalBytes:8192};
+        if (command === 'plan_game_files') return {...files, libraryFiles:2, assetObjects:3, assetNames:3, loggingFiles:0};
+        if (args.metadataSha1 !== files.metadataSha1) throw 'Unexpected download revision.';
+        report.gameFilesPrepared = true;
+        report.gameFilesCached = true;
+        report.clientFile = {status:'verified'};
+        return {...files, fetchedBytes:args.offline ? 0 : 8192, reusedBytes:args.offline ? 8192 : 0};
       }
       if (command === 'import_vanilla_client') {
         if (state.clientPicks++ === 0) return null;
@@ -88,13 +99,16 @@ BRIDGE = """
         if (state.failedAction === command) throw 'The response was lost after the fixture update.';
         return structuredClone(library);
       }
-      if (command === 'personal_action') {
-        const {kind, ...settings} = args.action;
-        if (kind === 'create') profiles.push({id:addedId, ...settings});
+      if (command === 'edit_profile_dialog') {
+        if (state.dialogName === null) return null;
+        const created = {...profiles[0], id:'a1cb6fd0-42cb-475a-a198-177a28cc4c15', name:state.dialogName};
+        profiles.push(created);
+        state.dialogName = null;
         if (state.failedAction === command) throw 'The response was lost after the personal update.';
-        return structuredClone(profiles);
+        return {profiles:structuredClone(profiles), selectedId:created.id};
       }
-      if (command === 'review_pack') return null;
+      if (command === 'import_pack' || command === 'apply_desktop_theme') return null;
+      if (command === 'minecraft_account_status') return 'unavailable';
       throw new Error('Unexpected command ' + command);
     }
   };
@@ -136,7 +150,6 @@ def test_independent_initial_loads(browser, address):
     expect(page.get_by_role("alert")).to_contain_text("Fixture library needs attention")
     expect(page.get_by_role("button", name="Install Forest sample")).to_have_count(0)
     expect(page.get_by_role("button", name="New instance")).to_be_enabled()
-    expect(page.get_by_role("button", name="Preview pack")).to_be_enabled()
     page.get_by_role("button", name="Reload library").click()
     expect(page.get_by_role("button", name="Forest Generation A")).to_be_visible()
     expect(page.get_by_role("button", name="New instance")).to_be_enabled()
@@ -155,11 +168,9 @@ def test_namespace_reload_after_mutation(browser, address):
     page.get_by_role("button", name="Reload library").click()
     expect(page.get_by_role("button", name="Stage update")).to_be_enabled()
 
-    page.evaluate("reviewTest.failedAction = 'personal_action'")
+    page.evaluate("reviewTest.failedAction = 'edit_profile_dialog'; reviewTest.dialogName = 'Saved before reply'")
     page.get_by_role("button", name="Library", exact=True).click()
     page.get_by_role("button", name="New instance").click()
-    page.locator("#profile-name").fill("Saved before reply")
-    page.get_by_role("button", name="Create profile", exact=True).click()
     expect(page.get_by_role("alert")).to_contain_text("Reload personal profiles")
     expect(page.get_by_role("button", name="New instance")).to_be_disabled()
     page.get_by_role("button", name="Review tools").click()
@@ -171,146 +182,121 @@ def test_namespace_reload_after_mutation(browser, address):
     page.close()
 
 
-def test_profile_name_length(browser, address):
+def test_profile_dialog_return(browser, address):
     page = open_case(browser, address)
+    # The native form owns validation. The WebView consumes its typed result.
+    name = "🌲" * 80
+    page.evaluate("(name) => {reviewTest.dialogName = name}", name)
     page.get_by_role("button", name="New instance").click()
-    dialog = page.get_by_role("dialog")
-    name = dialog.locator("#profile-name")
-    memory = dialog.locator("#profile-memory")
-    save = dialog.get_by_role("button", name="Create profile", exact=True)
-    name.fill("🌲" * 81)
-    expect(name).to_have_attribute("aria-invalid", "true")
-    expect(save).to_be_disabled()
-    name.fill("🌲" * 80)
-    expect(name).to_have_attribute("aria-invalid", "false")
-    expect(memory).to_have_value("2048")
-    expect(save).to_be_enabled()
-    save.click()
-    expect(page.get_by_role("heading", name="🌲" * 80)).to_be_focused()
+    expect(page.get_by_role("heading", name=name, exact=True)).to_be_focused()
     page.get_by_role("tab", name="Settings").click()
-    page.get_by_role("button", name="Clone profile").click()
-    expect(dialog.locator("#profile-name")).to_have_value("🌲" * 75 + " copy")
-    page.keyboard.press("Escape")
-    expect(page.get_by_role("button", name="Clone profile")).to_be_focused()
+    clone = page.get_by_role("button", name="Clone profile")
+    clone.click()
+    page.wait_for_function("reviewTest.requests.some(([cmd, args]) => cmd === 'edit_profile_dialog' && args.mode === 'clone' && args.profileId === 'a1cb6fd0-42cb-475a-a198-177a28cc4c15')")
+    expect(clone).to_be_focused()
     page.close()
 
 
-def test_setup_and_native_menu(browser, address, captures):
+def test_install(browser, address):
     page = open_case(browser, address)
-    expect(page.get_by_role("button", name="Check setup")).to_be_enabled()
-    assert page.evaluate("reviewTest.requests.some(([name, args]) => name === 'inspect_vanilla_profile' && args.offline)")
+    review = page.get_by_role("button", name="Review install")
+    expect(review).to_be_enabled()
+    assert page.evaluate("reviewTest.requests.some(([cmd, args]) => cmd === 'inspect_vanilla_profile' && args.offline)")
+    review.click()
+    expect(page.get_by_role("heading", name="Install review")).to_be_focused()
+    install = page.get_by_role("button", name="Install instance")
+    install.click()
+    progress = page.get_by_role("progressbar", name="Managed Java download")
+    expect(progress).to_have_attribute("value", "2048")
+    page.get_by_role("button", name="Legacy creative Vanilla").click()
+    expect(progress).to_have_count(0)
+    page.get_by_role("list", name="Local instances").get_by_role("button", name="Personal world Vanilla").click()
+    expect(progress).to_have_attribute("value", "2048")
+    page.get_by_role("button", name="Cancel Java preparation").click()
+    expect(page.get_by_role("status")).to_contain_text("Java preparation was cancelled")
+    assert not page.evaluate("reviewTest.requests.some(([cmd]) => cmd === 'prepare_game_files')")
+    install.click()
+    expect(page.get_by_role("heading", name="Game files ready")).to_be_visible()
+    page.get_by_role("button", name="Verify game files").click()
+    expect(page.get_by_role("status")).to_contain_text("7 game files verified")
+    assert page.evaluate("reviewTest.requests.some(([cmd, args]) => cmd === 'prepare_game_files' && args.offline)")
+    page.get_by_role("button", name="Play", exact=True).click()
+    expect(page.get_by_role("heading", name="Play requirements")).to_be_focused()
+    page.close()
+
+
+def test_diagnostic_recovery(browser, address):
+    page = open_case(browser, address)
+    page.get_by_text("Advanced setup and diagnostics", exact=True).click()
+    check = page.get_by_role("button", name="Check setup", exact=True)
+    check.click()
+    expect(page.get_by_text("Verified · release", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Choose Java folder").click()
+    expect(page.get_by_role("status")).to_contain_text("Java selection cancelled")
+    import_client = page.get_by_role("button", name="Import client JAR")
+    import_client.click()
+    expect(page.get_by_role("status")).to_contain_text("Client JAR selection cancelled")
+    import_client.click()
+    expect(page.get_by_role("status")).to_contain_text("Client JAR verified")
+    page.evaluate("reviewTest.failedAction = 'import_vanilla_client'")
+    verify = page.get_by_role("button", name="Verify client JAR")
+    verify.click()
+    expect(page.get_by_role("status")).to_contain_text("setup could not be refreshed")
+    expect(verify).to_have_count(0)
+    check.click()
+    expect(verify).to_be_enabled()
+    page.evaluate("reviewTest.failedAction = 'inspect_vanilla_profile'")
+    page.get_by_role("button", name="Recheck setup").click()
+    expect(page.get_by_role("status")).to_contain_text("Could not verify the cached version metadata")
+    expect(page.get_by_text("Verified · release", exact=True)).to_have_count(0)
+    page.evaluate("reviewTest.failedAction = ''")
+    check.click()
+    expect(page.get_by_text("Verified · release", exact=True)).to_be_visible()
+    page.close()
+
+
+def test_navigation(browser, address, captures):
+    page = open_case(browser, address)
     overview = page.get_by_role("tab", name="Overview")
     overview.focus()
     page.keyboard.press("ArrowRight")
-    expect(page.get_by_role("tab", name="Setup")).to_be_focused()
-    page.get_by_role("button", name="Check setup").click()
-    expect(page.get_by_text("Verified · release", exact=True)).to_be_visible()
-    expect(page.get_by_text("Minecraft game installation and protected game launch are pending.")).to_be_visible()
-    expect(page.get_by_role("button", name="Play", exact=True)).to_have_count(0)
-    page.get_by_role("button", name="Choose Java folder").click()
-    expect(page.get_by_role("status")).to_contain_text("Java selection cancelled")
-    page.get_by_role("button", name="Prepare managed Java").click()
-    expect(page.get_by_role("progressbar", name="Managed Java download")).to_have_attribute("value", "2048")
-    expect(page.get_by_role("button", name="Recheck setup")).to_be_disabled()
-    page.get_by_role("button", name="Legacy creative Vanilla").click()
-    expect(page.get_by_role("heading", name="Legacy creative")).to_be_focused()
-    expect(page.get_by_role("progressbar", name="Managed Java download")).to_have_count(0)
-    page.get_by_role("button", name="Personal world Preparing managed Java").click()
-    expect(page.get_by_role("progressbar", name="Managed Java download")).to_have_attribute("value", "2048")
-    page.get_by_role("button", name="Cancel Java preparation").click()
-    expect(page.get_by_role("status")).to_contain_text("Java preparation was cancelled")
-    expect(page.get_by_role("button", name="Prepare managed Java")).to_be_enabled()
-    page.get_by_role("button", name="Prepare managed Java").click()
-    expect(page.get_by_text("Compatible Java found · 21.0.9+10")).to_be_visible()
-    assert not page.get_by_role("button", name="Verify managed Java").evaluate("el => el.classList.contains('primary')")
-    assert page.get_by_role("button", name="Import client JAR").evaluate("el => el.classList.contains('primary')")
-    page.get_by_role("button", name="Import client JAR").click()
-    expect(page.get_by_role("status")).to_contain_text("Client JAR selection cancelled")
-    page.get_by_role("button", name="Import client JAR").click()
-    expect(page.get_by_role("button", name="Verify client JAR")).to_be_enabled()
-    expect(page.get_by_role("status")).to_contain_text("Client JAR verified")
-    page.evaluate("reviewTest.failedAction = 'import_vanilla_client'")
-    page.get_by_role("button", name="Verify client JAR").click()
-    expect(page.get_by_role("status")).to_contain_text("setup could not be refreshed")
-    expect(page.get_by_role("button", name="Verify client JAR")).to_have_count(0)
-    page.get_by_role("button", name="Check setup", exact=True).click()
-    expect(page.get_by_role("button", name="Verify client JAR")).to_be_enabled()
-    page.evaluate("reviewTest.failedAction = 'inspect_vanilla_profile'")
-    page.get_by_role("button", name="Recheck setup").click()
-    expect(page.get_by_role("status")).to_contain_text("Could not verify the cached version metadata.")
-    expect(page.get_by_text("Verified · release", exact=True)).to_have_count(0)
-    page.evaluate("reviewTest.failedAction = ''")
-    page.get_by_role("button", name="Check setup", exact=True).click()
-    expect(page.get_by_text("Verified · release", exact=True)).to_be_visible()
-    expect(page.get_by_text("Minecraft game installation and protected game launch are pending.")).to_be_visible()
-
-    page.evaluate("reviewTest.emit('desktop-menu', 'show-activity')")
-    expect(page.get_by_role("heading", name="Activity")).to_be_focused()
-    page.evaluate("reviewTest.emit('desktop-menu', 'preview-pack')")
-    page.wait_for_function("reviewTest.requests.some(([name]) => name === 'review_pack')")
-    expect(page.get_by_role("button", name="Preview pack")).to_be_focused()
-    page.evaluate("reviewTest.emit('desktop-menu', 'new-profile')")
-    expect(page.get_by_role("dialog", name="Create vanilla profile")).to_be_visible()
-    page.keyboard.press("Escape")
-
+    settings = page.get_by_role("tab", name="Settings")
+    expect(settings).to_be_focused()
+    page.keyboard.press("Control+o")
+    page.wait_for_function("reviewTest.requests.some(([cmd]) => cmd === 'import_pack')")
+    expect(settings).to_be_focused()
+    overview.click()
     if captures:
         captures.mkdir(parents=True, exist_ok=True)
     for width, height in [(1040, 760), (380, 540)]:
         page.set_viewport_size({"width": width, "height": height})
-        if width == 380 and page.get_by_role("button", name="Personal world Vanilla").is_visible():
-            page.get_by_role("button", name="Personal world Vanilla").click()
+        row = page.get_by_role("button", name="Personal world Vanilla")
+        if width == 380 and row.is_visible():
+            row.click()
         for theme in ["light", "dark"]:
-            page.get_by_role("combobox", name="Appearance").select_option(theme)
-            expect(page.get_by_role("tabpanel", name="Setup")).to_be_visible()
-            expect(page.get_by_role("heading", name="Activity")).to_be_visible()
+            page.evaluate("(theme) => reviewTest.emit('desktop-menu', 'theme-' + theme)", theme)
+            expect(page.locator("html")).to_have_attribute("data-carbon-theme", theme)
+            expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
             assert page.locator("html").evaluate("(el) => el.scrollWidth === el.clientWidth")
             if captures:
-                page.get_by_role("tab", name="Setup").focus()
+                overview.focus()
                 page.mouse.move(1, 1)
-                page.screenshot(path=captures / f"{width}-{theme}-setup.png")
+                page.screenshot(path=captures / f"{width}-{theme}-overview.png")
         if width == 380:
             page.get_by_role("button", name="Back to Library").click()
-            expect(page.get_by_role("button", name="Personal world Vanilla")).to_be_focused()
-    page.evaluate("reviewTest.emit('desktop-menu', 'focus-search')")
+            expect(row).to_be_focused()
+    page.keyboard.press("Control+f")
     expect(page.get_by_role("searchbox", name="Find an instance")).to_be_focused()
-    page.close()
-
-
-def test_webview_shortcuts(browser, address):
-    page = open_case(browser, address)
-    page.set_viewport_size({"width": 380, "height": 540})
-    row = page.get_by_role("button", name="Personal world Vanilla")
-    search = page.get_by_role("searchbox", name="Find an instance")
-    row.click()
-    title = page.get_by_role("heading", name="Personal world")
-    expect(title).to_be_focused()
-    assert title.evaluate("el => el.offsetWidth < el.parentElement.offsetWidth")
-    page.keyboard.press("Control+f")
-    expect(search).to_be_focused()
-    row.click()
-    page.get_by_role("button", name="Back to Library").click()
-    expect(row).to_be_focused()
-    page.keyboard.press("Control+f")
-    expect(search).to_be_focused()
-
     page.keyboard.press("Control+n")
-    dialog = page.get_by_role("dialog", name="Create vanilla profile")
-    expect(dialog.locator("#profile-name")).to_be_focused()
-    page.keyboard.press("Control+f")
-    expect(dialog.locator("#profile-name")).to_be_focused()
-    page.keyboard.press("Escape")
+    page.wait_for_function("reviewTest.requests.some(([cmd, args]) => cmd === 'edit_profile_dialog' && args.mode === 'create' && args.profileId === null)")
     expect(page.get_by_role("button", name="New instance")).to_be_focused()
     page.keyboard.press("F6")
     expect(page.get_by_role("heading", name="Activity")).to_be_focused()
-
-    page.keyboard.press("Control+o")
-    expect(page.get_by_role("button", name="Preview pack")).to_be_focused()
-    assert page.evaluate("reviewTest.requests.filter(([name]) => name === 'review_pack').length") == 1
     page.evaluate("""() => {
       window.dispatchEvent(new KeyboardEvent('keydown', {key:'o', ctrlKey:true, cancelable:true}));
-      reviewTest.emit('desktop-menu', 'preview-pack');
+      reviewTest.emit('desktop-menu', 'import-pack');
     }""")
-    assert page.evaluate("reviewTest.requests.filter(([name]) => name === 'review_pack').length") == 2
+    assert page.evaluate("reviewTest.requests.filter(([cmd]) => cmd === 'import_pack').length") == 2
     page.close()
 
 
@@ -331,10 +317,11 @@ def main():
                 address = "http://127.0.0.1:" + str(server.server_port)
                 test_independent_initial_loads(browser, address)
                 test_namespace_reload_after_mutation(browser, address)
-                test_profile_name_length(browser, address)
-                test_setup_and_native_menu(browser, address, args.captures)
-                test_webview_shortcuts(browser, address)
-                print("Passed: setup action priority, Java state, menu and keyboard entry points, reflow, scoped recovery, and Unicode profile names.")
+                test_profile_dialog_return(browser, address)
+                test_install(browser, address)
+                test_diagnostic_recovery(browser, address)
+                test_navigation(browser, address, args.captures)
+                print("Passed renderer checks for install, recovery, native-dialog requests, keyboard focus and reflow.")
         finally:
             server.shutdown()
 

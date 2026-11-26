@@ -15,6 +15,14 @@ Each job verifies the runner, Rust host, Node and Bun architectures. It checks t
 
 ## Reproduce locally
 
+The Windows x64 job also runs the built Svelte interface in headless Microsoft Edge. A disposable bridge fixture exercises install review, cancellation and retry, offline file verification, native-dialog requests, keyboard focus and narrow-window reflow in both themes. Native dialog contents, GPUI rendering and game execution require their own checks. To repeat this renderer check on Windows x64, build the frontend, install the pinned wheels in a Python virtual environment, and run:
+
+```powershell
+python -m pip install --only-binary=:all: --require-hashes -r scripts/renderer-ci-requirements.txt
+python scripts/test-profile-renderer.py --directory dist --channel msedge
+python scripts/check-tauri-account-renderer.py --channel msedge
+```
+
 Use the native Rust, Node and Bun versions in the workflow. Python 3 runs the design seed verifier. CI verifies the SHA-256 for each architecture’s Bun archive. [Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
 
 - **Windows** requires the MSVC build tools for the host architecture and the Windows SDK. The Windows fixture compiler requires a native JDK capable of `javac --release 17`. CI uses Temurin for x64 and a checksum-pinned Microsoft Build of OpenJDK for ARM64. Tauri also uses WebView2. [Microsoft OpenJDK](https://learn.microsoft.com/en-us/java/openjdk/download) · [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
@@ -35,6 +43,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 For disposable local review, run `target/debug/carbon-desktop --temporary-review --sample-vanilla --seed-review` or `target/debug/carbon-desktop-gpui --comparison-review`. Use the corresponding `.exe` on Windows. See the [GPUI runbook](gpui.md) for portable Windows shader builds and the [Linux runbook](linux-build.md) for Debian packaging.
 
 ## Before merging
+
+Reviewed pull requests enter the `main` merge queue after their individual six-platform checks pass. GitHub reruns the same workflow on each candidate combined with the current base and the changes ahead of it. The queue requires all candidates to pass and squash-merges them in order. Check a removed candidate's merge-group run for failures or conflicts before requeuing. [GitHub merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
 
 Review the final diff and resolve findings on the pull request. A change to player-facing behavior requires a UI and interaction review. Exercise the affected journey in a disposable library at wide and narrow sizes. Inspect layout hierarchy, spacing, typography, active and focus states, native dialogs, keyboard navigation and error recovery. Check supported light and dark appearances where the change affects rendering. Record the build, affected edition, surfaces actually inspected and any unverified platform behavior. Attach representative screenshots when the UI changes. For a backend-only PR, identify which user-visible behavior was checked or why the change has no UI impact.
 
