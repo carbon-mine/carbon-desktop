@@ -8,6 +8,7 @@ import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const manifest = JSON.parse(await readFile(new URL('../../design-system/landscapes/manifest.json', import.meta.url), 'utf8'));
+if (!manifest.views.some(entry => entry.bake)) process.exit(0);
 const sources = JSON.parse(await readFile(new URL('sources.json', import.meta.url), 'utf8'));
 for (const entry of manifest.views) if (entry.bake) cameraFor(sources, entry.bake);
 const framesPerView = 48;
@@ -60,10 +61,17 @@ try {
       }, index / (framesPerView - 1));
       frames.push(Buffer.from(jpg, 'base64'));
     }
-    await writeFile(output + '/' + entry.poster, frames[0]);
-    if (!entry.frames) continue;
+    if (errors.length || frames.some(bytes => bytes.length < 4 || bytes.readUInt16BE(0) !== 0xffd8 || bytes.readUInt16BE(bytes.length - 2) !== 0xffd9)) {
+      throw Error(view + ' produced invalid image data or page errors: ' + errors.join('; '));
+    }
+    const poster = output + '/' + entry.poster;
+    if (!entry.frames) {
+      await writeFile(poster + '.next', frames[0]);
+      await rename(poster + '.next', poster);
+      continue;
+    }
     const distinct = new Set(frames.map(frame => createHash('sha256').update(frame).digest('hex')));
-    if (distinct.size < framesPerView * 0.9 || errors.length) throw Error(view + ' did not render: ' + errors.join('; '));
+    if (distinct.size < framesPerView * 0.9) throw Error(view + ' produced too few distinct frames');
     const offsets = Buffer.alloc(4 * (frames.length + 2));
     offsets.writeUInt32LE(frames.length, 0);
     let length = 0;
@@ -75,7 +83,9 @@ try {
     const packed = Buffer.concat([offsets, ...frames]);
     const dest = output + '/' + entry.frames;
     await writeFile(dest + '.next', packed);
+    await writeFile(poster + '.next', frames[0]);
     await rename(dest + '.next', dest);
+    await rename(poster + '.next', poster);
     digest.update(packed);
     console.log(view, packed.length, 'bytes', distinct.size, 'different camera frames');
   }

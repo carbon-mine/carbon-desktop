@@ -75,11 +75,14 @@ pub fn generate(root: &Path, output: PathBuf, fixture: Option<&Path>) -> Result<
             .map_err(|e| e.to_string())?;
         catalog.views.push(entry);
     }
-    let sources_file = root.join("../../tools/landscapes/sources.json");
-    println!("cargo:rerun-if-changed={}", sources_file.display());
-    let sources: serde_json::Value =
-        serde_json::from_slice(&fs::read(&sources_file).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+    let sources: serde_json::Value = if catalog.views.iter().any(|view| view.bake.is_some()) {
+        let file = root.join("../../tools/landscapes/sources.json");
+        println!("cargo:rerun-if-changed={}", file.display());
+        serde_json::from_slice(&fs::read(file).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?
+    } else {
+        serde_json::Value::Null
+    };
     let mut ids = BTreeSet::new();
     let mut entries = Vec::new();
     for view in &catalog.views {
