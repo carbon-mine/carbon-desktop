@@ -224,6 +224,16 @@ pub fn list(root: &Path) -> Result<Vec<Profile>, String> {
     Ok(library.profiles)
 }
 
+/// Read an initialized profile snapshot while leaving preparation and recovery to setup.
+pub fn existing_profile(root: &Path, id: Uuid) -> Result<Option<Profile>, String> {
+    Ok(storage::existing(root)?.and_then(|library| {
+        library
+            .profiles
+            .into_iter()
+            .find(|profile| profile.id == id)
+    }))
+}
+
 /// Populate only an empty review library. The comparison sample is identical across frontends.
 pub fn seed_review_library(root: &Path, comparison: bool) -> Result<(), String> {
     let (_lock, mut library) = storage::open(root)?;
