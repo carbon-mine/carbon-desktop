@@ -156,7 +156,7 @@ impl Launcher {
             id,
             name,
             Role::Tab,
-            false,
+            self.popup.is_some() || self.picker_open,
             Some(selected),
             cx,
             move |this, window, cx| {
@@ -436,6 +436,7 @@ impl Launcher {
         };
         let pinned = self.home_order.is_pinned(profile.id);
         let readiness = self.home_readiness(&profile, cx);
+        let busy = self.popup.is_some() || self.picker_open;
         let button = compact_action("home-pick", p, Partition::Neutral, false, cx)
             .w_full()
             .h(px(42.))
@@ -468,7 +469,7 @@ impl Launcher {
                         "home-pick",
                         &pick_label,
                         Role::Button,
-                        self.popup.is_some() || self.picker_open,
+                        busy,
                         None,
                         cx,
                         |this, window, cx| this.open_home_switcher(window, cx),
@@ -479,7 +480,10 @@ impl Launcher {
                             .right(px(12.))
                             .top(px(13.))
                             .size(px(16.))
-                            .child(Icon::ChevronDown.render(px(16.), p.ink)),
+                            .child(
+                                Icon::ChevronDown
+                                    .render(px(16.), if busy { p.muted } else { p.ink }),
+                            ),
                     ),
             )
             .child(div().text_sm().text_color(p.muted).child(metadata))
