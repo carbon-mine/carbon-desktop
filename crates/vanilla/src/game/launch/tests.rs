@@ -20,6 +20,7 @@ fn profile(version: VanillaVersion) -> Profile {
         memory_mib: 2048,
         window_width: 1280,
         window_height: 720,
+        icon_id: None,
         imported_pack: None,
         server_address: None,
     }

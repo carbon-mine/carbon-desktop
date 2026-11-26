@@ -15,7 +15,7 @@ const IMPORT_NEXT: &str = "pack-import.next";
 const IMPORT_COMPLETE: &str = ".carbon-import-complete";
 const MAX_IMPORT_BYTES: u64 = 4096;
 
-fn ordinary(meta: &Metadata) -> bool {
+pub(super) fn ordinary(meta: &Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

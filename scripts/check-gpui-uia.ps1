@@ -22,6 +22,11 @@ public static class GpuiTestWindows {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr window, uint msg, IntPtr w, IntPtr l);
+    public static void PressInWindow(IntPtr window, int key) {
+        PostMessageW(window, 0x0100, new IntPtr(key), new IntPtr(1));
+        PostMessageW(window, 0x0101, new IntPtr(key), new IntPtr(unchecked((int)0xC0000001)));
+    }
     public static void Press(byte key, bool control) {
         if (control) keybd_event(0x11, 0, 0, UIntPtr.Zero);
         keybd_event(key, 0, 0, UIntPtr.Zero);
@@ -175,6 +180,47 @@ try {
     $saved = (Get-Content -LiteralPath $profiles.FullName -Raw | ConvertFrom-Json).profiles |
         Where-Object name -eq 'AccessKit verification fixture'
     if (@($saved).Count -ne 1) { throw 'No unique profile was persisted by the actual app action.' }
+    Select-Control (Wait-Value { Named-Control $main 'Settings' } 'Missing instance settings.')
+    function Open-IconPicker {
+        Invoke-Control (Wait-Value {
+            $button = Named-Control $main 'Change icon'
+            if ($button -and $button.Current.IsEnabled) { $button }
+        } 'Missing Change icon action.')
+        Wait-Value { Window-For $process 'Choose instance icon' } 'Missing separate icon window.'
+    }
+    $picker = Open-IconPicker
+    $hwnd = [IntPtr]::new($picker.Current.NativeWindowHandle)
+    Wait-Value { (Named-Control $picker 'Meadow block').Current.HasKeyboardFocus } 'Default sprite did not receive focus.' > $null
+    [GpuiTestWindows]::PressInWindow($hwnd, 0x27)
+    Wait-Value { (Named-Control $picker 'Red fox').Current.HasKeyboardFocus -and (Named-Control $picker 'Preview: Red fox') } 'Right did not select and focus the next sprite.' > $null
+    $cancel = Named-Control $picker 'Cancel'
+    $cancel.SetFocus()
+    Wait-Value { $cancel.Current.HasKeyboardFocus } 'Cancel did not receive focus.' > $null
+    [GpuiTestWindows]::PressInWindow($hwnd, 0x23)
+    [GpuiTestWindows]::PressInWindow($hwnd, 0x27)
+    # Allow both queued key events to repaint before inspecting the selected radio.
+    Start-Sleep -Milliseconds 180
+    if (!$cancel.Current.HasKeyboardFocus -or !(Named-Control $picker 'Preview: Red fox')) {
+        throw 'A navigation key on the footer changed the selected sprite or focus.'
+    }
+
+    # Emulate another writer changing only this disposable instance while its icon picker is open.
+    $index = Get-Content -LiteralPath $profiles.FullName -Raw | ConvertFrom-Json
+    $row = $index.profiles | Where-Object id -eq $saved.id
+    $row | Add-Member -NotePropertyName iconId -NotePropertyValue 'pine'
+    [IO.File]::WriteAllText($profiles.FullName, ($index | ConvertTo-Json -Depth 10 -Compress))
+    Invoke-Control (Named-Control $picker 'Save icon')
+    Wait-Value { $picker.FindAll($scope::Descendants, $everything) | Where-Object { $_.Current.Name -like '*icon changed in another window*' } | Select-Object -First 1 } 'A stale icon write was not rejected.' > $null
+    Invoke-Control $cancel
+    Wait-Value { $null -eq (Window-For $process 'Choose instance icon') } 'Cancel did not close the icon window.' > $null
+    $picker = Open-IconPicker
+    Wait-Value { (Named-Control $picker 'Pine').Current.HasKeyboardFocus -and (Named-Control $picker 'Preview: Pine') } 'Reopening did not load the other writer''s saved choice.' > $null
+    Invoke-Control (Named-Control $picker 'Use default')
+    Invoke-Control (Wait-Value { $saveIcon = Named-Control $picker 'Save icon'; if ($saveIcon.Current.IsEnabled) { $saveIcon } } 'Icon reset did not enable Save.')
+    Wait-Value { $null -eq (Window-For $process 'Choose instance icon') } 'Saving the icon did not close its window.' > $null
+    $reset = (Get-Content -LiteralPath $profiles.FullName -Raw | ConvertFrom-Json).profiles | Where-Object id -eq $saved.id
+    if ($reset.PSObject.Properties['iconId']) { throw 'Use default did not remove the stored override.' }
+    'PASS Windows icon picker keyboard focus, footer isolation, stale-edit recovery and persisted reset.'
     "PASS Windows UIA main descendants=$mainCount dialog descendants=$modalCount. Search value, focus, filter, selection, dialog, validation and persisted profile verified."
 } finally {
     if (!$process.HasExited) {
