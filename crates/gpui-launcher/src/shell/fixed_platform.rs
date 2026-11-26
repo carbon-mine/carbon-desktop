@@ -71,6 +71,7 @@ pub(super) fn configure(window: &mut gpui::Window) {
 #[cfg(target_os = "linux")]
 pub(super) fn configure(window: &mut gpui::Window) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::connection::Connection;
     use x11rb::properties::WmSizeHints;
     use x11rb::protocol::xproto::ConnectionExt as _;
 
@@ -88,17 +89,24 @@ pub(super) fn configure(window: &mut gpui::Window) {
     };
 
     // Hints are in device pixels; `bounds()` is in logical pixels.
-    let size = window.bounds().size;
-    let scale = window.scale_factor();
-    let width = (size.width.0 * scale).round().max(1.0) as i32;
-    let height = (size.height.0 * scale).round().max(1.0) as i32;
-
     // A separate connection may change properties on any window of the same
     // display; WM_NORMAL_HINTS is the ICCCM fixed-size mechanism.
     let Ok((connection, _)) = x11rb::connect(None) else {
         return;
     };
-    let mut hints = WmSizeHints::new();
+    let Some(size) = connection
+        .get_geometry(window_id)
+        .ok()
+        .and_then(|request| request.reply().ok())
+    else {
+        return;
+    };
+    let (width, height) = (i32::from(size.width), i32::from(size.height));
+    let mut hints = WmSizeHints::get_normal_hints(&connection, window_id)
+        .ok()
+        .and_then(|request| request.reply().ok())
+        .flatten()
+        .unwrap_or_default();
     hints.min_size = Some((width, height));
     hints.max_size = Some((width, height));
     if let Ok(cookie) = hints.set_normal_hints(&connection, window_id) {
@@ -106,16 +114,6 @@ pub(super) fn configure(window: &mut gpui::Window) {
     }
     let _ = connection.flush();
 }
-
-/// Windows policy is owned by the integrator; intentionally a stub here.
-///
-/// Fixing the size there needs `WM_GETMINMAXINFO` (clamp `ptMinTrackSize` and
-/// `ptMaxTrackSize` to the selected main size) and removal of
-/// `WS_THICKFRAME`/`WS_MAXIMIZEBOX`, plus handling `WM_SYSCOMMAND`
-/// `SC_MAXIMIZE`. GPUI's `is_resizable: false` already drops the thick frame,
-/// so the integrator may not need anything further.
-#[cfg(windows)]
-pub(super) fn configure(_window: &mut gpui::Window) {}
 
 /// No native policy is defined for other targets.
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]

@@ -4,11 +4,11 @@ This branch is the native Rust-rendered alternative for the frontend comparison.
 
 ## Initial window size
 
-The first launcher window uses a preferred GPUI layout of 1368 × 808 logical pixels. On Windows the native menu occupies 20 pixels of that layout at 96 DPI, leaving a 1368 × 788 client. It shrinks to fit a smaller display. A usable saved position, size and maximized state takes precedence. The Minecraft game window has its own resolution setting.
+The first launcher window uses a preferred GPUI layout of 1368 × 808 logical pixels. On Windows the native menu occupies 20 pixels of that layout at 96 DPI, leaving a 1368 × 788 client. It shrinks to fit a smaller display. The main launcher keeps this size. You can move, minimize and restore it. A valid saved position survives restart; the launcher ignores saved user dimensions and maximized state from older builds. Native child windows keep their own sizing policies. The Minecraft game window has its own resolution setting.
 
 The owner selected the client size of an observed, unmaximized official launcher as the reference. On Windows build 26300 at 96 DPI, launcher v3.44.1-2.6.2 (package 2.6.2.0 x64) measured 1368 × 788 client, 1370 × 820 visible DWM frame and 1384 × 827 outer Win32 frame. The owner’s 1371 × 821 screenshot corroborates the visible frame. The comparison used a running signed-in official launcher. Its factory first-run placement remains unverified. The previous fresh Carbon window measured 1040 × 740 client, 1042 × 792 visible and 1056 × 799 outer. These figures distinguish the native menu and decoration sizes from the launcher’s logical sizing input.
 
-On a disposable Windows desktop at 96 DPI, the revised Carbon window measured 1368 × 788 client, 1370 × 840 visible and 1384 × 847 outer. The native menu accounts for the 20-pixel difference between the two launchers’ outer heights. A custom rectangle and maximized state survived restart. An unusable off-screen rectangle returned to the centered default.
+On a disposable Windows desktop at 96 DPI, the revised Carbon window measured 1368 × 788 client, 1370 × 840 visible and 1384 × 847 outer. The native menu accounts for the 20-pixel difference between the two launchers’ outer heights. The fixed-window follow-up retained a saved position when a legacy 620 × 490 maximized record was seeded. The main HWND omitted thick-frame and Maximize styles; a caption double-click, F11 and native size/maximize commands left its bounds unchanged. Move and minimize/restore worked.
 
 ## Build and run
 

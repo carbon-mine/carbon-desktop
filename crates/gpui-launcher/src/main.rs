@@ -1521,6 +1521,8 @@ fn main() -> anyhow::Result<()> {
         })
         .detach();
         let initial = shell::initial_bounds(&data.path, cx);
+        #[cfg(target_os = "linux")]
+        let fitted_size = initial.get_bounds().size;
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
@@ -1539,7 +1541,11 @@ fn main() -> anyhow::Result<()> {
             |window, cx| {
                 shell::configure_main_window(window);
                 popup::set_app_icon(window);
-                let view = cx.new(|cx| Launcher::new(data, (began, ready_file), window, cx));
+                let view = cx.new(|cx| {
+                    #[cfg(target_os = "linux")]
+                    shell::keep_main_windowed(window, fitted_size, cx);
+                    Launcher::new(data, (began, ready_file), window, cx)
+                });
                 let weak = view.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
                     weak.update(cx, |view, cx| view.allow_close(window, cx))

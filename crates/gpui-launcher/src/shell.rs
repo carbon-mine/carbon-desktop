@@ -20,6 +20,57 @@ pub fn configure_main_window(window: &mut Window) {
     #[cfg(not(windows))]
     fixed_platform::configure(window);
 }
+
+/// Compositors choose whether to honor native size hints. GPUI exposes the
+/// configured size and state, so request the fixed content size or leave an
+/// imposed maximize/fullscreen state once per distinct configuration.
+#[cfg(target_os = "linux")]
+pub fn keep_main_windowed(
+    window: &mut Window,
+    target: gpui::Size<gpui::Pixels>,
+    cx: &Context<Launcher>,
+) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Correction {
+        LeaveFullscreen,
+        Restore,
+        Resize(gpui::Size<gpui::Pixels>),
+    }
+
+    let mut last_request = None;
+    cx.observe_window_bounds(window, move |_, window, cx| {
+        let status = window.window_bounds();
+        let request = match status {
+            WindowBounds::Fullscreen(_) => Some(Correction::LeaveFullscreen),
+            WindowBounds::Maximized(_) => Some(Correction::Restore),
+            WindowBounds::Windowed(bounds) if bounds.size != target => {
+                Some(Correction::Resize(bounds.size))
+            }
+            _ => None,
+        };
+        if request == last_request {
+            return;
+        }
+        last_request = request;
+        if let Some(action) = request {
+            window.defer(cx, move |window, _| {
+                match (action, window.window_bounds()) {
+                    (Correction::LeaveFullscreen, WindowBounds::Fullscreen(_)) => {
+                        window.toggle_fullscreen()
+                    }
+                    (Correction::Restore, WindowBounds::Maximized(_)) => window.zoom_window(),
+                    (Correction::Resize(_), WindowBounds::Windowed(bounds))
+                        if bounds.size != target =>
+                    {
+                        window.resize(target)
+                    }
+                    _ => {}
+                }
+            });
+        }
+    })
+    .detach();
+}
 #[cfg(windows)]
 pub use windows::{NativeMenu, apply_frame, configure_renderer};
 #[cfg(not(windows))]
