@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File},
-    io::Read,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 use uuid::{Uuid, Version};
@@ -14,6 +14,9 @@ const MAX_DESTINATIONS: usize = 64;
 const MAX_WORLD_LABELS: usize = 64;
 const MAX_WORLD_ENTRIES: usize = 4096;
 const MAX_PREFERENCE_BYTES: u64 = 256 * 1024;
+const SCAN_INCOMPLETE: &str =
+    "Some local saves could not be checked safely. Refresh before choosing a local save.";
+const SCAN_OVER_LIMIT: &str = "This instance has too many save directory entries to list safely.";
 
 /// A save directory under this instance's game/saves, or an independent launcher destination.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -43,6 +46,11 @@ pub struct InstanceTargets {
     pub worlds: Vec<LocalWorld>,
     pub destinations: Vec<SavedDestination>,
     pub selected: Option<TargetKey>,
+    /// Set when local save entries could not all be checked. Save targets then stay locked
+    /// until a later read completes, while destinations remain usable.
+    pub world_issue: Option<String>,
+    /// Custom labels whose folders were confirmed absent by a complete scan.
+    pub missing_labels: BTreeMap<String, String>,
 }
 
 pub enum TargetAction {
@@ -57,6 +65,9 @@ pub enum TargetAction {
         directory: String,
         label: Option<String>,
     },
+    /// Remove a label only if the folder is still confirmed missing. This is the
+    /// stale-cleanup-safe counterpart to `LabelWorld { label: None }`.
+    ForgetMissingLabel(String),
 }
 
 #[derive(Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -85,43 +96,119 @@ pub fn validate_target_label(name: &str) -> Result<&str, String> {
     Ok(name)
 }
 
-fn inventory(root: &Path, id: Uuid) -> Result<Vec<LocalWorld>, String> {
+fn inventory(root: &Path, id: Uuid) -> WorldScan {
     let instances = root.join("instances-v1");
     let instance = instances.join(id.to_string());
     let game = instance.join("game");
     let saves = game.join("saves");
     for directory in [&instances, &instance, &game, &saves] {
-        if !storage::ordinary_directory(directory)? {
-            return Ok(Vec::new());
+        match inspect(directory) {
+            Ok(EntryKind::Directory) => {}
+            Ok(EntryKind::Absent) => return WorldScan::empty(),
+            Ok(_) => return WorldScan::incomplete(Vec::new(), HashSet::new(), SCAN_INCOMPLETE),
+            Err(issue) => return WorldScan::incomplete(Vec::new(), HashSet::new(), &issue),
         }
     }
+    let entries = match fs::read_dir(&saves) {
+        Ok(entries) => entries,
+        Err(_) => return WorldScan::incomplete(Vec::new(), HashSet::new(), SCAN_INCOMPLETE),
+    };
     let mut worlds = Vec::new();
-    for (position, entry) in fs::read_dir(saves)
-        .map_err(|_| "Could not read local saves.")?
-        .enumerate()
-    {
+    let mut present = HashSet::new();
+    for (position, entry) in entries.enumerate() {
         if position == MAX_WORLD_ENTRIES {
-            return Err("This instance has too many save directory entries to list safely.".into());
+            return WorldScan::incomplete(worlds, present, SCAN_OVER_LIMIT);
         }
-        let entry = entry.map_err(|_| "Could not read a local save entry.")?;
+        let Ok(entry) = entry else {
+            return WorldScan::incomplete(worlds, present, SCAN_INCOMPLETE);
+        };
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if valid_label(&name, 255)
-            && matches!(storage::ordinary_directory(&entry.path()), Ok(true))
-            && matches!(
-                storage::regular_file(&entry.path().join("level.dat")),
-                Ok(true)
-            )
-        {
-            worlds.push(LocalWorld {
+        // Observed names stay present even when they are later rejected, so an
+        // unsafe entry is never reported as a missing folder or silently replaced.
+        present.insert(name.clone());
+        match inspect(&entry.path()) {
+            Ok(EntryKind::Directory) => {}
+            Ok(_) => continue,
+            Err(issue) => return WorldScan::incomplete(worlds, present, &issue),
+        }
+        if !valid_label(&name, 255) {
+            continue;
+        }
+        match inspect(&entry.path().join("level.dat")) {
+            Ok(EntryKind::File) => worlds.push(LocalWorld {
                 key: TargetKey::World(name.clone()),
                 name,
-            });
+            }),
+            // An absent or ordinary non-file level.dat is an incomplete save, not a scan
+            // failure. Links and special files are rejected without being followed.
+            Ok(_) => {}
+            Err(issue) => return WorldScan::incomplete(worlds, present, &issue),
         }
     }
-    worlds.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(worlds)
+    WorldScan::complete(worlds, present)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EntryKind {
+    Absent,
+    Directory,
+    File,
+    Other,
+}
+
+/// Classify one path without following links. An unreadable path is an error rather
+/// than an empty entry, so callers can keep save targets locked instead of guessing.
+fn inspect(path: &Path) -> Result<EntryKind, String> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if !storage::ordinary(&meta) => Ok(EntryKind::Other),
+        Ok(meta) if meta.is_dir() => Ok(EntryKind::Directory),
+        Ok(meta) if meta.is_file() => Ok(EntryKind::File),
+        Ok(_) => Ok(EntryKind::Other),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(EntryKind::Absent),
+        Err(_) => Err(SCAN_INCOMPLETE.into()),
+    }
+}
+
+struct WorldScan {
+    worlds: Vec<LocalWorld>,
+    /// Every directory entry observed under a readable saves folder, including
+    /// entries rejected as links, special files or incomplete saves.
+    present: HashSet<String>,
+    issue: Option<String>,
+}
+
+impl WorldScan {
+    fn empty() -> Self {
+        Self::complete(Vec::new(), HashSet::new())
+    }
+
+    fn complete(worlds: Vec<LocalWorld>, present: HashSet<String>) -> Self {
+        let mut worlds = worlds;
+        worlds.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            worlds,
+            present,
+            issue: None,
+        }
+    }
+
+    fn incomplete(worlds: Vec<LocalWorld>, present: HashSet<String>, issue: &str) -> Self {
+        let mut worlds = worlds;
+        worlds.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            worlds,
+            present,
+            issue: Some(issue.into()),
+        }
+    }
+}
+
+fn world_present(scan: &WorldScan, directory: &str) -> bool {
+    scan.worlds
+        .iter()
+        .any(|world| matches!(&world.key, TargetKey::World(name) if name == directory))
 }
 
 fn read_preferences(path: &Path) -> Result<Preferences, String> {
@@ -162,19 +249,27 @@ fn read_preferences(path: &Path) -> Result<Preferences, String> {
 }
 
 impl Preferences {
-    fn contains(&self, key: &TargetKey, worlds: &[LocalWorld]) -> bool {
-        match key {
-            TargetKey::World(_) => worlds.iter().any(|world| world.key == *key),
-            TargetKey::Server(id) => self.destinations.iter().any(|server| server.id == *id),
-        }
+    fn has_destination(&self, id: Uuid) -> bool {
+        self.destinations.iter().any(|server| server.id == id)
     }
 
-    fn snapshot(self, mut worlds: Vec<LocalWorld>) -> InstanceTargets {
-        let selected = self
-            .selected
-            .as_ref()
-            .filter(|key| self.contains(key, &worlds))
-            .cloned();
+    fn snapshot(self, scan: WorldScan) -> InstanceTargets {
+        let WorldScan {
+            mut worlds,
+            present,
+            issue,
+        } = scan;
+        // An incomplete scan cannot disprove a saved preference. All world actions
+        // still require a complete inventory at the point of use.
+        let selected = self.selected.as_ref().and_then(|key| match key {
+            TargetKey::World(_)
+                if issue.is_some() || worlds.iter().any(|world| world.key == *key) =>
+            {
+                Some(key.clone())
+            }
+            TargetKey::Server(id) if self.has_destination(*id) => Some(key.clone()),
+            _ => None,
+        });
         for world in &mut worlds {
             let TargetKey::World(directory) = &world.key else {
                 continue;
@@ -183,19 +278,47 @@ impl Preferences {
                 world.name.clone_from(label);
             }
         }
+        // Labels are never pruned implicitly. Only a complete scan can establish that
+        // a folder is missing, so partial scans report no missing labels.
+        let missing_labels = if issue.is_none() {
+            self.world_labels
+                .iter()
+                .filter(|(directory, _)| !present.contains(*directory))
+                .map(|(directory, label)| (directory.clone(), label.clone()))
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
         InstanceTargets {
             revision: self.revision,
             worlds,
             destinations: self.destinations,
             selected,
+            world_issue: issue,
+            missing_labels,
         }
     }
 
-    fn apply(&mut self, action: TargetAction, worlds: &[LocalWorld]) -> Result<(), String> {
+    fn apply(&mut self, action: TargetAction, scan: &WorldScan) -> Result<(), String> {
         match action {
             TargetAction::Select(key) => {
-                if key.as_ref().is_some_and(|key| !self.contains(key, worlds)) {
-                    return Err("This target is no longer available. Refresh the list.".into());
+                if let Some(key) = &key {
+                    match key {
+                        TargetKey::World(_) if scan.issue.is_some() => {
+                            return Err("Local saves could not be checked completely. Refresh before choosing a local save.".into());
+                        }
+                        TargetKey::World(directory) if !world_present(scan, directory) => {
+                            return Err(
+                                "This target is no longer available. Refresh the list.".into()
+                            );
+                        }
+                        TargetKey::Server(id) if !self.has_destination(*id) => {
+                            return Err(
+                                "This target is no longer available. Refresh the list.".into()
+                            );
+                        }
+                        _ => {}
+                    }
                 }
                 self.selected = key;
             }
@@ -220,24 +343,44 @@ impl Preferences {
                     });
                 }
             }
-            TargetAction::LabelWorld { directory, label } => {
-                if !self.contains(&TargetKey::World(directory.clone()), worlds) {
-                    return Err("This local save is no longer available. Refresh the list.".into());
-                }
-                match label {
-                    Some(label) => {
-                        let label = validate_target_label(&label)?.to_owned();
-                        if !self.world_labels.contains_key(&directory)
-                            && self.world_labels.len() >= MAX_WORLD_LABELS
-                        {
-                            return Err("This instance already has 64 custom save labels.".into());
-                        }
-                        self.world_labels.insert(directory, label);
+            TargetAction::LabelWorld { directory, label } => match label {
+                Some(label) => {
+                    if scan.issue.is_some() {
+                        return Err("Local saves could not be checked completely. Refresh before labeling a local save.".into());
                     }
-                    None => {
-                        self.world_labels.remove(&directory);
+                    if !world_present(scan, &directory) {
+                        return Err(
+                            "This local save is no longer available. Refresh the list.".into()
+                        );
                     }
+                    let label = validate_target_label(&label)?.to_owned();
+                    if !self.world_labels.contains_key(&directory)
+                        && self.world_labels.len() >= MAX_WORLD_LABELS
+                    {
+                        return Err("This instance already has 64 custom save labels.".into());
+                    }
+                    self.world_labels.insert(directory, label);
                 }
+                None => {
+                    if scan.issue.is_some() {
+                        return Err("Local saves could not be checked completely. Refresh before changing a local save label.".into());
+                    }
+                    if !world_present(scan, &directory) && scan.present.contains(&directory) {
+                        return Err("This local save is still present. Refresh the list before removing its label.".into());
+                    }
+                    // This explicit request is the only path that reclaims a label slot
+                    // for a missing folder; reads and server changes never do.
+                    self.world_labels.remove(&directory);
+                }
+            },
+            TargetAction::ForgetMissingLabel(directory) => {
+                if scan.issue.is_some() {
+                    return Err("Local saves could not be checked completely. Refresh before removing a local save label.".into());
+                }
+                if scan.present.contains(&directory) {
+                    return Err("This local save is available again. Refresh the list before removing its label.".into());
+                }
+                self.world_labels.remove(&directory);
             }
             TargetAction::RemoveDestination(id) => {
                 let index = self
@@ -259,7 +402,7 @@ struct LoadedTargets {
     directory: PathBuf,
     index_name: String,
     saved: Preferences,
-    worlds: Vec<LocalWorld>,
+    scan: WorldScan,
 }
 
 fn load(root: &Path, id: Uuid, library: &crate::Library) -> Result<LoadedTargets, String> {
@@ -274,15 +417,15 @@ fn load(root: &Path, id: Uuid, library: &crate::Library) -> Result<LoadedTargets
         directory,
         index_name,
         saved,
-        worlds: inventory(root, id)?,
+        scan: inventory(root, id),
     })
 }
 
 /// List an instance's verified directory entries and saved destinations without contacting servers.
 pub fn instance_targets(root: &Path, id: Uuid) -> Result<InstanceTargets, String> {
     let (_lock, library) = storage::open(root)?;
-    let LoadedTargets { saved, worlds, .. } = load(root, id, &library)?;
-    Ok(saved.snapshot(worlds))
+    let LoadedTargets { saved, scan, .. } = load(root, id, &library)?;
+    Ok(saved.snapshot(scan))
 }
 
 /// Save target preferences only. A revision change requires a refresh before retry.
@@ -297,7 +440,7 @@ pub fn change_instance_targets(
         directory,
         index_name,
         mut saved,
-        worlds,
+        scan,
     } = load(root, id, &library)?;
     if saved.revision != expected_revision {
         return Err(
@@ -305,9 +448,9 @@ pub fn change_instance_targets(
         );
     }
     let previous = saved.clone();
-    saved.apply(action, &worlds)?;
+    saved.apply(action, &scan)?;
     if saved == previous {
-        return Ok(saved.snapshot(worlds));
+        return Ok(saved.snapshot(scan));
     }
     saved.revision = Some(Uuid::new_v4());
     let bytes = serde_json::to_vec(&saved).map_err(|_| "Could not encode launch targets.")?;
@@ -317,7 +460,7 @@ pub fn change_instance_targets(
         &format!("targets-{id}.next"),
         &bytes,
     )?;
-    Ok(saved.snapshot(worlds))
+    Ok(saved.snapshot(scan))
 }
 
 #[cfg(test)]
