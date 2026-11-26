@@ -30,13 +30,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             python: python
 
-
           - platform: Windows ARM64
             runner: windows-11-arm
             arch: arm64
             target: aarch64-pc-windows-msvc
             python: python
-
 
           - platform: Linux x64
             runner: ubuntu-24.04
@@ -44,13 +42,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             python: python3
 
-
           - platform: Linux ARM64
             runner: ubuntu-24.04-arm
             arch: arm64
             target: aarch64-unknown-linux-gnu
             python: python3
-
 
           - platform: macOS Intel
             runner: macos-15-intel
@@ -58,13 +54,11 @@ jobs:
             target: x86_64-apple-darwin
             python: python3
 
-
           - platform: macOS Apple Silicon
             runner: macos-15
             arch: arm64
             target: aarch64-apple-darwin
             python: python3
-
 
     defaults:
       run:
@@ -170,6 +164,10 @@ jobs:
 
       - name: Build the native GPUI launcher
         run: cargo build --locked -p carbon-desktop-gpui
+
+      - name: Open a disposable native library
+        if: matrix.platform == 'Windows x64'
+        run: '"$PYTHON" scripts/check-gpui-startup.py "target/$CARGO_BUILD_TARGET/debug/carbon-desktop-gpui.exe"'
 
       - name: Test the locked Rust workspace
         run: cargo test --locked --workspace

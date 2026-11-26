@@ -2,7 +2,7 @@
 
 For current GPUI development, use the [native runbook](gpui.md) and [CI commands](ci.md). The following shell-specific instructions document the retired Svelte/Tauri implementation.
 
-## Windows development host
+## Historical Windows Tauri development host
 
 Use an x64 MSVC Rust toolchain, Visual Studio C++ build tools with Windows SDK, WebView2 Runtime, Bun and Node. Tested with Rust 1.99.1, Bun 1.4.2 and Node 26.13.1. Java is optional for the separate containment experiment. The lockfiles pin the accepted build inputs. The renderer uses Svelte 5.59.2 and Vite 8.3.8. The native build uses Tauri 2.12.7 with CLI 2.12.6. TypeScript 5.9.3 matched the development checker. The Windows bundle is an unsigned development NSIS installer at version 0.0.0.
 

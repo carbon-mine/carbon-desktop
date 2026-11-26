@@ -21,10 +21,9 @@ cargo fmt --all -- --check
 cargo build --locked -p carbon-desktop-gpui
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo run --locked -p carbon-desktop-gpui -- --comparison-review
 ```
 
-Use the disposable library for visual and keyboard checks. Native play, OS credential stores and interactive accessibility require their own verification. The [GPUI guide](gpui.md) documents host setup and development runs.
+Windows x64 CI starts GPUI with a disposable library and waits for its first usable frame. For manual visual and keyboard checks, run `cargo run --locked -p carbon-desktop-gpui -- --comparison-review`. Native play, OS credential stores and interactive accessibility require their own verification. The [GPUI guide](gpui.md) documents host setup and development runs.
 
 ## Before merging
 
