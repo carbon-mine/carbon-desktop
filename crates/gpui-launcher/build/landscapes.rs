@@ -23,6 +23,7 @@ struct View {
     poster: String,
     frames: Option<String>,
     fps: Option<u8>,
+    playback: Option<String>,
     bake: Option<Bake>,
 }
 
@@ -109,16 +110,21 @@ pub fn generate(root: &Path, output: PathBuf, fixture: Option<&Path>) -> Result<
         }
         let poster = asset(root, &view.poster)?;
         let (motion, rate) = match (&view.frames, view.fps) {
-            (Some(file), Some(fps @ 1..=30)) => (format!("Some({})", asset(root, file)?), fps),
+            (Some(file), Some(fps @ 1..=60)) => (format!("Some({})", asset(root, file)?), fps),
             (None, None) => ("None".to_owned(), 0),
             _ => {
                 return Err(format!(
-                    "Expected motion frames with 1-30 fps, or a still poster, for {}",
+                    "Expected motion frames with 1-60 fps, or a still poster, for {}",
                     view.id
                 ));
             }
         };
-        entries.push(format!("Landscape(&Scene {{ id:{:?}, family:{:?}, name:{:?}, attribution:{:?}, poster:{poster}, motion:{motion}, fps:{rate} }})",view.id,view.family,view.name,view.attribution));
+        let forward = match view.playback.as_deref() {
+            None => false,
+            Some("loop") if view.frames.is_some() => true,
+            _ => return Err(format!("Invalid playback mode for {}", view.id)),
+        };
+        entries.push(format!("Landscape(&Scene {{ id:{:?}, family:{:?}, name:{:?}, attribution:{:?}, poster:{poster}, motion:{motion}, fps:{rate}, forward:{forward} }})",view.id,view.family,view.name,view.attribution));
     }
     fs::write(output, format!("[{}]", entries.join(",\n"))).map_err(|e| e.to_string())
 }

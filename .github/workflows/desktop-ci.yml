@@ -172,6 +172,9 @@ jobs:
       - name: Test the locked Rust workspace
         run: cargo test --locked --workspace
 
+      - name: Report native Home scenery decode times
+        run: cargo test --locked -p carbon-desktop-gpui --lib scenery::tests::report_bundled_decode_timing -- --exact --ignored --nocapture
+
       - name: Lint the Rust workspace
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
