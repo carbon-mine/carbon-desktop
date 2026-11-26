@@ -109,3 +109,5 @@ On that desktop, run the executable directly for a disposable seeded review:
 ```
 
 Linux package installation, rendering, picker, assistive technology and gameplay still need native desktop evidence. The WSL result verifies compilation, linkage and archive contents. Follow the [candidate handoff](handoff.md) for data-preserving review instructions.
+
+The separate [Linux process tree fixture](linux-supervision.md) records ordinary-user WSL2 namespace admission, process-tree drain, and permission-denial evidence for CDESK-22.
