@@ -23,6 +23,10 @@ pub enum IdentitySlot {
 #[derive(Eq, PartialEq)]
 pub enum GameArgument {
     Value(OsString),
+    /// Resolve through the supervisor's private state lease.
+    GameDirectory,
+    /// Resolve to the leased content's assets directory inside the game boundary.
+    AssetsDirectory,
     Identity(IdentitySlot),
 }
 
@@ -37,8 +41,6 @@ pub enum JvmArgument {
 }
 
 pub(super) struct Material<'a> {
-    pub game: &'a Path,
-    pub assets: &'a Path,
     pub asset_index: &'a str,
     pub classpath: &'a [PathBuf],
     pub log: Option<&'a Path>,
@@ -315,12 +317,8 @@ fn game_args(
             ("--userType", "${user_type}") => value("msa"),
             ("--version", "${version_name}") => value(profile.version.id()),
             ("--versionType", "${version_type}") => value(version_kind),
-            ("--gameDir", "${game_directory}") => {
-                GameArgument::Value(material.game.as_os_str().into())
-            }
-            ("--assetsDir", "${assets_root}") => {
-                GameArgument::Value(material.assets.as_os_str().into())
-            }
+            ("--gameDir", "${game_directory}") => GameArgument::GameDirectory,
+            ("--assetsDir", "${assets_root}") => GameArgument::AssetsDirectory,
             ("--assetIndex", "${assets_index_name}") => value(material.asset_index),
             ("--width", "${resolution_width}") => value(&profile.window_width.to_string()),
             ("--height", "${resolution_height}") => value(&profile.window_height.to_string()),

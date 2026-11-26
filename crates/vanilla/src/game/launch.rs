@@ -135,8 +135,8 @@ impl LaunchPlan<'_> {
         self.runtime.java_executable()
     }
 
-    pub fn working_directory(&self) -> &Path {
-        self.view.paths().game_dir()
+    pub fn assets_directory(&self) -> &Path {
+        self.view.paths().assets_dir()
     }
 
     pub fn main_class(&self) -> &'static str {
@@ -275,7 +275,7 @@ pub fn plan_launch<'a>(
         || profile.version.id() != summary.version
         || profile.imported_pack.is_some()
         || profile.clone().normalize_input().is_err()
-        || !view.paths().game_dir().is_absolute()
+        || !view.paths().content_dir().is_absolute()
         || !runtime.java_executable().is_absolute()
     {
         return Err(PlanError::InvalidProfile);
@@ -287,8 +287,6 @@ pub fn plan_launch<'a>(
         profile,
         required,
         arguments::Material {
-            game: paths.game_dir(),
-            assets: paths.assets_dir(),
             asset_index: paths.asset_index_id(),
             classpath: paths.class_path(),
             log: paths.logging_config(),

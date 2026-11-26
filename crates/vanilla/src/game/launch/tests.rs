@@ -64,8 +64,6 @@ fn fixture_parts(
         &profile(VanillaVersion::Release26_3),
         java_major,
         Material {
-            game: &root.join("game"),
-            assets: &root.join("content/assets"),
             asset_index: "55",
             classpath: &classpath,
             log: None,
@@ -114,6 +112,14 @@ fn rule_order_platform_and_classpath_are_deterministic() {
             .game
             .iter()
             .any(|arg| matches!(arg, GameArgument::Identity(IdentitySlot::SessionAccess))));
+        assert!(parts
+            .game
+            .iter()
+            .any(|arg| matches!(arg, GameArgument::GameDirectory)));
+        assert!(parts
+            .game
+            .iter()
+            .any(|arg| matches!(arg, GameArgument::AssetsDirectory)));
         assert!(!parts
             .game
             .iter()
@@ -271,8 +277,6 @@ fn pinned_official_corpus_is_offline_deterministic() {
                 .collect();
             assert_eq!(classpath.len(), expected);
             let log = plan.logging_path.map(|p| view.join(p));
-            let game = view.with_file_name("game");
-            let assets = view.join("assets");
             let build = || {
                 arguments::build(
                     &raw,
@@ -280,8 +284,6 @@ fn pinned_official_corpus_is_offline_deterministic() {
                     &profile,
                     entry.java_major,
                     Material {
-                        game: &game,
-                        assets: &assets,
                         asset_index: &plan.asset_index_id,
                         classpath: &classpath,
                         log: log.as_deref(),
