@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 use gpui::{
-    App, Background, Div, ElementId, Hsla, Rgba, SharedString, Window, WindowAppearance, div,
-    linear_color_stop, linear_gradient, prelude::*, px, rgb,
+    App, Div, ElementId, Hsla, Rgba, SharedString, Window, WindowAppearance, div, prelude::*, px,
+    rgb,
 };
 use gpui_component::{
     Disableable, Selectable, Sizable,
@@ -47,9 +47,83 @@ pub fn compact_action(
 ) -> Button {
     action_button(id, palette, treatment, disabled, cx)
         .h(px(32.))
-        .when(!disabled, |button| {
-            button.border_1().border_color(palette.stroke)
+        .when(
+            !disabled && !matches!(treatment, Partition::Selected),
+            |button| button.border_1().border_color(palette.stroke),
+        )
+}
+
+/// The selected instance's primary action. The hit area stays still as its face depresses.
+pub fn launch_action(label: &'static str, palette: Palette, disabled: bool, cx: &App) -> Button {
+    let ink = action_ink(palette, Partition::Primary, disabled);
+    let face = if disabled {
+        palette.layer
+    } else if palette.dark {
+        rgb(0xe0e1dc)
+    } else {
+        rgb(0x292b2c)
+    };
+    let lip = if disabled {
+        palette.stroke
+    } else if palette.dark {
+        rgb(0x969995)
+    } else {
+        rgb(0x151617)
+    };
+    let plate = div()
+        .id("launch-plate")
+        .relative()
+        .min_w(px(82.))
+        .px_3()
+        .h(px(29.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .bg(face)
+        .text_color(ink)
+        .when(disabled, |d| d.border_1().border_color(palette.stroke))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .when(!disabled, |d| {
+            d.hover(|s| {
+                s.bg(if palette.dark {
+                    rgb(0xf0f0ec)
+                } else {
+                    rgb(0x383a3b)
+                })
+            })
+            .active(|s| {
+                s.top(px(2.)).bg(if palette.dark {
+                    rgb(0xcacbc7)
+                } else {
+                    rgb(0x202223)
+                })
+            })
         })
+        .child(crate::icons::Icon::Play.render(px(16.), ink))
+        .child(label);
+    action_button("play", palette, Partition::Primary, disabled, cx)
+        .p_0()
+        .border_0()
+        .bg(palette.layer)
+        .h(px(32.))
+        .child(
+            div()
+                .id("launch-surface")
+                .relative()
+                .h(px(32.))
+                .bg(palette.layer)
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(2.))
+                        .right(px(2.))
+                        .bottom_0()
+                        .h(px(4.))
+                        .bg(lip),
+                )
+                .child(plate),
+        )
 }
 
 pub fn label(
@@ -137,7 +211,6 @@ pub struct Palette {
     pub accent: Rgba,
     pub selected: Rgba,
     pub warning: Rgba,
-    pub success: Rgba,
 }
 
 impl Palette {
@@ -153,12 +226,12 @@ impl Palette {
         let values = if dark {
             [
                 0x202020, 0x262626, 0x2c2c2c, 0x424242, 0xbdbdbd, 0xf4f4f4, 0xd7d7d7, 0x404040,
-                0xf4f4f4, 0xd7d7d7,
+                0xf4f4f4,
             ]
         } else {
             [
                 0xf2f2f2, 0xffffff, 0xf8f8f8, 0xd2d2d2, 0x525252, 0x161616, 0x353535, 0xdedede,
-                0x161616, 0x353535,
+                0x161616,
             ]
         }
         .map(rgb);
@@ -172,7 +245,6 @@ impl Palette {
             accent,
             selected,
             warning,
-            success,
         ] = values;
         Self {
             dark,
@@ -186,7 +258,6 @@ impl Palette {
             accent,
             selected,
             warning,
-            success,
         }
     }
 
@@ -234,18 +305,6 @@ impl Palette {
         } else {
             ".SystemUIFont".into()
         };
-    }
-
-    pub fn instance_background(self) -> Background {
-        if !self.dark || crate::shell::high_contrast() {
-            return gpui::solid_background(self.layer);
-        }
-        // A quiet neutral falloff at the head of the workspace, from the Carbon landing palette.
-        linear_gradient(
-            180.,
-            linear_color_stop(rgb(0x343434), 0.),
-            linear_color_stop(self.layer, 0.88),
-        )
     }
 
     pub fn ink(self) -> Hsla {
