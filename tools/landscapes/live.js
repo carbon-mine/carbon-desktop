@@ -61,7 +61,7 @@ scene.add(sun,sun.target,new THREE.HemisphereLight(marsh?0xc9c8ed:0xe1efff,0x987
 
 const blocks = [];
 const emitBox=(x,y,z,w,h,d,color,ry=0,motion=null)=>blocks.push({x,y,z,w,h,d,color,ry,motion});
-const world = spec.build(emitBox);
+const world = spec.build(emitBox) ?? {};
 addFantasy(emitBox,id);
 const cycleSeconds=8;
 const turn=Math.PI*2;
@@ -153,10 +153,11 @@ function drawBoxes(items, material, useColors){
  });
  mesh.castShadow=true; mesh.receiveShadow=true; scene.add(mesh);return mesh;
 }
-const cloudMaterial=new THREE.MeshLambertMaterial({color:cloudBoxes[0].color,emissive:marsh?0x584660:0xc5b4ae});
-const cloudMesh=drawBoxes(cloudBoxes,cloudMaterial,false);
-cloudMesh.castShadow=false;
-cloudMesh.receiveShadow=false;
+if(cloudBoxes.length){
+ const material=new THREE.MeshLambertMaterial({color:cloudBoxes[0].color,emissive:marsh?0x584660:0xc5b4ae});
+ const horizon=drawBoxes(cloudBoxes,material,false);
+ horizon.castShadow=false;horizon.receiveShadow=false;
+}
 const lit=b=>String(b.color).toLowerCase()==='#ffb455';
 drawBoxes(blocks.filter(b=>!lit(b)&&!b.motion),stone,true);
 drawBoxes(blocks.filter(lit),amber,false);
