@@ -1,6 +1,6 @@
 {
   "identifier": "local-review",
-  "description": "The bundled main window operates the local library, vanilla setup and review fixtures.",
+  "description": "The bundled main window operates the local library, account window, vanilla setup and review fixtures.",
   "windows": [
     "main"
   ],
@@ -12,6 +12,8 @@
     "allow-fixture-library",
     "allow-fixture-action",
     "allow-play-readiness",
+    "allow-minecraft-account-status",
+    "allow-show-minecraft-accounts",
     "allow-import-pack",
     "allow-inspect-vanilla-profile",
     "allow-review-installed-launch-inputs",

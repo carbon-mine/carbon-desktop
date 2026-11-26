@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod account;
 mod dialogs;
 mod frame;
 mod menu;
@@ -147,6 +148,7 @@ fn main() {
                 frame::remember(&window, root.join("window-placement.json"));
                 setup::guard_test_window(&window, app.state::<setup::SetupJobs>().inner().clone());
             }
+            app.manage(account::DesktopAccounts::new(&root));
             app.manage(Library(root));
             Ok(())
         })
@@ -155,6 +157,8 @@ fn main() {
             frame::apply_desktop_theme,
             fixture_action,
             play_readiness,
+            account::minecraft_account_status,
+            account::show_minecraft_accounts,
             dialogs::edit_profile_dialog,
             personal_library,
             open_game_folder,

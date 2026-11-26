@@ -24,6 +24,12 @@ The Linux build matched its before/after source manifests. Its observed executab
 
 The native Windows UI Automation walkthrough created Vanilla survival, checked Mojang metadata, prepared Java 25.0.5.1+2, and observed the compatible runtime in the application. Cancelling the client picker preserved the report. Selecting a wrong-size local JAR produced a specific error and a fresh setup check restored the report. The run also edited and cloned settings, found the narrow library using Ctrl+F, resumed and rolled back the interrupted fixture update, installed exact and overlapping fixtures and previewed a local pack through the native picker. Window captures live in `.artifacts/windows-setup-review/`. In this warm run, first use was interactive after 0.71 seconds and sampled private memory peaked at 284.1 MiB across the launcher tree. Separate checks on the presentation copy exercised the native File and View commands and left Vanilla survival selected for the owner.
 
+## Svelte/Tauri account checkpoint
+
+The account toolbar and native dialogs use the same Rust account service as GPUI. The account registry and vault slots follow each edition's app root. See [account boundaries and review commands](account.md#sveltetauri-account-window).
+
+The credential-free Windows debug executable built successfully. The locked launcher and account test run passed 35 tests. The interactive vault test remains opt-in. Strict Clippy, the Svelte build and type check, and the 25-file design seed verification passed. An unprivileged WSL2/Xvfb test on GTK 3.24.41 and WebKitGTK 2.52.6 opened the account dialog attached to the launcher window, displayed the missing-registration message, dismissed it with Escape, and opened it again from the toolbar. Native Windows dialog interaction, native Linux desktop and assistive technology checks remain open. Live sign-in and entitlement verification need Carbon's approved registration and an entitled test account.
+
 ## Roots and inputs
 
 The [vanilla launch adapter checkpoint](discovery/launch-adapter.md) adds one trusted Rust planner for 26.3 and 24w14a. The pinned corpus passed on the Windows host and under WSL2, and the WSL2 argument pass recorded no helper, socket or write attempts. The Play gate remains in place. Both shells still need the approved account decision and trusted runner for admission.

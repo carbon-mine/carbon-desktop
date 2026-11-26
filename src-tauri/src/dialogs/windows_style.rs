@@ -1,4 +1,4 @@
-use super::{wide, NAME, NUMBERS, VERSION};
+use super::{account::ACCOUNTS, NAME, NUMBERS, VERSION};
 use std::{
     mem::size_of,
     ptr::{null, null_mut},
@@ -57,7 +57,14 @@ impl Style {
         }
     }
 
-    pub unsafe fn init(self, hwnd: HWND) {
+    pub unsafe fn init(
+        self,
+        hwnd: HWND,
+        buttons: &[i32],
+        edits: &[i32],
+        combo: Option<i32>,
+        default_button: i32,
+    ) {
         let dark = i32::from(self.dark && !self.native);
         DwmSetWindowAttribute(
             hwnd,
@@ -65,13 +72,13 @@ impl Style {
             std::ptr::from_ref(&dark).cast(),
             size_of::<i32>() as u32,
         );
-        for id in [IDOK, IDCANCEL] {
+        for &id in buttons {
             let button = GetDlgItem(hwnd, id);
             if button.is_null() {
                 continue;
             }
             let kind = if self.native {
-                if id == IDOK {
+                if id == default_button {
                     BS_DEFPUSHBUTTON
                 } else {
                     BS_PUSHBUTTON
@@ -86,8 +93,8 @@ impl Style {
                 (bits & !(BS_TYPEMASK as isize)) | kind as isize,
             );
         }
-        SendMessageW(hwnd, DM_SETDEFID, IDOK as usize, 0);
-        for id in [NAME, VERSION, NUMBERS[0], NUMBERS[1], NUMBERS[2]] {
+        SendMessageW(hwnd, DM_SETDEFID, default_button as usize, 0);
+        for id in edits.iter().copied().chain(combo) {
             let control = GetDlgItem(hwnd, id);
             if control.is_null() {
                 continue;
@@ -107,7 +114,7 @@ impl Style {
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
-        let combo = GetDlgItem(hwnd, VERSION);
+        let combo = combo.map_or(null_mut(), |id| GetDlgItem(hwnd, id));
         if !combo.is_null() {
             let mut height = RECT {
                 bottom: 14,
@@ -117,7 +124,7 @@ impl Style {
             SendMessageW(combo, CB_SETITEMHEIGHT, usize::MAX, height.bottom as isize);
         }
 
-        for id in [NAME, NUMBERS[0], NUMBERS[1], NUMBERS[2]] {
+        for &id in edits {
             let edit = GetDlgItem(hwnd, id);
             if !edit.is_null() {
                 SendMessageW(
@@ -134,7 +141,7 @@ impl Style {
     pub unsafe fn message(self, hwnd: HWND, msg: u32, w: usize, l: isize) -> Option<isize> {
         if msg == WM_DRAWITEM && l != 0 {
             let item = &*(l as *const DRAWITEMSTRUCT);
-            if item.CtlType == ODT_COMBOBOX && item.CtlID == VERSION as u32 {
+            if item.CtlType == ODT_COMBOBOX && combo_control(item.CtlID as i32) {
                 self.combo(item);
                 return Some(1);
             }
@@ -176,7 +183,7 @@ impl Style {
                 let focus = GetFocus();
                 if !focus.is_null()
                     && GetParent(focus) == hwnd
-                    && [NAME, VERSION, NUMBERS[0], NUMBERS[1], NUMBERS[2]]
+                    && [NAME, VERSION, NUMBERS[0], NUMBERS[1], NUMBERS[2], ACCOUNTS]
                         .contains(&GetDlgCtrlID(focus))
                 {
                     let mut rect = RECT::default();
@@ -272,8 +279,7 @@ impl Style {
         let dc = item.hDC;
         let saved = SaveDC(dc);
         fill(dc, &item.rcItem, paper);
-        if let Some(version) = super::VanillaVersion::ALL.get(item.itemID as usize) {
-            let value = wide(version.id());
+        if let Some(value) = combo_text(item.hwndItem, item.itemID as isize) {
             let mut area = item.rcItem;
             area.left += 5;
             SetBkMode(dc, TRANSPARENT as i32);
@@ -291,6 +297,23 @@ impl Style {
         }
         RestoreDC(dc, saved);
     }
+}
+
+fn combo_control(id: i32) -> bool {
+    [VERSION, ACCOUNTS].contains(&id)
+}
+
+unsafe fn combo_text(hwnd: HWND, index: isize) -> Option<Vec<u16>> {
+    if index < 0 {
+        return None;
+    }
+    let index = index as usize;
+    let len = SendMessageW(hwnd, CB_GETLBTEXTLEN, index, 0);
+    if !(0..=512).contains(&len) {
+        return None;
+    }
+    let mut text = vec![0; len as usize + 1];
+    (SendMessageW(hwnd, CB_GETLBTEXT, index, text.as_mut_ptr() as isize) >= 0).then_some(text)
 }
 unsafe fn fill(dc: HDC, rect: &RECT, color: u32) {
     SetDCBrushColor(dc, color);
@@ -311,7 +334,7 @@ unsafe extern "system" fn dark_field(
         RemoveWindowSubclass(hwnd, Some(dark_field), id);
         return DefSubclassProc(hwnd, msg, w, l);
     }
-    if id == VERSION as usize {
+    if combo_control(id as i32) {
         match msg {
             WM_PAINT => {
                 let mut paint = PAINTSTRUCT::default();
@@ -364,7 +387,7 @@ unsafe extern "system" fn dark_field(
         return result;
     }
     let result = DefSubclassProc(hwnd, msg, w, l);
-    if id == VERSION as usize
+    if combo_control(id as i32)
         && matches!(
             msg,
             CB_SETCURSEL | CB_SHOWDROPDOWN | WM_SETFOCUS | WM_KILLFOCUS | WM_KEYUP | WM_LBUTTONUP
@@ -409,7 +432,7 @@ unsafe fn closed_combo(hwnd: HWND, dc: HDC) {
         SelectObject(dc, font as HGDIOBJ);
     }
     let index = SendMessageW(hwnd, CB_GETCURSEL, 0, 0);
-    if let Some(version) = super::VanillaVersion::ALL.get(index as usize) {
+    if let Some(value) = combo_text(hwnd, index) {
         let mut text = rect;
         text.left += 7;
         text.right -= 24;
@@ -417,7 +440,7 @@ unsafe fn closed_combo(hwnd: HWND, dc: HDC) {
         SetBkMode(dc, TRANSPARENT as i32);
         DrawTextW(
             dc,
-            wide(version.id()).as_ptr(),
+            value.as_ptr(),
             -1,
             &mut text,
             DT_SINGLELINE | DT_LEFT | DT_VCENTER,

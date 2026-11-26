@@ -7,6 +7,8 @@ fn main() {
         "fixture_library",
         "fixture_action",
         "play_readiness",
+        "minecraft_account_status",
+        "show_minecraft_accounts",
         "import_pack",
         "inspect_vanilla_profile",
         "review_installed_launch_inputs",
