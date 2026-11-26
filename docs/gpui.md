@@ -97,3 +97,13 @@ Both editions remained navigable while downloading the real Mojang file plan aft
 - The earlier GPUI `ee52a36` exposed only window-frame nodes. The current AccessKit implementation adds application and modal nodes with live command callbacks. Use [the Windows UIA script](../scripts/check-gpui-uia.ps1) or [the Linux AT-SPI script](../scripts/check-gpui-atspi.py) in an isolated desktop session. Narrator, Orca speech and Windows High Contrast remain separate qualifications.
 - WSL built `ee52a36` offline against the lockfile on Ubuntu 24.04.4 x86-64 with Rust 1.96, then painted the 100-profile library under Xvfb, Openbox and Mesa lavapipe at 96 and 144 DPI. Ctrl+F / 099 / Enter selected Review instance 099, and Ctrl+N opened a separate profile window. Escape closed it with all 100 profiles unchanged. The narrow detail and Back to library were exercised at 444 × 680 at 96 DPI and 666 × 1020 at 144 DPI with light and dark captures. An editor reopened in this pass inherited the dark palette. Openbox showed no `WM_TRANSIENT_FOR` or modal state for the popup. This is X11 evidence. The headless WSL session lacked the native chooser services, and Wayland remains unqualified.
 - An unsigned local Ubuntu amd64 package was extracted and its ELF reran the complete 96 DPI suite. `carbon-desktop-gpui_0.0.0+review.ee52a36_amd64.deb` is 20,525,980 bytes with SHA-256 `e0babc9fba1432766ed4e80a1cb6c49abb10607a14f8fa27c33d05dd0b9f7af2`. The extracted ELF matches the built artifact at SHA-256 `9285110e58ab95d1ac2864b17b7e01feaa5d49592cb9d4cd1cac94578c04f249`. This qualifies the extracted app in the test session. Installer integration and distribution remain open.
+
+## Review H.264 playback in Home
+
+Use a trusted local FFmpeg executable with the H.264 decoder and a directory of review renders. For each view in the landscape manifest, supply `<id>.mp4` and `<id>.jpg`. The prototype expects silent eight-second loops at 1440 × 810 and 30 fps, with a BT.709 matrix and limited video range. Export posters from the source render.
+
+```text
+carbon-desktop-gpui --temporary-review --seed-review --scenery-review-dir <absolute-artwork-directory> --scenery-review-ffmpeg <absolute-decoder-path>
+```
+
+Open **Scenery** to select a view. Check moving terrain details against the poster, then try **Pause**, **Resume** and **Library**. Active Home uses a software decoder and uploads frames through the GPUI image path. Switching away retires the decoder. A missing or unreadable clip falls back to bundled motion. Run without the two scenery flags to compare bundled playback at the same window size.

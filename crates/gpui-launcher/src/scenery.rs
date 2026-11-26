@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+mod review_video;
 use gpui::{App, Context, ObjectFit, RenderImage, Window, div, img, prelude::*, rgb};
 use std::{
     sync::Arc,
@@ -167,6 +168,9 @@ fn after_present(step: usize, due: Instant, now: Instant, period: Duration) -> (
 
 pub struct SceneView {
     landscape: Landscape,
+    video: Option<review_video::Reader>,
+    decoder_cancel: review_video::Cancellation,
+    video_failed: bool,
     image: Option<Arc<RenderImage>>,
     step: usize,
     poster_pending: bool,
@@ -181,10 +185,16 @@ pub struct SceneView {
 
 impl SceneView {
     pub fn new(landscape: Landscape, cx: &mut Context<Self>) -> Self {
-        cx.on_release(|view, app| retire(view.image.take(), app))
-            .detach();
+        cx.on_release(|view, app| {
+            view.decoder_cancel.cancel();
+            retire(view.image.take(), app);
+        })
+        .detach();
         let mut view = Self {
             landscape,
+            video: None,
+            decoder_cancel: Default::default(),
+            video_failed: false,
             image: None,
             step: 0,
             poster_pending: true,
@@ -205,6 +215,9 @@ impl SceneView {
         }
         self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
+        std::mem::take(&mut self.decoder_cancel).cancel();
+        self.video.take();
+        self.video_failed = false;
         self.landscape = landscape;
         self.motion_failed = false;
         self.poster_failed = false;
@@ -220,6 +233,8 @@ impl SceneView {
         }
         self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
+        std::mem::take(&mut self.decoder_cancel).cancel();
+        self.video.take();
         self.playing = playing;
         self.next_due = None;
         self.schedule(cx);
@@ -231,6 +246,12 @@ impl SceneView {
         let scene = self.landscape.0;
         let poster = self.poster_pending;
         let now = Instant::now();
+        let video_source = review_video::Source::configured().filter(|_| !self.video_failed);
+        let fps = if video_source.is_some() {
+            30
+        } else {
+            scene.fps
+        };
         let (bytes, due, step) = if poster {
             (scene.poster, now, 0)
         } else {
@@ -238,7 +259,7 @@ impl SceneView {
                 return;
             }
             let Some(pack) = scene.motion else { return };
-            let period = Duration::from_secs_f64(1. / f64::from(scene.fps));
+            let period = Duration::from_secs_f64(1. / f64::from(fps));
             let (due, advance) = frame_deadline(self.next_due.unwrap_or(now + period), now, period);
             let step = self.step.wrapping_add(advance);
             let Some(bytes) = Frames::open(pack).and_then(|f| f.at(f.index(step, scene.forward)))
@@ -248,15 +269,54 @@ impl SceneView {
             };
             (bytes, due, step)
         };
+        let previous_reader = self.video.take();
+        let decoder_cancel = self.decoder_cancel.clone();
         let generation = self.generation;
         let (interrupt, interrupted) = async_channel::bounded::<()>(1);
         self.interrupt = Some(interrupt);
         self.busy = true;
         cx.spawn(async move |this, cx| {
-            let decoded = cx
-                .background_executor()
-                .spawn(async move { decode(bytes) })
-                .await;
+            let timeout_cancel = decoder_cancel.clone();
+            let decode_job = cx.background_executor().spawn(async move {
+                if let Some(source) = video_source {
+                    if poster {
+                        return (
+                            source.poster(scene.id).or_else(|| decode(bytes)),
+                            None,
+                            false,
+                        );
+                    }
+                    match review_video::Reader::frame(
+                        previous_reader,
+                        decoder_cancel,
+                        source,
+                        scene.id,
+                        step,
+                    ) {
+                        Ok((reader, image)) => return (Some(image), Some(reader), false),
+                        Err(err) => {
+                            eprintln!(
+                                "H.264 scenery {}: {}; using bundled playback",
+                                scene.id, err
+                            );
+                            return (decode(bytes), None, true);
+                        }
+                    }
+                }
+                (decode(bytes), None, false)
+            });
+            let (decoded, reader, video_failed) = if video_source.is_some() && !poster {
+                let timeout = cx.background_executor().timer(Duration::from_secs(3));
+                match futures::future::select(decode_job, Box::pin(timeout)).await {
+                    futures::future::Either::Left((result, _)) => result,
+                    futures::future::Either::Right((_, pending)) => {
+                        timeout_cancel.cancel();
+                        pending.await
+                    }
+                }
+            } else {
+                decode_job.await
+            };
             let remaining = due.saturating_duration_since(Instant::now());
             if !remaining.is_zero() {
                 futures::future::select(
@@ -269,11 +329,13 @@ impl SceneView {
                 view.busy = false;
                 view.interrupt.take();
                 if view.generation == generation {
+                    view.video = reader;
+                    view.video_failed |= video_failed;
                     if let Some(image) = decoded {
                         retire(view.image.replace(image), cx);
                         view.poster_pending = false;
                         if !poster {
-                            let period = Duration::from_secs_f64(1. / f64::from(scene.fps));
+                            let period = Duration::from_secs_f64(1. / f64::from(fps));
                             let (phase, next) = after_present(step, due, Instant::now(), period);
                             view.step = phase;
                             view.next_due = Some(next);
@@ -353,6 +415,82 @@ mod tests {
             samples[95 * samples.len() / 100]
         );
     }
+    #[test]
+    #[ignore = "release benchmark comparing three JPEG color conversion paths"]
+    fn compare_bundled_decode_paths() {
+        use std::hint::black_box;
+        use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+
+        let mut scenes = Landscape::ALL.to_vec();
+        scenes.sort_by_key(|scene| scene.id());
+        let mut frames = Vec::new();
+        for scene in scenes {
+            if let Some(bytes) = scene.0.motion {
+                let pack = Frames::open(bytes).unwrap();
+                frames.extend([pack.at(0).unwrap(), pack.at(pack.count / 2).unwrap()]);
+            }
+        }
+        assert!(!frames.is_empty());
+
+        let decode_path = |jpeg: &[u8], mode: Option<ColorSpace>| {
+            let mut pixels = match mode {
+                None => image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+                    .unwrap()
+                    .into_rgba8()
+                    .into_raw(),
+                Some(color) => zune_jpeg::JpegDecoder::new_with_options(
+                    ZCursor::new(jpeg),
+                    DecoderOptions::default().jpeg_set_out_colorspace(color),
+                )
+                .decode()
+                .unwrap(),
+            };
+            if mode != Some(ColorSpace::BGRA) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
+                    pixel.swap(0, 2);
+                }
+            }
+            pixels
+        };
+        let paths = [None, Some(ColorSpace::RGBA), Some(ColorSpace::BGRA)];
+        let mut samples = [Vec::new(), Vec::new(), Vec::new()];
+        for repetition in 0..=15 {
+            for (index, jpeg) in frames.iter().enumerate() {
+                for offset in 0..paths.len() {
+                    let path = (offset + repetition + index) % paths.len();
+                    let start = Instant::now();
+                    let pixels = decode_path(black_box(jpeg), paths[path]);
+                    let elapsed = start.elapsed().as_micros();
+                    if repetition == 0 {
+                        assert_eq!(pixels, decode_path(jpeg, None));
+                        assert!(
+                            pixels
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .all(|pixel| pixel[3] == 255)
+                        );
+                    } else {
+                        samples[path].push(elapsed);
+                    }
+                    black_box(pixels);
+                }
+            }
+        }
+        for (label, mut times) in ["image RGBA + swap", "Zune RGBA + swap", "Zune BGRA"]
+            .into_iter()
+            .zip(samples)
+        {
+            times.sort_unstable();
+            println!(
+                "{label}: {} samples, median {} us, p95 {} us",
+                times.len(),
+                times[times.len() / 2],
+                times[(times.len() * 95).div_ceil(100) - 1]
+            );
+        }
+    }
+
     #[test]
     fn optimized_decode_preserves_poster_colors_and_alpha() {
         for scene in Landscape::ALL {
