@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
+mod home_targets;
+mod scenery;
+pub(crate) use scenery::ScenePicker;
 mod icon;
 
 use super::theme::{Partition, compact_action, label};
@@ -16,6 +19,7 @@ use gpui_component::{
     Root, Sizable, StyledExt,
     input::{Input, InputEvent, InputState},
 };
+use home_targets::HomeTargets;
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 use targets::TargetDialog;
 use uuid::Uuid;
@@ -31,11 +35,17 @@ pub enum Mode {
     Clone,
 }
 
+pub(super) fn home_picker(launcher: &Launcher) -> Kind {
+    Kind::HomeTargets(home_targets::HomeSnapshot::read(launcher))
+}
+
 pub enum Kind {
     Profile(Mode, Option<Profile>),
     Icon(Profile),
     Server(Profile),
     Targets(Uuid, carbon_profiles::InstanceTargets),
+    HomeTargets(home_targets::HomeSnapshot),
+    Scenery(ScenePicker),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
     Notice {
@@ -70,6 +80,8 @@ struct Popup {
     form: Option<Form>,
     server: Option<ServerForm>,
     targets: Option<TargetDialog>,
+    home: Option<HomeTargets>,
+    scene: Option<ScenePicker>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
     account: Option<AccountDialog>,
@@ -85,6 +97,8 @@ fn title(kind: &Kind) -> &'static str {
         Kind::Profile(Mode::Clone, _) => "Clone instance",
         Kind::Server(_) => "Edit server address",
         Kind::Targets(..) => "Launch targets",
+        Kind::HomeTargets(_) => "Quick switcher",
+        Kind::Scenery(_) => "Home scenery",
         Kind::ImportPack(..) => "Import modpack",
         Kind::Icon(_) => "Choose instance icon",
         Kind::Account(_) => "Minecraft account",
@@ -108,6 +122,8 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
         Kind::Profile(..) => (417., 340.),
         Kind::Server(..) => (262., 220.),
         Kind::Targets(..) => (460., 300.),
+        Kind::HomeTargets(_) => (432., 320.),
+        Kind::Scenery(_) => (432., 296.),
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
         Kind::Account(_) => (430., 280.),
@@ -195,6 +211,8 @@ impl Popup {
         let mut icon = None;
         let mut server = None;
         let mut targets = None;
+        let mut home = None;
+        let mut scene = None;
         let (form, pack, notice, account) = match kind {
             Kind::Icon(profile) => {
                 icon = Some(icon::Picker::new(&profile, window, cx));
@@ -275,9 +293,18 @@ impl Popup {
                 server = Some(ServerForm { original, input });
                 (None, None, None, None)
             }
+            Kind::Scenery(current) => {
+                focus.focus(window);
+                scene = Some(current);
+                (None, None, None, None)
+            }
             Kind::Targets(id, snapshot) => {
                 focus.focus(window);
                 targets = Some(TargetDialog::new(id, snapshot));
+                (None, None, None, None)
+            }
+            Kind::HomeTargets(snapshot) => {
+                home = Some(HomeTargets::new(snapshot, owner.upgrade(), window, cx));
                 (None, None, None, None)
             }
             Kind::ImportPack(path, review) => {
@@ -327,6 +354,8 @@ impl Popup {
             form,
             server,
             targets,
+            home,
+            scene,
             pack,
             notice,
             account,
@@ -594,6 +623,9 @@ impl Render for Popup {
             .when_some(self.icon.as_ref(), |content, picker| {
                 content.track_scroll(&picker.scroll)
             })
+            .when_some(self.home.as_ref(), |content, home| {
+                content.track_scroll(&home.scroll)
+            })
             .overflow_y_scroll()
             .p_5()
             .gap_3();
@@ -712,6 +744,9 @@ impl Render for Popup {
         if let Some(targets) = &self.targets {
             content = content.child(self.target_content(targets, cx));
         }
+        if let Some(home) = &self.home {
+            content = content.child(self.home_target_content(home, cx));
+        }
         if let Some(account) = &self.account {
             content = content.child(self.account_content(account, cx));
         }
@@ -725,6 +760,9 @@ impl Render for Popup {
                 message,
                 Role::Alert,
             ));
+        }
+        if let Some(scene) = &self.scene {
+            content = content.child(self.scene_choices(scene, cx));
         }
         if let Some(error) = &self.error {
             let reason = if self.pack.is_some() {
@@ -758,16 +796,18 @@ impl Render for Popup {
                 "Close"
             };
             (dismiss, Partition::Neutral)
-        } else if self
-            .targets
-            .as_ref()
-            .is_some_and(|targets| !targets.editing())
+        } else if self.scene.is_some()
+            || self.home.is_some()
+            || self
+                .targets
+                .as_ref()
+                .is_some_and(|targets| !targets.editing())
         {
             ("Close", Partition::Neutral)
         } else {
             ("Cancel", Partition::Neutral)
         };
-        let bar = div()
+        let mut bar = div()
             .flex()
             .flex_wrap()
             .justify_end()
@@ -776,8 +816,11 @@ impl Render for Popup {
             .py_3()
             .bg(p.layer)
             .border_t_1()
-            .border_color(self.palette.stroke)
-            .child(self.control(
+            .border_color(self.palette.stroke);
+        bar = if let Some(home) = &self.home {
+            bar.child(self.home_close_control(home, cx))
+        } else {
+            bar.child(self.control(
                 label(
                     compact_action("close", p, treatment, self.importing, cx),
                     dismiss,
@@ -793,6 +836,8 @@ impl Render for Popup {
                 cx,
                 Self::dismiss,
             ))
+        };
+        let bar = bar
             .when(self.form.is_some() || self.server.is_some(), |bar| {
                 let name = match self.form.as_ref().map(|form| form.mode) {
                     Some(Mode::Create) => "Create instance",

@@ -112,7 +112,7 @@ struct Placement {
     display_uuid: Option<String>,
 }
 
-fn read<T: serde::de::DeserializeOwned>(root: &Path, file: &str) -> Option<T> {
+pub(super) fn read<T: serde::de::DeserializeOwned>(root: &Path, file: &str) -> Option<T> {
     let path = root.join(file);
     let info = fs::symlink_metadata(&path).ok()?;
     if !info.is_file() || info.len() > 4096 {
@@ -121,7 +121,7 @@ fn read<T: serde::de::DeserializeOwned>(root: &Path, file: &str) -> Option<T> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
-fn write(root: &Path, file: &str, value: &impl Serialize) -> std::io::Result<()> {
+pub(super) fn write(root: &Path, file: &str, value: &impl Serialize) -> std::io::Result<()> {
     fs::create_dir_all(root)?;
     let mut staged = tempfile::NamedTempFile::new_in(root)?;
     serde_json::to_writer(&mut staged, value)?;

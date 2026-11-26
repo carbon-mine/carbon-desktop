@@ -4,6 +4,7 @@ pub mod icons;
 mod server;
 mod storage;
 mod targets;
+pub mod world_preview;
 pub use folder::open_game_folder;
 pub use server::{
     server_profile, set_server_address, ServerAddress, ServerBindingUpdate, ServerJoinReadiness,
