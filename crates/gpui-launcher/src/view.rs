@@ -1026,8 +1026,99 @@ impl Launcher {
             )
             .child(self.workspace_tabs(&[Tab::Overview, Tab::Settings], p, cx))
             .child(body)
+            .when(
+                profile.server_address.is_some() || self.tab == Tab::Settings,
+                |body| body.child(self.server_details(profile, p, cx)),
+            )
             .into_any_element()
     }
+
+    fn server_details(
+        &self,
+        profile: &carbon_profiles::Profile,
+        p: Palette,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let enabled = !self.busy() && self.popup.is_none() && self.profile_issue.is_none();
+        let address = profile.server_address.as_ref();
+        let guidance = profile.server_join_readiness().message();
+        let mut panel = col()
+            .px_5()
+            .py_4()
+            .gap_2()
+            .border_t_1()
+            .border_color(p.stroke)
+            .child(self.accessibility.text(
+                div().font_semibold().child("Multiplayer"),
+                "server-heading",
+                "Multiplayer",
+                Role::Heading,
+            ));
+        if let Some(address) = address {
+            let address = format!("Server address: {address}");
+            let pack = profile.imported_pack.as_ref().map_or_else(
+                || format!("Local pack: Vanilla {}", profile.version.id()),
+                |pack| {
+                    format!(
+                        "Local pack: {} · Minecraft {}{} · {} pending file{}",
+                        pack.name,
+                        profile.version.id(),
+                        pack.loader
+                            .as_ref()
+                            .map_or_else(String::new, |loader| format!(" · {loader}")),
+                        pack.pending_files,
+                        if pack.pending_files == 1 { "" } else { "s" },
+                    )
+                },
+            );
+            panel = panel
+                .child(self.accessibility.text(
+                    div().min_w_0().overflow_hidden().child(address.clone()),
+                    "server-address",
+                    address,
+                    Role::Label,
+                ))
+                .child(self.accessibility.text(
+                    div().text_sm().text_color(p.muted).child(pack.clone()),
+                    "server-pack",
+                    pack,
+                    Role::Label,
+                ));
+        }
+        panel
+            .child(self.accessibility.text(
+                div().text_sm().text_color(p.muted).child(guidance),
+                "server-readiness",
+                guidance,
+                Role::Label,
+            ))
+            .when(address.is_some(), |panel| {
+                const MANUAL: &str = "Copy the address and paste it in Multiplayer in a compatible Minecraft installation.";
+                panel.child(self.accessibility.text(
+                    div().text_sm().text_color(p.muted).child(MANUAL),
+                    "server-manual",
+                    MANUAL,
+                    Role::Label,
+                ))
+            })
+            .child(
+                row().flex_wrap().gap_2()
+                    .when(address.is_some(), |row| row.child(self.command(
+                        p, "copy-server", "Copy server address", false, self.popup.is_some(), cx,
+                        |this, _, cx| this.copy_server(cx),
+                    )))
+                    .child(self.command(
+                        p,
+                        "edit-server-address",
+                        if address.is_some() { "Edit server address" } else { "Set server address" },
+                        false,
+                        !enabled,
+                        cx,
+                        |this, window, cx| this.server_editor(window, cx),
+                    )),
+            )
+    }
+
     fn setup_diagnostics(
         &self,
         p: Palette,

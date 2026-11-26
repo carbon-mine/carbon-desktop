@@ -7,6 +7,149 @@ fn create(name: &str) -> Value {
 }
 
 #[test]
+fn server_address_parses_only_supported_host_and_port_forms() {
+    for (input, expected) in [
+        (" Play.Example.org:25565 ", "play.example.org:25565"),
+        ("localhost", "localhost"),
+        ("play.Example.ORG.", "play.example.org."),
+        ("192.0.2.40", "192.0.2.40"),
+        ("192.0.2.40:65535", "192.0.2.40:65535"),
+        ("[2001:0DB8:0000:0000::3]:025565", "[2001:db8::3]:25565"),
+        ("[::1]", "[::1]"),
+    ] {
+        let address = ServerAddress::parse(input).unwrap();
+        assert_eq!(address.as_str(), expected);
+        assert_eq!(serde_json::to_value(address).unwrap(), expected);
+    }
+    for input in [
+        "",
+        "https://server.example",
+        "server.example/path",
+        "example.net?query",
+        "example.net#world",
+        "user@server.example",
+        "a..example",
+        "-a.example",
+        "server_example",
+        "1.2.3.999",
+        "server.example:65536",
+        "server.example:0",
+        "server.example:",
+        "server.example:+80",
+        "2001:db8::1",
+        "[::1]junk",
+        "[fe80::1%eth0]",
+        "server\n.example",
+        "\tserver.example",
+        "ｅxample.org",
+    ] {
+        assert!(ServerAddress::parse(input).is_err(), "{input:?}");
+    }
+    assert!(ServerAddress::parse(&format!("{}.example", "a".repeat(64))).is_err());
+    assert!(ServerAddress::parse_optional(" ").unwrap().is_none());
+}
+
+#[test]
+fn server_binding_updates_only_one_instance_and_preserves_old_profiles_and_imports() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let (first, save) = existing_player_files(root);
+    let first = first[0].clone();
+    assert!(!fs::read_to_string(root.join("personal/profiles.json"))
+        .unwrap()
+        .contains("serverAddress"));
+    assert_eq!(
+        server_profile(root, first.id)
+            .unwrap()
+            .server_join_readiness(),
+        ServerJoinReadiness::NoServer
+    );
+    let second = apply(root, create("Other profile")).unwrap().remove(1);
+    let address = ServerAddress::parse("test.example:25565").unwrap();
+    let other_address = ServerAddress::parse("[2001:db8::1]").unwrap();
+    set_server_address(root, first.id, None, Some(address.clone())).unwrap();
+    set_server_address(root, second.id, None, Some(other_address.clone())).unwrap();
+    assert!(set_server_address(root, first.id, None, None).is_err());
+
+    let mut edited = first.clone();
+    edited.memory_mib = 4096;
+    let saved = change(root, ProfileAction::Edit(edited)).unwrap().remove(0);
+    assert_eq!(saved.server_address.as_ref(), Some(&address));
+    assert_eq!(saved.memory_mib, 4096);
+    let clone = change(
+        root,
+        ProfileAction::Clone {
+            id: first.id,
+            name: "Independent".into(),
+        },
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
+    assert!(clone.server_address.is_none());
+    assert_eq!(
+        saved.server_join_readiness(),
+        ServerJoinReadiness::ProtectedLaunchUnavailable
+    );
+
+    let imported = import_instance(
+        root,
+        Uuid::new_v4(),
+        VanillaVersion::Release1_21_1,
+        review_pack(),
+        |stage| {
+            fs::create_dir(stage.join("game")).unwrap();
+            fs::write(stage.join("game/sample.txt"), b"pack canary").unwrap();
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(imported.server_address.is_none());
+    let bound = set_server_address(root, imported.id, None, Some(address.clone())).unwrap();
+    assert_eq!(
+        bound.server_join_readiness(),
+        ServerJoinReadiness::UnqualifiedPack
+    );
+    let retried = import_instance(root, imported.id, imported.version, review_pack(), |_| {
+        panic!("repeat import should be read-only")
+    })
+    .unwrap();
+    assert_eq!(retried, bound);
+    assert_eq!(retried.version, VanillaVersion::Release1_21_1);
+    assert_eq!(retried.imported_pack, Some(review_pack()));
+    assert!(change(
+        root,
+        ProfileAction::Clone {
+            id: imported.id,
+            name: "Do not clone".into()
+        }
+    )
+    .is_err());
+    assert_eq!(
+        fs::read(
+            root.join("instances-v1")
+                .join(imported.id.to_string())
+                .join("game/sample.txt")
+        )
+        .unwrap(),
+        b"pack canary"
+    );
+
+    let cleared = set_server_address(root, first.id, Some(&address), None).unwrap();
+    assert!(cleared.server_address.is_none());
+    assert_eq!(cleared.memory_mib, 4096);
+    assert_eq!(
+        server_profile(root, second.id).unwrap().server_address,
+        Some(other_address)
+    );
+    assert_eq!(
+        server_profile(root, imported.id).unwrap().server_address,
+        Some(address)
+    );
+    assert_eq!(fs::read(save).unwrap(), b"player's save");
+}
+
+#[test]
 fn comparison_roots_start_identically_and_existing_profiles_are_preserved() {
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();

@@ -1085,6 +1085,63 @@ impl Launcher {
         popup::open(self, popup::Kind::Profile(mode, profile), window, cx);
     }
 
+    fn server_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy() || self.popup.is_some() || self.profile_issue.is_some() {
+            return;
+        }
+        let Some(id) = self.selected_profile().map(|profile| profile.id) else {
+            return;
+        };
+        match carbon_profiles::server_profile(&self.root.path, id) {
+            Ok(profile) => popup::open(self, popup::Kind::Server(profile), window, cx),
+            Err(error) => {
+                self.message = error;
+                self.last_activity = Some(ActivityTarget::Personal(id));
+                cx.notify();
+            }
+        }
+    }
+
+    fn server_saved(&mut self, updated: Profile, cx: &mut Context<Self>) {
+        if let Some(current) = self
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == updated.id)
+        {
+            current.server_address = updated.server_address;
+            self.message = if current.server_address.is_some() {
+                "Server address saved.".into()
+            } else {
+                "Server address removed.".into()
+            };
+            self.last_activity = Some(ActivityTarget::Personal(updated.id));
+            cx.notify();
+        }
+    }
+
+    fn copy_server(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_profile() else {
+            return;
+        };
+        let id = profile.id;
+        let Some(address) = profile.server_address.clone() else {
+            return;
+        };
+        match carbon_profiles::server_profile(&self.root.path, id) {
+            Ok(profile) if profile.server_address.as_ref() == Some(&address) => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(address.to_string()));
+                self.message = "Server address copied.".into();
+            }
+            _ => {
+                self.message =
+                    "The server address could not be confirmed. Reload the library and try again."
+                        .into()
+            }
+        }
+        self.last_activity = Some(ActivityTarget::Personal(id));
+        cx.notify();
+    }
+
     fn set_profiles(&mut self, profiles: Vec<Profile>, id: Uuid, cx: &mut Context<Self>) {
         self.setup.remove(&id);
         self.profiles = profiles;

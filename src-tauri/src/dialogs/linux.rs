@@ -1,8 +1,71 @@
-use super::{Form, Mode, ProfileAction, VanillaVersion};
+use super::{Form, Mode, ProfileAction, ServerAddress, VanillaVersion};
 use crate::account::{Control, Dialog as AccountDialog};
 use gtk::{
     prelude::*, ComboBoxText, Dialog, DialogFlags, Entry, Grid, Label, ResponseType, SpinButton,
 };
+
+pub(super) fn edit_server(
+    owner: &tauri::WebviewWindow,
+    address: Option<&ServerAddress>,
+    dark: bool,
+) -> Result<Option<Option<ServerAddress>>, String> {
+    let native = owner
+        .gtk_window()
+        .map_err(|_| "The owner window is unavailable.")?;
+    let dialog = Dialog::with_buttons(
+        Some("Edit server address"),
+        Some(&native),
+        DialogFlags::MODAL | DialogFlags::DESTROY_WITH_PARENT,
+        &[
+            ("Cancel", ResponseType::Cancel),
+            ("Save changes", ResponseType::Accept),
+        ],
+    );
+    dialog.set_default_response(ResponseType::Accept);
+    dialog.set_default_size(430, -1);
+    let input = Entry::builder()
+        .text(address.map_or("", ServerAddress::as_str))
+        .activates_default(true)
+        .max_length(512)
+        .build();
+    let label = Label::with_mnemonic("Server _address");
+    label.set_mnemonic_widget(Some(&input));
+    let help = Label::new(Some(
+        "Example: play.example.org:25565. Clear the field to remove the binding.",
+    ));
+    let error = Label::new(None);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_border_width(16);
+    for description in [&label, &help, &error] {
+        description.set_xalign(0.0);
+        description.set_line_wrap(true);
+    }
+    error.style_context().add_class("error");
+    content.add(&label);
+    content.add(&input);
+    content.add(&help);
+    content.add(&error);
+    dialog.content_area().add(&content);
+    let _style = style(&dialog, dark);
+    dialog.show_all();
+    error.hide();
+    input.grab_focus();
+    let value = loop {
+        if dialog.run() != ResponseType::Accept {
+            break None;
+        }
+        match ServerAddress::parse_optional(input.text().as_str()) {
+            Ok(value) => break Some(value),
+            Err(reason) => {
+                error.set_text(&reason);
+                error.show();
+                input.grab_focus();
+            }
+        }
+    };
+    dialog.close();
+    Ok(value)
+}
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

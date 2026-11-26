@@ -3,7 +3,7 @@ use crate::account::Dialog as AccountDialog;
 use crate::Library;
 use carbon_profiles::Profile;
 #[cfg(any(windows, target_os = "linux"))]
-use carbon_profiles::{ProfileAction, VanillaVersion};
+use carbon_profiles::{ProfileAction, ServerAddress, VanillaVersion};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::{State, WebviewWindow};
@@ -35,6 +35,52 @@ pub fn show_accounts(owner: &WebviewWindow, dialog: AccountDialog) -> Result<(),
     return windows::show_accounts(owner, dialog, dark_theme(owner));
     #[cfg(target_os = "linux")]
     return linux::show_accounts(owner, dialog, dark_theme(owner));
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+pub async fn edit_server(
+    window: WebviewWindow,
+    initial: Option<ServerAddress>,
+) -> Result<Option<Option<ServerAddress>>, String> {
+    let dark = dark_theme(&window);
+    let owner = window.clone();
+    let (send, mut receive) = tauri::async_runtime::channel(1);
+    window
+        .run_on_main_thread(move || {
+            #[cfg(windows)]
+            let value = windows::edit_server(&owner, initial.as_ref(), dark);
+            #[cfg(target_os = "linux")]
+            let value = linux::edit_server(&owner, initial.as_ref(), dark);
+            let _ = send.try_send(value);
+        })
+        .map_err(|_| "Could not display the native server editor.")?;
+    receive
+        .recv()
+        .await
+        .ok_or("The server editor closed unexpectedly.")?
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+pub async fn copy_server(window: WebviewWindow, address: ServerAddress) -> Result<(), String> {
+    #[cfg(windows)]
+    let owner = window.clone();
+    let (send, mut receive) = tauri::async_runtime::channel(1);
+    window
+        .run_on_main_thread(move || {
+            #[cfg(windows)]
+            let result = windows::copy_text(&owner, address.as_str());
+            #[cfg(target_os = "linux")]
+            let result = {
+                gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(address.as_str());
+                Ok(())
+            };
+            let _ = send.try_send(result);
+        })
+        .map_err(|_| "Could not open the system clipboard.")?;
+    receive
+        .recv()
+        .await
+        .ok_or("The system clipboard is unavailable.")?
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq)]
@@ -81,6 +127,7 @@ impl Form {
                 window_width: 1280,
                 window_height: 720,
                 imported_pack: None,
+                server_address: None,
             },
             (Mode::Edit | Mode::Clone, Some(p)) => p.clone(),
             _ => return Err("Select a valid instance for this operation.".into()),
@@ -106,6 +153,7 @@ impl Form {
         let mut edited = Profile {
             id: self.initial.id,
             imported_pack: self.initial.imported_pack.clone(),
+            server_address: self.initial.server_address.clone(),
             name,
             version,
             memory_mib: integer(memory)?,
@@ -141,7 +189,7 @@ impl Form {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Edited {
-    profiles: Vec<Profile>,
+    profiles: Vec<crate::server::LibraryProfile>,
     selected_id: Uuid,
 }
 
@@ -248,7 +296,7 @@ pub async fn edit_profile_dialog(
             }
         };
         Ok(Some(Edited {
-            profiles,
+            profiles: profiles.into_iter().map(Into::into).collect(),
             selected_id,
         }))
     })

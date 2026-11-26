@@ -6,6 +6,8 @@
   ],
   "permissions": [
     "allow-personal-library",
+    "allow-edit-server-dialog",
+    "allow-copy-server-address",
     "allow-open-game-folder",
     "allow-apply-desktop-theme",
     "allow-edit-profile-dialog",

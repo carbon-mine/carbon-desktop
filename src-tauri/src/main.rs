@@ -4,6 +4,7 @@ mod account;
 mod dialogs;
 mod frame;
 mod menu;
+mod server;
 mod setup;
 
 use carbon_store::{Action, InstanceId, Snapshot};
@@ -31,13 +32,13 @@ async fn fixture_action(root: State<'_, Library>, action: Action) -> Result<Snap
 }
 
 #[tauri::command]
-async fn personal_library(
-    root: State<'_, Library>,
-) -> Result<Vec<carbon_profiles::Profile>, String> {
+async fn personal_library(root: State<'_, Library>) -> Result<Vec<server::LibraryProfile>, String> {
     let path = root.0.clone();
-    tauri::async_runtime::spawn_blocking(move || carbon_profiles::list(&path))
-        .await
-        .map_err(|_| "Reading personal profiles was interrupted.".to_owned())?
+    tauri::async_runtime::spawn_blocking(move || {
+        carbon_profiles::list(&path).map(|profiles| profiles.into_iter().map(Into::into).collect())
+    })
+    .await
+    .map_err(|_| "Reading personal profiles was interrupted.".to_owned())?
 }
 
 #[tauri::command]
@@ -160,6 +161,8 @@ fn main() {
             account::minecraft_account_status,
             account::show_minecraft_accounts,
             dialogs::edit_profile_dialog,
+            server::edit_server_dialog,
+            server::copy_server_address,
             personal_library,
             open_game_folder,
             import_pack,

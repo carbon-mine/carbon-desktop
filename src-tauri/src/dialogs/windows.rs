@@ -1,4 +1,4 @@
-use super::{Form, Mode, ProfileAction, VanillaVersion};
+use super::{Form, Mode, ProfileAction, ServerAddress, VanillaVersion};
 use std::ptr;
 use tauri::WebviewWindow;
 use windows_sys::Win32::{
@@ -21,10 +21,12 @@ struct State<'a> {
     body: Body<'a>,
     style: Style,
     response: Option<ProfileAction>,
+    server_response: Option<Option<ServerAddress>>,
 }
 
 enum Body<'a> {
     Form(&'a Form),
+    Server(Option<&'a ServerAddress>),
     Notice {
         title: &'a str,
         text: &'a str,
@@ -108,6 +110,10 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, msg: u32, wparam: usize, lpara
             );
             let form = match state.body {
                 Body::Form(form) => form,
+                Body::Server(address) => {
+                    set(hwnd, NAME, address.map_or("", ServerAddress::as_str));
+                    return 1;
+                }
                 Body::Notice {
                     title,
                     text,
@@ -162,36 +168,38 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, msg: u32, wparam: usize, lpara
             if state.is_null() {
                 return 0;
             }
-            let Body::Form(form) = (*state).body else {
-                EndDialog(hwnd, IDOK as isize);
-                return 1;
+            let submit = match (*state).body {
+                Body::Form(form) => action(hwnd, form).map(|value| (*state).response = Some(value)),
+                Body::Server(_) => read(hwnd, NAME)
+                    .and_then(|text| ServerAddress::parse_optional(&text))
+                    .map(|value| (*state).server_response = Some(value)),
+                Body::Notice { .. } => Ok(()),
             };
-            match action(hwnd, form) {
-                Ok(value) => {
-                    (*state).response = Some(value);
-                    EndDialog(hwnd, IDOK as isize);
-                }
-                Err(error) => {
+            match submit {
+                Ok(()) => EndDialog(hwnd, IDOK as isize),
+                Err(ref error) => {
                     let mut child = State {
                         body: Body::Notice {
                             title: "Check instance settings",
-                            text: &error,
+                            text: error,
                             accept: None,
                         },
                         style: (*state).style,
                         response: None,
+                        server_response: None,
                     };
-                    // The editor stays open with its entered values while the warning is visible.
+                    // Keep the editor open with its entered values.
                     if present(hwnd, 2103, &mut child).is_err() {
                         MessageBoxW(
                             hwnd,
-                            wide(&error).as_ptr(),
+                            wide(error).as_ptr(),
                             wide("Check instance settings").as_ptr(),
                             MB_OK | MB_ICONWARNING,
                         );
                     }
+                    0
                 }
-            }
+            };
             1
         }
         _ => 0,
@@ -231,6 +239,7 @@ pub(super) fn notice(
         },
         style: Style::new(dark),
         response: None,
+        server_response: None,
     };
     present(hwnd.0, 2103, &mut state).map(|_| ())
 }
@@ -253,6 +262,7 @@ pub(super) fn confirm(
         },
         style: Style::new(dark),
         response: None,
+        server_response: None,
     };
     Ok(present(hwnd.0, 2102, &mut state)? == IDOK as isize)
 }
@@ -269,6 +279,7 @@ pub(super) fn show(
         body: Body::Form(form),
         style: Style::new(dark),
         response: None,
+        server_response: None,
     };
     present(
         hwnd.0,
@@ -276,4 +287,33 @@ pub(super) fn show(
         &mut state,
     )?;
     Ok(state.response)
+}
+
+pub(super) fn edit_server(
+    parent: &WebviewWindow,
+    address: Option<&ServerAddress>,
+    dark: bool,
+) -> Result<Option<Option<ServerAddress>>, String> {
+    let hwnd = parent
+        .hwnd()
+        .map_err(|_| "The owner window is unavailable.")?;
+    let mut state = State {
+        body: Body::Server(address),
+        style: Style::new(dark),
+        response: None,
+        server_response: None,
+    };
+    present(hwnd.0, 2105, &mut state)?;
+    Ok(state.server_response)
+}
+
+pub(super) fn copy_text(parent: &WebviewWindow, address: &str) -> Result<(), String> {
+    let hwnd = parent
+        .hwnd()
+        .map_err(|_| "The owner window is unavailable.")?;
+    if unsafe { account::copy_text(hwnd.0, address) } {
+        Ok(())
+    } else {
+        Err("The clipboard is unavailable. Try copying the address again.".into())
+    }
 }

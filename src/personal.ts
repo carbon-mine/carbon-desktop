@@ -8,6 +8,8 @@ export interface ProfileSettings {
 export interface PersonalProfile extends ProfileSettings {
   id: string
   importedPack?: {name: string; loader: string | null; pendingFiles: number} | null
+  serverAddress?: string
+  serverJoinMessage?: string
 }
 export type ProfileMode = 'create' | 'edit' | 'clone'
 
