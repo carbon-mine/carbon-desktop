@@ -280,6 +280,21 @@ impl Accessibility {
         self.wrap(element, id.into(), node, Binding::None)
     }
 
+    pub fn progress(&self, meter: &Entity<super::progress::Meter>, cx: &App) -> Semantic {
+        let mut node = Node::new(Role::ProgressIndicator);
+        let update = meter.read(cx).target;
+        node.set_label(update.label());
+        if let super::progress::Update::Transfer(sample) = update {
+            node.set_value(sample.counts());
+            if let Some(fraction) = sample.fraction() {
+                node.set_min_numeric_value(0.);
+                node.set_max_numeric_value(100.);
+                node.set_numeric_value(fraction * 100.);
+            }
+        }
+        self.wrap(meter.clone(), "task-progress".into(), node, Binding::None)
+    }
+
     pub fn group(
         &self,
         element: impl IntoElement,
