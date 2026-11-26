@@ -10,9 +10,9 @@ Carbon Home has five original voxel landscapes and seven views. Riverside Mill a
 | Willow Marsh | Fireflies drift within reed beds, with subdued rings on the water below |
 | Cider Orchard | Leaves and pale petals descend from tree crowns and dappled light moves beneath them |
 
-The overhead views look down on the same wheel and field effects as their scenic counterparts. Each loop samples phase zero through the last frame before phase one. The baker compares the end pose against the first. Wind continues forward through the camera's turn.
+At the measured 1366 × 586 centered Home crop, the scenic cameras aim lower to show the orchard press and cart, the mill outlet, farm bed, reed banks and lake. The alpine lens also widens to retain the mountain silhouette. The overhead views look down on the same wheel and field effects as their scenic counterparts. Each loop samples phase zero through the last frame before phase one. The baker compares the end pose against the first. Wind continues forward through the camera's turn.
 
-![Native Windows scenery poses](../../docs/images/native-home-landscape-motion.jpg)
+![Authored opening poses at the wide Home crop](../../docs/images/native-home-landscape-motion.jpg)
 
 ## Playback measurements
 
