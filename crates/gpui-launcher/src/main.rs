@@ -6,6 +6,7 @@ mod account_panel;
 mod data;
 mod icons;
 mod popup;
+mod progress;
 mod shell;
 mod theme;
 mod view;
@@ -80,6 +81,7 @@ struct Task {
     profile: Option<Uuid>,
     fixture: Option<InstanceId>,
     activity: Activity,
+    meter: Entity<progress::Meter>,
     can_cancel: bool,
     protects_session: bool,
 }
@@ -99,6 +101,8 @@ impl Task {
 }
 
 struct Launcher {
+    #[cfg(target_os = "linux")]
+    reduced_motion: bool,
     accessibility: accessibility::Accessibility,
     root: DataRoot,
     account: Entity<account_panel::AccountPanel>,
@@ -228,6 +232,8 @@ impl Launcher {
         #[cfg(not(windows))]
         let initial_message = "No active tasks".to_owned();
         let mut launcher = Self {
+            #[cfg(target_os = "linux")]
+            reduced_motion: true,
             accessibility: accessibility::Accessibility::new(window, cx, "Carbon Desktop".into()),
             root,
             account,
@@ -264,6 +270,8 @@ impl Launcher {
             launcher.choose_personal(id, cx);
             launcher.show_detail = false;
         }
+        #[cfg(target_os = "linux")]
+        progress::observe_linux_motion(cx);
         launcher
     }
 
@@ -485,11 +493,15 @@ impl Launcher {
         let activity = Activity::default();
         let path = self.root.path.clone();
         let operation = activity.clone();
+        let reduced = self.reduced_motion();
+        let meter = cx.new(|_| progress::Meter::new(Instant::now(), reduced));
+        let meter_id = meter.entity_id();
         let task = Task {
             label,
             profile: profile.as_ref().map(|profile| profile.id),
             fixture,
             activity,
+            meter,
             can_cancel,
             protects_session: false,
         };
@@ -526,15 +538,27 @@ impl Launcher {
                 timer.timer(Duration::from_millis(150)).await;
                 if !this
                     .update(cx, |this, cx| {
-                        let active = if fixture_work {
-                            this.fixture_task.is_some()
+                        let task = if fixture_work {
+                            this.fixture_task.as_ref()
                         } else {
-                            this.task.is_some()
+                            this.task.as_ref()
                         };
-                        if !active {
+                        let Some(task) = task.filter(|task| task.meter.entity_id() == meter_id)
+                        else {
                             return false;
+                        };
+                        let reduced = this.reduced_motion();
+                        let progress = task.activity.latest();
+                        let changed = task.meter.update(cx, |meter, cx| {
+                            let changed = meter.retarget(progress, reduced, Instant::now());
+                            if changed {
+                                cx.notify();
+                            }
+                            changed
+                        });
+                        if changed {
+                            cx.notify();
                         }
-                        cx.notify();
                         true
                     })
                     .unwrap_or(false)
@@ -772,11 +796,7 @@ impl Launcher {
             cx,
             move |path, activity| {
                 carbon_setup::prepare_managed_java(&path, id, &digest, |received, total| {
-                    activity.progress(format!(
-                        "Managed JDK · {} / {}",
-                        size_label(received),
-                        size_label(total)
-                    ))
+                    activity.java_progress(received, total)
                 })
                 .map(|report| Outcome::Inspected(report, "Managed JDK verified and selected."))
             },

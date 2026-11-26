@@ -66,6 +66,21 @@ native work at the app boundary.
 | Instance action and status | Label the state and use a single primary action for the selected instance. Disable duplicate starts. When the action changes, keep focus on the next valid action or the instance heading. Announce meaningful completion, interruption and resolution once. |
 | Review dialog | Name the affected instance and consequences. Place initial focus on the safe action or the heading for a long review. Escape and Cancel return to the invoking control. Use the next valid control if applying the action removed the opener. |
 | Task activity | Name the instance and operation phase. Show measured progress when available. Keep recovery available from the affected instance and the chosen activity surface. Announce state changes without repeating byte updates. |
+
+### Native task motion
+
+The GPUI install card and Activity use the same task meter. During a measured
+transfer, a three-pixel rail and tabular counters ease from their current
+displayed values to the latest worker sample over 180 ms. A new phase, changed
+total, retry or terminal value takes effect immediately. File preparation uses
+completed files for the rail and also shows verified bytes. During an unmeasured
+step three monochrome dots move for up to five seconds, then stay still.
+
+Reduced motion shows measured values immediately and keeps the dots still.
+GPUI reads the Windows client animation setting, the macOS accessibility motion
+preference and the Linux desktop portal setting (with the GNOME animation
+setting as a fallback). Screen readers receive phase changes and can inspect
+the measured progress value independently of the visual interpolation.
 | Library empty and no matches | Offer a first-create and import path for an empty library. Preserve the query when filtering returns no matches and give a way to broaden it. |
 
 ### Desktop launcher workspace
