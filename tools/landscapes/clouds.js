@@ -7,6 +7,7 @@ export function addClouds(box, id) {
     marsh: [-.37, 3, 2, '#dfc7e0'],
     orchard: [-.41, 4, 1, '#ffe0bf'],
   };
+  if (!Object.hasOwn(settings,id)) return;
   const [yaw, offset, lift, tint] = settings[id];
   const banks = [[-35,61,12,1.55],[9,79,17,2.3],[48,88,12,1.25]];
   const profiles=[[1,2,2,1,2,4,3,2,1],[1,1,2,3,3,2,2,1,1],[1,2,2,3,2,1]];

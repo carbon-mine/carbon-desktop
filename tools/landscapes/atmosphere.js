@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: MPL-2.0
+import * as THREE from 'three';
+
+const turn = Math.PI * 2;
+// Locally drawn silhouettes: long ledges, off-centre coves and a few islands.
+const decks = [
+  [
+    '............####.............',
+    '.........########............',
+    '....######..#####.....###....',
+    '...#######...########.####...',
+    '..######.....#############...',
+    '..#####....########..##......',
+    '...##########..#####.........',
+    '.......######....#######.....',
+    '........####......####.......',
+  ],
+  [
+    '.......#####................',
+    '.....########....###........',
+    '....#####.###########.......',
+    '.######...########..####....',
+    '.####.....#######....#####..',
+    '..####..##########..#####...',
+    '....########......###.......',
+    '....#####...................',
+  ],
+];
+
+// Build just the outside of the connected grid. The top and underside stay
+// level, the enclosed gaps remain open and adjacent cells have no inner faces.
+function deckGeometry(rows) {
+  const positions=[], tones=[];
+  const occupied=(x,z)=>rows[z]?.[x]==='#';
+  function face(points,tone) {
+    for(const i of [0,1,2,0,2,3]) {
+      positions.push(...points[i]);
+      tones.push(tone,tone,tone);
+    }
+  }
+  for(let z=0;z<rows.length;z++) for(let x=0;x<rows[z].length;x++){
+    if(!occupied(x,z)) continue;
+    const a=x,b=x+1,c=z,d=z+1,lo=0,hi=.50;
+    face([[a,hi,c],[a,hi,d],[b,hi,d],[b,hi,c]],1.0);
+    face([[a,lo,c],[b,lo,c],[b,lo,d],[a,lo,d]],.76);
+    if(!occupied(x-1,z)) face([[a,lo,c],[a,lo,d],[a,hi,d],[a,hi,c]],.82);
+    if(!occupied(x+1,z)) face([[b,lo,d],[b,lo,c],[b,hi,c],[b,hi,d]],.92);
+    if(!occupied(x,z-1)) face([[b,lo,c],[a,lo,c],[a,hi,c],[b,hi,c]],.88);
+    if(!occupied(x,z+1)) face([[a,lo,d],[b,lo,d],[b,hi,d],[a,hi,d]],.85);
+  }
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+  geometry.setAttribute('color',new THREE.Float32BufferAttribute(tones,3));
+  return geometry;
+}
+
+function makeDeck(scene, camera, overhead, dusk, seed, id) {
+  const formations=[
+    {shape:0, x:-.96, y:overhead ? .77 : .75, distance:overhead ? 17 : 42, width:overhead ? .72 : .88, yaw:.38, offset:.04},
+    {shape:1, x:.84, y:overhead ? -.84 : .94, distance:overhead ? 20 : 60, width:overhead ? .76 : .94, yaw:-.34, offset:.48},
+    {shape:1, x:overhead ? 1.06 : .34, y:overhead ? .88 : .66, distance:overhead ? 24 : 75, width:.41, yaw:.65, offset:.76},
+  ];
+  // Each skyline keeps different silhouettes and gaps around its landmark.
+  // The overhead camera also has enough sky clearance to read the top faces.
+  if(id==='alpine'){
+    formations[0].x=-.83; formations[0].width=1.08;
+    formations[1].x=1.00; formations[1].shape=0; formations[1].yaw=.64;
+    formations[2].x=.10; formations[2].y=.88;
+  } else if(id==='marsh'){
+    formations[0].x=-1.08; formations[0].shape=1; formations[0].yaw=-.48;
+    formations[1].x=.82; formations[1].width=.60; formations[1].y=.78;
+    formations[2].x=-.20; formations[2].y=.93;
+  } else if(id==='orchard'){
+    formations[0].x=-.82; formations[0].y=.93; formations[1].yaw=.28;
+    formations[2].x=.27; formations[2].shape=0;
+  }
+  const strips=formations.map((spec,i)=>{
+    const rows=decks[spec.shape];
+    const material=new THREE.MeshBasicMaterial({
+      color:dusk ? (i===1 ? 0xbcb3c2 : 0xd2c9cf) : (i===1 ? 0xe5dfd3 : 0xf4eee0),
+      vertexColors:true, transparent:true,
+    });
+    const mesh=new THREE.Mesh(deckGeometry(rows),material);
+    // Each cloud has a different plan and position. A stable world-space wind
+    // translates it slowly. Its vapour thins before re-forming upstream.
+    scene.add(mesh);
+    return {mesh, material, spec, columns:rows[0].length};
+  });
+  const east=new THREE.Vector3(.94,0,.34).normalize();
+  let anchors;
+  function anchorStrips(){
+    const forward=camera.getWorldDirection(new THREE.Vector3());
+    const right=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,0);
+    const up=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,1);
+    return strips.map(({mesh,spec,columns})=>{
+      const halfH=spec.distance*Math.tan(THREE.MathUtils.degToRad(camera.fov)/2);
+      const halfW=halfH*camera.aspect;
+      const center=camera.position.clone().addScaledVector(forward,spec.distance)
+        .addScaledVector(up,spec.y*halfH).addScaledVector(right,spec.x*halfW);
+      const cell=halfW*spec.width/columns;
+      mesh.rotation.y=Math.atan2(-east.z,east.x)+spec.yaw;
+      mesh.scale.setScalar(cell);
+      const middle=new THREE.Vector3(columns*.5,0,4).multiplyScalar(cell).applyEuler(mesh.rotation);
+      return {base:center.sub(middle),travel:halfW*(overhead ? .31 : .22)};
+    });
+  }
+  return {strips,paint(phase){
+    anchors??=anchorStrips();
+    for(const [i,{mesh,material,spec}] of strips.entries()){
+      const age=(phase+seed*.13+spec.offset)%1;
+      const {base,travel}=anchors[i];
+      mesh.position.copy(base).addScaledVector(east,(age-.5)*travel);
+      const blend=THREE.MathUtils.smoothstep(Math.min(age,1-age),0,.20);
+      material.opacity=blend*(overhead ? .76 : .94);
+      mesh.visible=blend>.002;
+    }
+  }};
+}
+
+// Only the cloud deck and solar illumination extend across every landscape.
+export function makeBreeze(scene,camera,overhead,dusk,sun,id) {
+  const layer=new THREE.Group();
+  camera.add(layer);scene.add(camera);
+  const seed=[...id].reduce((s,c)=>s+c.charCodeAt(0),0)%17/17;
+  const deck=makeDeck(scene,camera,overhead,dusk,seed,id);
+  const glareMaterial=new THREE.ShaderMaterial({
+    transparent:true,depthWrite:false,depthTest:false,
+    uniforms:{amount:{value:0},lightPoint:{value:new THREE.Vector2()}},
+    vertexShader:'varying vec2 uvp;void main(){uvp=uv;gl_Position=vec4(position.xy*2.,.99,1.);}',
+    fragmentShader:`varying vec2 uvp;uniform float amount;uniform vec2 lightPoint;
+      void main(){
+        vec2 p=(uvp-lightPoint)*vec2(1.60,1.15);
+        float halo=.68*exp(-dot(p,p)*5.)+.32*exp(-dot(p*vec2(.65,2.),p*vec2(.65,2.))*9.);
+        gl_FragColor=vec4(1.,.84,.59,amount*halo);
+        #include <colorspace_fragment>
+      }`,
+  });
+  const glare=new THREE.Mesh(new THREE.PlaneGeometry(),glareMaterial);
+  glare.frustumCulled=false;glare.renderOrder=20;layer.add(glare);
+  const sunDir=new THREE.Vector3(...sun).normalize(), right=new THREE.Vector3();
+  return phase=>{
+    deck.paint(phase);
+    right.setFromMatrixColumn(camera.matrixWorld,0);
+    const solarSide=sunDir.dot(right)<0 ? -.065 : 1.065;
+    glareMaterial.uniforms.lightPoint.value.set(solarSide,overhead ? 1.20 : 1.065);
+    glareMaterial.uniforms.amount.value=(overhead ? .17 : dusk ? .20 : .28)*(.91+.09*Math.sin(turn*phase+seed));
+  };
+}

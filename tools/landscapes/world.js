@@ -317,5 +317,5 @@ export function buildWorld(box) {
     B(x,h*.32-.06,z,w,h,w*.73,pick(stone));
     B(x-.05,h*.82-.07,z,w*.7,.085,w*.54,pick(cobble));
   }
-  return {chimney:[chx,cht+.05,chz]};
+  return {chimney:[chx,cht+.05,chz],wheelContact:[wx,.04,wz+.45]};
 }
