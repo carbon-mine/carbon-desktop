@@ -326,6 +326,33 @@ impl Accessibility {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A splitter reports its label, role, bounds, value, and focus together."
+    )]
+    pub fn splitter(
+        &self,
+        element: impl IntoElement,
+        id: &'static str,
+        label: &'static str,
+        minimum: f32,
+        maximum: f32,
+        value: f32,
+        focus: FocusHandle,
+    ) -> Semantic {
+        let mut node = Node::new(Role::Splitter);
+        node.set_label(label);
+        node.set_description(
+            "Use arrow keys to resize. Home and End set the bounds. Enter resets.",
+        );
+        node.set_orientation(accesskit::Orientation::Vertical);
+        node.set_min_numeric_value(f64::from(minimum));
+        node.set_max_numeric_value(f64::from(maximum));
+        node.set_numeric_value(f64::from(value));
+        node.add_action(Action::Focus);
+        self.wrap(element, id.into(), node, Binding::Group(Some(focus)))
+    }
+
     pub fn frame(&self, element: impl IntoElement, blocked: bool) -> Semantic {
         self.wrap(
             element,

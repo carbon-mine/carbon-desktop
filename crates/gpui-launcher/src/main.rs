@@ -16,8 +16,8 @@ use carbon_store::{Action, InstanceId, InstanceView, Snapshot};
 use carbon_vanilla::{GameFilePlan, GameFilesPrepared};
 use data::{Activity, DataRoot, Inspection, size_label};
 use gpui::{
-    AnyWindowHandle, App, Application, Context, Entity, FocusHandle, KeyBinding, TitlebarOptions,
-    Window, WindowDecorations, WindowOptions, actions, prelude::*, px, size,
+    AnyWindowHandle, App, Application, Context, Entity, FocusHandle, KeyBinding, MouseButton,
+    TitlebarOptions, Window, WindowDecorations, WindowOptions, actions, prelude::*, px, size,
 };
 use gpui_component::{Root, input::InputState};
 use std::{
@@ -88,6 +88,61 @@ impl Setup {
 
 const LAUNCH_REVIEW_LABEL: &str = "Checking installed launch inputs";
 
+/// The library rail stays narrow enough to leave the detail pane usable at the
+/// default 1040 px window and wide enough to show a truncated instance name.
+const RAIL_MIN_WIDTH: f32 = 190.;
+const RAIL_MAX_WIDTH: f32 = 290.;
+const RAIL_DEFAULT_WIDTH: f32 = 236.;
+const RAIL_STEP: f32 = 8.;
+const RAIL_STEP_LARGE: f32 = 20.;
+
+fn clamp_rail_width(width: f32) -> f32 {
+    width.clamp(RAIL_MIN_WIDTH, RAIL_MAX_WIDTH)
+}
+
+/// Translate a resize-handle key into the next bounded rail width.
+fn rail_width_for_key(width: f32, key: &str, shift: bool) -> Option<f32> {
+    let step = if shift { RAIL_STEP_LARGE } else { RAIL_STEP };
+    match key {
+        "left" => Some(clamp_rail_width(width - step)),
+        "right" => Some(clamp_rail_width(width + step)),
+        "home" => Some(RAIL_MIN_WIDTH),
+        "end" => Some(RAIL_MAX_WIDTH),
+        "enter" | "space" => Some(RAIL_DEFAULT_WIDTH),
+        _ => None,
+    }
+}
+
+struct RailDrag {
+    start_x: f32,
+    start_width: f32,
+}
+
+/// Read-only save and destination inventory for one instance. Loading and
+/// errors live beside the detail pane so an empty list is never invented.
+enum TargetsState {
+    Loading(Uuid),
+    Ready(carbon_profiles::InstanceTargets),
+    Error(String),
+}
+
+impl TargetsState {
+    fn complete(
+        &mut self,
+        request: Uuid,
+        result: Result<carbon_profiles::InstanceTargets, String>,
+    ) -> bool {
+        if !matches!(self, Self::Loading(active) if *active == request) {
+            return false;
+        }
+        *self = match result {
+            Ok(snapshot) => Self::Ready(snapshot),
+            Err(error) => Self::Error(error),
+        };
+        true
+    }
+}
+
 struct Task {
     label: &'static str,
     profile: Option<Uuid>,
@@ -124,10 +179,16 @@ struct Launcher {
     fixture_issue: Option<String>,
     search: Entity<InputState>,
     root_focus: FocusHandle,
+    detail_focus: FocusHandle,
+    rail_resize_focus: FocusHandle,
     activity_focus: FocusHandle,
     task_focus: FocusHandle,
     server_focus: FocusHandle,
     tab_focus: [FocusHandle; 3],
+    rail_width: f32,
+    rail_drag: Option<RailDrag>,
+    targets: HashMap<Uuid, TargetsState>,
+    search_back_to_detail: bool,
     review: bool,
     personal: Option<Uuid>,
     fixture: InstanceId,
@@ -256,10 +317,16 @@ impl Launcher {
             fixture_issue,
             search,
             root_focus,
+            detail_focus: cx.focus_handle(),
+            rail_resize_focus: cx.focus_handle().tab_stop(true),
             activity_focus: cx.focus_handle(),
             task_focus: cx.focus_handle(),
             server_focus: cx.focus_handle(),
             tab_focus: std::array::from_fn(|_| cx.focus_handle()),
+            rail_width: RAIL_DEFAULT_WIDTH,
+            rail_drag: None,
+            targets: HashMap::new(),
+            search_back_to_detail: false,
             review: false,
             personal,
             fixture: InstanceId::Sample,
@@ -320,14 +387,29 @@ impl Launcher {
         self.tab = Tab::Overview;
         self.review = review;
         self.show_detail = false;
+        self.search_back_to_detail = false;
         self.search
             .update(cx, |input, cx| input.set_value("", window, cx));
     }
     fn find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reveal_library(window, cx, false);
+    }
+
+    /// Reveal the searchable library. A keyboard search started from a narrow
+    /// detail pane remembers its origin so Escape returns there.
+    fn reveal_library(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        return_to_detail: bool,
+    ) {
         if self.popup.is_some() || self.picker_open {
             return;
         }
-        let reveal_search = self.show_detail && is_narrow(window);
+        let narrow = is_narrow(window);
+        self.search_back_to_detail =
+            narrow && return_to_detail && (self.show_detail || self.search_back_to_detail);
+        let reveal_search = self.show_detail && narrow;
         self.show_detail = false;
         if reveal_search {
             let input = self.search.clone();
@@ -340,16 +422,68 @@ impl Launcher {
         cx.notify();
     }
 
-    fn focus_detail(&self, window: &mut Window) {
+    fn focus_detail(&mut self, window: &mut Window) {
         if self.show_detail && is_narrow(window) {
-            self.root_focus.focus(window);
+            self.search_back_to_detail = false;
+            self.detail_focus.focus(window);
         }
+    }
+
+    fn set_rail_width(&mut self, width: f32) {
+        self.rail_width = clamp_rail_width(width);
     }
 
     fn cancel_task(&self) {
         if let Some(task) = &self.task {
             task.activity.cancel.store(true, Ordering::Release);
         }
+    }
+
+    fn profile_uses_saved_server(&self, id: Uuid) -> bool {
+        self.profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .is_some_and(|profile| profile.server_address.is_some())
+    }
+
+    /// Load save and destination inventory once per selection or explicit
+    /// refresh. The filesystem walk never runs on the UI thread.
+    fn load_targets(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.profile_uses_saved_server(id) {
+            self.targets.remove(&id);
+            return;
+        }
+        if matches!(self.targets.get(&id), Some(TargetsState::Loading(_))) {
+            return;
+        }
+        let request = Uuid::new_v4();
+        self.targets.insert(id, TargetsState::Loading(request));
+        let path = self.root.path.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { carbon_profiles::instance_targets(&path, id) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                if this
+                    .targets
+                    .get_mut(&id)
+                    .is_some_and(|entry| entry.complete(request, result))
+                {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn refresh_targets(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.personal else {
+            return;
+        };
+        self.targets.remove(&id);
+        self.load_targets(id, cx);
     }
 
     fn choose_personal(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -360,6 +494,9 @@ impl Launcher {
         self.personal = Some(id);
         self.review = false;
         self.show_detail = true;
+        if !self.targets.contains_key(&id) {
+            self.load_targets(id, cx);
+        }
         let Some(profile) = self.selected_profile().cloned() else {
             return;
         };
@@ -406,6 +543,7 @@ impl Launcher {
         self.fixture = id;
         self.review = true;
         self.show_detail = true;
+        self.search_back_to_detail = false;
     }
 
     fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
@@ -546,7 +684,7 @@ impl Launcher {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |this, cx| {
-                this.complete(profile.as_ref(), fixture_work, result);
+                this.complete(profile.as_ref(), fixture_work, result, cx);
                 cx.notify();
             })
             .ok();
@@ -596,6 +734,7 @@ impl Launcher {
         profile: Option<&Profile>,
         fixture_work: bool,
         result: Result<Outcome, String>,
+        cx: &mut Context<Self>,
     ) {
         let task = if fixture_work {
             self.fixture_task.take()
@@ -616,6 +755,7 @@ impl Launcher {
             )
         });
         let setup = profile.and_then(|profile| self.setup.get_mut(&profile.id));
+        let mut profiles_reloaded = false;
         match result {
             Ok(Outcome::LaunchInputs(review)) => {
                 if let Some(setup) = setup
@@ -694,6 +834,7 @@ impl Launcher {
                                 .iter()
                                 .any(|profile| profile.id == *id && self.profiles.contains(profile))
                         });
+                        self.targets.clear();
                         self.profiles = profiles;
                         self.profile_issue = None;
                         if self.selected_profile().is_none() {
@@ -703,6 +844,7 @@ impl Launcher {
                     Err(error) => self.profile_issue = Some(error),
                 }
                 self.message = "Library refresh completed.".to_owned();
+                profiles_reloaded = true;
             }
             Err(error) => {
                 if let Some(setup) = setup {
@@ -728,6 +870,10 @@ impl Launcher {
                 }
                 self.message = error;
             }
+        }
+        if profiles_reloaded && let Some(id) = self.personal {
+            self.targets.remove(&id);
+            self.load_targets(id, cx);
         }
     }
 
@@ -1204,8 +1350,11 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) {
         self.message = updated.message().into();
-        self.last_activity = Some(ActivityTarget::Personal(updated.profile.id));
+        let id = updated.profile.id;
+        self.last_activity = Some(ActivityTarget::Personal(id));
         self.refresh_server_binding(updated.profile);
+        self.targets.remove(&id);
+        self.load_targets(id, cx);
         cx.notify();
     }
 
@@ -1238,6 +1387,7 @@ impl Launcher {
 
     fn set_profiles(&mut self, profiles: Vec<Profile>, id: Uuid, cx: &mut Context<Self>) {
         self.setup.remove(&id);
+        self.targets.clear();
         self.profiles = profiles;
         self.last_activity = Some(ActivityTarget::Personal(id));
         self.message = "Instance saved.".to_owned();
@@ -1299,6 +1449,12 @@ fn pack_has_requirements(profile: &Profile) -> bool {
 
 fn is_narrow(window: &Window) -> bool {
     window.viewport_size().width < px(736.)
+}
+
+/// Escape returns to the detail pane only when a keyboard search started there
+/// and the library replaced it in a compact one-pane layout.
+fn back_returns_to_detail(search_back_to_detail: bool, show_detail: bool, narrow: bool) -> bool {
+    search_back_to_detail && !show_detail && narrow
 }
 
 #[cfg(windows)]
@@ -1396,4 +1552,76 @@ fn main() -> anyhow::Result<()> {
         cx.activate(true);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rail_width_stays_within_the_reviewed_bounds() {
+        assert_eq!(clamp_rail_width(0.), RAIL_MIN_WIDTH);
+        assert_eq!(clamp_rail_width(120.), RAIL_MIN_WIDTH);
+        assert_eq!(clamp_rail_width(236.), 236.);
+        assert_eq!(clamp_rail_width(400.), RAIL_MAX_WIDTH);
+        assert!((RAIL_MIN_WIDTH..=RAIL_MAX_WIDTH).contains(&RAIL_DEFAULT_WIDTH));
+    }
+
+    #[test]
+    fn rail_keyboard_resize_clamps_and_resets() {
+        assert_eq!(
+            rail_width_for_key(RAIL_DEFAULT_WIDTH, "left", false),
+            Some(RAIL_DEFAULT_WIDTH - RAIL_STEP)
+        );
+        assert_eq!(
+            rail_width_for_key(RAIL_DEFAULT_WIDTH, "right", true),
+            Some(RAIL_DEFAULT_WIDTH + RAIL_STEP_LARGE)
+        );
+        assert_eq!(
+            rail_width_for_key(RAIL_DEFAULT_WIDTH, "home", false),
+            Some(RAIL_MIN_WIDTH)
+        );
+        assert_eq!(
+            rail_width_for_key(RAIL_DEFAULT_WIDTH, "end", false),
+            Some(RAIL_MAX_WIDTH)
+        );
+        assert_eq!(
+            rail_width_for_key(200., "enter", false),
+            Some(RAIL_DEFAULT_WIDTH)
+        );
+        assert_eq!(
+            rail_width_for_key(200., "space", false),
+            Some(RAIL_DEFAULT_WIDTH)
+        );
+        assert_eq!(rail_width_for_key(200., "tab", false), None);
+
+        let mut width = RAIL_DEFAULT_WIDTH;
+        for _ in 0..40 {
+            width = rail_width_for_key(width, "left", true).unwrap();
+        }
+        assert_eq!(width, RAIL_MIN_WIDTH);
+        for _ in 0..40 {
+            width = rail_width_for_key(width, "right", true).unwrap();
+        }
+        assert_eq!(width, RAIL_MAX_WIDTH);
+    }
+
+    #[test]
+    fn late_inventory_completion_preserves_a_newer_result() {
+        let obsolete = Uuid::new_v4();
+        let current = Uuid::new_v4();
+        let mut entry = TargetsState::Loading(current);
+        assert!(!entry.complete(obsolete, Err("old read".into())));
+        assert!(entry.complete(current, Err("current read".into())));
+        assert!(!entry.complete(obsolete, Err("old read".into())));
+        assert!(matches!(entry, TargetsState::Error(message) if message == "current read"));
+    }
+
+    #[test]
+    fn compact_search_returns_to_detail_only_from_its_origin() {
+        assert!(back_returns_to_detail(true, false, true));
+        assert!(!back_returns_to_detail(true, false, false));
+        assert!(!back_returns_to_detail(true, true, true));
+        assert!(!back_returns_to_detail(false, false, true));
+    }
 }

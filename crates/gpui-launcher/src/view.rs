@@ -204,14 +204,15 @@ impl Launcher {
             self.profiles.len()
         };
         let sidebar = col()
+            .relative()
             .flex_none()
             .h_full()
             .w(if narrow {
                 gpui::relative(1.)
             } else {
-                gpui::relative(0.24)
+                px(self.rail_width).into()
             })
-            .min_w(px(200.))
+            .when(narrow, |rail| rail.min_w(px(0.)))
             .bg(p.frame)
             .border_r_1()
             .border_color(p.stroke)
@@ -326,9 +327,61 @@ impl Launcher {
                     "Launcher sections",
                     Role::Group,
                 ),
-            );
+            )
+            .when(!narrow, |rail| rail.child(self.rail_resizer(p, cx)));
         self.accessibility
             .group(sidebar, "library", "Instance library", Role::Pane)
+            .into_any_element()
+    }
+
+    /// A bounded splitter at the rail edge. Dragging adjusts the width, and the
+    /// focused handle supports arrow keys, Home/End, and Enter to reset.
+    fn rail_resizer(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
+        let resize = self.rail_resize_focus.clone();
+        let handle = div()
+            .id("rail-resizer")
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(-3.))
+            .w(px(6.))
+            .cursor_col_resize()
+            .track_focus(&resize)
+            .hover(|style| style.bg(p.stroke))
+            .focus(|style| style.bg(p.muted))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.rail_drag = Some(RailDrag {
+                        start_x: f32::from(event.position.x),
+                        start_width: this.rail_width,
+                    });
+                    resize.focus(window);
+                    cx.notify();
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                let Some(width) = rail_width_for_key(
+                    this.rail_width,
+                    &event.keystroke.key,
+                    event.keystroke.modifiers.shift,
+                ) else {
+                    return;
+                };
+                this.set_rail_width(width);
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        self.accessibility
+            .splitter(
+                handle,
+                "rail-resizer",
+                "Resize instance library",
+                RAIL_MIN_WIDTH,
+                RAIL_MAX_WIDTH,
+                self.rail_width,
+                self.rail_resize_focus.clone(),
+            )
             .into_any_element()
     }
 
@@ -388,14 +441,22 @@ impl Launcher {
         .into_any_element()
     }
 
-    fn workspace(&self, p: Palette, narrow: bool, cx: &Context<Self>) -> AnyElement {
+    fn workspace(
+        &self,
+        p: Palette,
+        narrow: bool,
+        stack_targets: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let mut pane = col()
             .id("workspace")
             .flex_1()
             .min_h_0()
             .min_w_0()
             .overflow_y_scroll()
-            .bg(p.surface);
+            .bg(p.surface)
+            .track_focus(&self.detail_focus)
+            .tab_stop(false);
         if narrow && self.show_detail {
             pane = pane.child(command_row(p).border_b_1().border_color(p.stroke).child(
                 self.command(
@@ -455,7 +516,7 @@ impl Launcher {
                 pane.child(detail).into_any_element()
             } else if let Some(profile) = self.selected_profile() {
                 let detail = self.accessibility.group(
-                    self.personal_detail(profile, p, narrow, cx),
+                    self.personal_detail(profile, p, narrow, stack_targets, cx),
                     format!("profile-{}", profile.id),
                     &profile.name,
                     Role::Group,
@@ -488,7 +549,7 @@ impl Launcher {
                 .into_any_element()
             };
         self.accessibility
-            .group(
+            .focus_group(
                 pane,
                 "detail",
                 if self.review {
@@ -497,6 +558,7 @@ impl Launcher {
                     "Instance workspace"
                 },
                 Role::Main,
+                &self.detail_focus,
             )
             .into_any_element()
     }
@@ -506,6 +568,7 @@ impl Launcher {
         profile: &Profile,
         p: Palette,
         narrow: bool,
+        stack_targets: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
         let setup = self.setup.get(&profile.id);
@@ -688,176 +751,214 @@ impl Launcher {
                 )),
             )
         };
-        let body = match self.tab {
-            Tab::Overview | Tab::Storage => {
-                let task = row()
-                    .id("profile-task")
-                    .track_focus(&self.task_focus)
-                    .items_start()
-                    .min_w_0()
-                    .gap_4()
-                    .border_1()
-                    .border_color(p.stroke)
-                    .bg(p.layer)
-                    .focus(|style| style.border_color(p.accent))
-                    .px_4()
-                    .py_4()
-                    .when(narrow, |layout| layout.flex_col())
-                    .child(
-                        col()
-                            .min_w_0()
-                            .flex_1()
-                            .gap_1()
-                            .child(self.accessibility.text(
-                                div().text_size(px(17.)).font_semibold().child(task_title),
-                                "task-heading",
-                                task_title,
-                                Role::Heading,
-                            ))
-                            .child(
-                                self.accessibility.text(
-                                    div()
-                                        .text_sm()
-                                        .text_color(p.muted)
-                                        .child(task_description.clone()),
-                                    "task-description",
-                                    task_description,
-                                    if install_activity.is_some() {
-                                        Role::Status
-                                    } else {
-                                        Role::Label
-                                    },
-                                ),
-                            )
-                            .when_some(
-                                install_activity.filter(|task| !task.activity.cancel.load(Ordering::Acquire)),
-                                |body, task| body.child(self.accessibility.progress(&task.meter, cx)),
-                            )
-                            .when_some(
-                                setup_error.filter(|_| install_activity.is_none()),
-                                |task, error| {
-                                    task.child(
-                                        self.accessibility.text(
-                                            div()
-                                                .pt_1()
-                                                .text_sm()
-                                                .font_semibold()
-                                                .child(error.to_owned()),
-                                            "setup-error",
-                                            error,
-                                            Role::Alert,
-                                        ),
-                                    )
+        let main = {
+            let task = row()
+                .id("profile-task")
+                .track_focus(&self.task_focus)
+                .items_start()
+                .min_w_0()
+                .gap_4()
+                .border_1()
+                .border_color(p.stroke)
+                .bg(p.layer)
+                .focus(|style| style.border_color(p.accent))
+                .px_4()
+                .py_4()
+                .when(stack_targets, |layout| layout.flex_col())
+                .child(
+                    col()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_1()
+                        .child(self.accessibility.text(
+                            div().text_size(px(17.)).font_semibold().child(task_title),
+                            "task-heading",
+                            task_title,
+                            Role::Heading,
+                        ))
+                        .child(
+                            self.accessibility.text(
+                                div()
+                                    .text_sm()
+                                    .text_color(p.muted)
+                                    .child(task_description.clone()),
+                                "task-description",
+                                task_description,
+                                if install_activity.is_some() {
+                                    Role::Status
+                                } else {
+                                    Role::Label
                                 },
-                            )
-                            .when(settled && profile.imported_pack.is_none(), |task| {
-                                task.child(row().child(self.command(
-                                    p,
-                                    "review-launch-inputs",
-                                    "Review installed launch inputs",
-                                    false,
-                                    !can_change,
-                                    cx,
-                                    |this, window, cx| {
-                                        this.task_focus.focus(window);
-                                        this.review_launch_inputs(cx);
-                                    },
-                                )))
-                            })
-                            .when(!settled && install_activity.is_none() && profile.imported_pack.is_none(), |task| {
-                                let hint = "Prepare this instance to review its installed launch inputs.";
+                            ),
+                        )
+                        .when_some(
+                            install_activity
+                                .filter(|task| !task.activity.cancel.load(Ordering::Acquire)),
+                            |body, task| body.child(self.accessibility.progress(&task.meter, cx)),
+                        )
+                        .when_some(
+                            setup_error.filter(|_| install_activity.is_none()),
+                            |task, error| {
+                                task.child(
+                                    self.accessibility.text(
+                                        div()
+                                            .pt_1()
+                                            .text_sm()
+                                            .font_semibold()
+                                            .child(error.to_owned()),
+                                        "setup-error",
+                                        error,
+                                        Role::Alert,
+                                    ),
+                                )
+                            },
+                        )
+                        .when(settled && profile.imported_pack.is_none(), |task| {
+                            task.child(row().child(self.command(
+                                p,
+                                "review-launch-inputs",
+                                "Review installed launch inputs",
+                                false,
+                                !can_change,
+                                cx,
+                                |this, window, cx| {
+                                    this.task_focus.focus(window);
+                                    this.review_launch_inputs(cx);
+                                },
+                            )))
+                        })
+                        .when(
+                            !settled
+                                && install_activity.is_none()
+                                && profile.imported_pack.is_none(),
+                            |task| {
+                                let hint =
+                                    "Prepare this instance to review its installed launch inputs.";
                                 task.child(self.accessibility.text(
                                     div().text_sm().text_color(p.muted).child(hint),
                                     "launch-input-review-hint",
                                     hint,
                                     Role::Label,
                                 ))
-                            })
-                            .when_some(
-                                setup.and_then(|setup| setup.launch_input_review.as_deref()),
-                                |task, message| task.child(self.accessibility.text(
-                                    div().text_sm().text_color(p.muted).child(message.to_owned()),
-                                    "launch-input-review-result",
-                                    message,
-                                    Role::Status,
-                                )),
-                            ),
-                    )
-                    .when_some(task_action, |task, action| task.child(action));
-                col()
-                    .px_5()
-                    .py_4()
-                    .gap_4()
-                    .child(self.accessibility.focus_group(
-                        task,
-                        "instance-task",
-                        "Current instance task",
-                        Role::Group,
-                        &self.task_focus,
-                    ))
-                    .when_some(profile.imported_pack.as_ref(), |panel, pack| panel.child(col()
-                        .child(detail_row("Pack", pack.name.clone(), p))
-                        .child(detail_row("Loader", pack.loader.clone().unwrap_or_else(|| "Vanilla".into()), p))
-                        .child(detail_row("Files pending", pack.pending_files.to_string(), p))))
-                    .when(!pack_blocked, |panel| {
-                        panel.child(
-                            col()
-                                .child(
-                                    div()
-                                        .pb_2()
-                                        .text_sm()
-                                        .font_semibold()
-                                        .child("Installation details"),
+                            },
+                        )
+                        .when_some(
+                            setup.and_then(|setup| setup.launch_input_review.as_deref()),
+                            |task, message| {
+                                task.child(
+                                    self.accessibility.text(
+                                        div()
+                                            .text_sm()
+                                            .text_color(p.muted)
+                                            .child(message.to_owned()),
+                                        "launch-input-review-result",
+                                        message,
+                                        Role::Status,
+                                    ),
                                 )
-                                .child(detail_row(
-                                    "Minecraft",
-                                    if inspected {
-                                        format!("{} · Metadata verified", profile.version.id())
-                                    } else {
-                                        profile.version.id().into()
-                                    },
-                                    p,
-                                ))
-                                .child(detail_row("Managed JDK", jdk, p))
-                                .child(detail_row(
-                                    "Game files",
-                                    receipt
-                                        .map(|receipt| format!("{} verified", receipt.unique_files))
-                                        .unwrap_or_else(|| {
-                                            if settled {
-                                                "Private game folder ready".to_owned()
-                                            } else if cache_only {
-                                                "Cached · Instance folder pending".to_owned()
-                                            } else {
-                                                "Awaiting installation".to_owned()
-                                            }
-                                        }),
-                                    p,
-                                )),
-                        )
-                    })
-                    .when(!pack_blocked, |panel| {
-                        panel.child(
-                            col()
-                                .child(row().child(self.command(
-                                    p,
-                                    "toggle-diagnostics",
-                                    if self.diagnostics_open {
-                                        "Hide setup diagnostics"
-                                    } else {
-                                        "Setup diagnostics"
-                                    },
-                                    false,
-                                    self.popup.is_some(),
-                                    cx,
-                                    |this, _, _| this.diagnostics_open = !this.diagnostics_open,
-                                )))
-                                .when(self.diagnostics_open, |panel| {
-                                    panel.child(self.setup_diagnostics(p, inspection, receipt, cx))
-                                }),
-                        )
-                    })
+                            },
+                        ),
+                )
+                .when_some(task_action, |task, action| task.child(action));
+            col()
+                .px_5()
+                .py_4()
+                .gap_4()
+                .child(self.accessibility.focus_group(
+                    task,
+                    "instance-task",
+                    "Current instance task",
+                    Role::Group,
+                    &self.task_focus,
+                ))
+                .when_some(profile.imported_pack.as_ref(), |panel, pack| {
+                    panel.child(
+                        col()
+                            .child(detail_row("Pack", pack.name.clone(), p))
+                            .child(detail_row(
+                                "Loader",
+                                pack.loader.clone().unwrap_or_else(|| "Vanilla".into()),
+                                p,
+                            ))
+                            .child(detail_row(
+                                "Files pending",
+                                pack.pending_files.to_string(),
+                                p,
+                            )),
+                    )
+                })
+                .when(!pack_blocked, |panel| {
+                    panel.child(
+                        col()
+                            .child(
+                                div()
+                                    .pb_2()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child("Installation details"),
+                            )
+                            .child(detail_row(
+                                "Minecraft",
+                                if inspected {
+                                    format!("{} · Metadata verified", profile.version.id())
+                                } else {
+                                    profile.version.id().into()
+                                },
+                                p,
+                            ))
+                            .child(detail_row("Managed JDK", jdk, p))
+                            .child(detail_row(
+                                "Game files",
+                                receipt
+                                    .map(|receipt| format!("{} verified", receipt.unique_files))
+                                    .unwrap_or_else(|| {
+                                        if settled {
+                                            "Private game folder ready".to_owned()
+                                        } else if cache_only {
+                                            "Cached · Instance folder pending".to_owned()
+                                        } else {
+                                            "Awaiting installation".to_owned()
+                                        }
+                                    }),
+                                p,
+                            )),
+                    )
+                })
+                .when(!pack_blocked, |panel| {
+                    panel.child(
+                        col()
+                            .child(row().child(self.command(
+                                p,
+                                "toggle-diagnostics",
+                                if self.diagnostics_open {
+                                    "Hide setup diagnostics"
+                                } else {
+                                    "Setup diagnostics"
+                                },
+                                false,
+                                self.popup.is_some(),
+                                cx,
+                                |this, _, _| this.diagnostics_open = !this.diagnostics_open,
+                            )))
+                            .when(self.diagnostics_open, |panel| {
+                                panel.child(self.setup_diagnostics(p, inspection, receipt, cx))
+                            }),
+                    )
+                })
+        };
+        let body: AnyElement = match self.tab {
+            Tab::Overview => {
+                let side = self.target_stack(profile, p, stack_targets, cx);
+                div()
+                    .flex()
+                    .items_start()
+                    .min_w_0()
+                    .when(stack_targets, |layout| layout.flex_col())
+                    .child(main.flex_1().min_w_0())
+                    .child(side)
+                    .into_any_element()
             }
+            Tab::Storage => main.into_any_element(),
             Tab::Settings => col()
                 .child(
                     div()
@@ -910,7 +1011,8 @@ impl Launcher {
                 ))).when(profile.imported_pack.is_some(), |settings| settings
                     .child(div().px_5().py_3().text_sm().text_color(p.muted).child("The pack defines the Minecraft version. Import it again to create an independent copy."))
                     .child(command_row(p).child(self.command(p, "reimport-pack", "Import pack", false, self.busy(), cx,
-                        |this, window, cx| this.pick(Picker::Pack, window, cx))))),
+                        |this, window, cx| this.pick(Picker::Pack, window, cx)))))
+                .into_any_element(),
         };
         let play_status = if profile.server_address.is_some() {
             "Join unavailable"
@@ -1134,6 +1236,243 @@ impl Launcher {
             Role::Group,
             &self.server_focus,
         )
+    }
+
+    /// Read-only overview panels beside the instance detail. The snapshot is
+    /// cached in `targets`; rendering never walks the filesystem.
+    fn side_panel(&self, p: Palette, title: &'static str, count: Option<usize>) -> gpui::Div {
+        col()
+            .w_full()
+            .min_w_0()
+            .bg(p.surface)
+            .border_1()
+            .border_color(p.stroke)
+            .child(
+                self.accessibility.text(
+                    row()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .justify_between()
+                        .px_3()
+                        .py_2()
+                        .bg(p.layer)
+                        .border_b_1()
+                        .border_color(p.stroke)
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .font_semibold()
+                                .child(title),
+                        )
+                        .when_some(count, |header, count| {
+                            header
+                                .child(div().text_xs().text_color(p.muted).child(count.to_string()))
+                        }),
+                    format!("heading-{title}"),
+                    count.map_or_else(|| title.to_owned(), |n| format!("{title}, {n}")),
+                    Role::Heading,
+                ),
+            )
+    }
+
+    fn target_stack(
+        &self,
+        profile: &Profile,
+        p: Palette,
+        narrow: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        if profile.server_address.is_some() {
+            // A dedicated server instance already shows its address above the tabs.
+            return div().into_any_element();
+        }
+        let mut stack = col().flex_none().gap_3().px_3().py_4();
+        stack = if narrow {
+            stack.w_full()
+        } else {
+            stack.w(px(264.))
+        };
+        let panel = match self.targets.get(&profile.id) {
+            Some(TargetsState::Ready(snapshot)) => {
+                // The native target chooser exposes the complete lists. Keep the
+                // overview inexpensive during resizes even for a full saves directory.
+                const PREVIEW_ROWS: usize = 3;
+                let panel = |title,
+                             total,
+                             empty,
+                             issue: Option<&String>,
+                             rows: Vec<(String, String, String)>| {
+                    let mut panel = self.side_panel(p, title, issue.is_none().then_some(total));
+                    if let Some(issue) = issue {
+                        panel = panel.child(
+                            self.accessibility.text(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_sm()
+                                    .text_color(p.muted)
+                                    .child(issue.clone()),
+                                format!("issue-{title}"),
+                                issue.clone(),
+                                Role::Label,
+                            ),
+                        );
+                    } else if total == 0 {
+                        panel = panel.child(
+                            self.accessibility.text(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_sm()
+                                    .text_color(p.muted)
+                                    .child(empty),
+                                format!("empty-{title}"),
+                                empty,
+                                Role::Label,
+                            ),
+                        );
+                    }
+                    for (id, name, secondary) in rows {
+                        let spoken = if secondary.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{name} · {secondary}")
+                        };
+                        panel = panel.child(
+                            self.accessibility.text(
+                                col()
+                                    .w_full()
+                                    .min_w_0()
+                                    .px_3()
+                                    .py_2()
+                                    .border_t_1()
+                                    .border_color(p.stroke)
+                                    .child(div().w_full().overflow_hidden().text_sm().child(name))
+                                    .when(!secondary.is_empty(), |row| {
+                                        row.child(
+                                            div()
+                                                .w_full()
+                                                .overflow_hidden()
+                                                .text_xs()
+                                                .text_color(p.muted)
+                                                .child(secondary),
+                                        )
+                                    }),
+                                id,
+                                spoken,
+                                Role::Label,
+                            ),
+                        );
+                    }
+                    if total > PREVIEW_ROWS {
+                        let text = format!("{} more in Targets…", total - PREVIEW_ROWS);
+                        panel = panel.child(
+                            self.accessibility.text(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_xs()
+                                    .text_color(p.muted)
+                                    .child(text.clone()),
+                                format!("more-{title}"),
+                                text,
+                                Role::Label,
+                            ),
+                        );
+                    }
+                    self.accessibility
+                        .group(panel, format!("group-{title}"), title, Role::Group)
+                };
+                let worlds = panel(
+                    "Local worlds",
+                    snapshot.worlds.len(),
+                    "No local worlds yet.",
+                    snapshot.world_issue.as_ref(),
+                    snapshot
+                        .worlds
+                        .iter()
+                        .take(PREVIEW_ROWS)
+                        .map(|world| {
+                            let folder = match &world.key {
+                                carbon_profiles::TargetKey::World(folder) => folder.as_str(),
+                                _ => "",
+                            };
+                            (
+                                format!("world-{folder}"),
+                                world.name.clone(),
+                                if folder == world.name {
+                                    String::new()
+                                } else {
+                                    folder.to_owned()
+                                },
+                            )
+                        })
+                        .collect(),
+                );
+                let destinations = panel(
+                    "Saved servers",
+                    snapshot.destinations.len(),
+                    "No saved servers yet.",
+                    None,
+                    snapshot
+                        .destinations
+                        .iter()
+                        .take(PREVIEW_ROWS)
+                        .map(|server| {
+                            (
+                                format!("server-{}", server.id),
+                                server.name.clone(),
+                                server.address.as_str().to_owned(),
+                            )
+                        })
+                        .collect(),
+                );
+                col().gap_3().child(worlds).child(destinations)
+            }
+            Some(TargetsState::Error(error)) => self
+                .side_panel(p, "Local saves and destinations", None)
+                .child(
+                    self.accessibility.text(
+                        div()
+                            .px_3()
+                            .py_3()
+                            .text_sm()
+                            .text_color(p.muted)
+                            .child(error.clone()),
+                        "targets-error",
+                        error.clone(),
+                        Role::Alert,
+                    ),
+                )
+                .child(div().px_3().pb_3().child(self.command(
+                    p,
+                    "retry-targets",
+                    "Retry",
+                    false,
+                    self.popup.is_some(),
+                    cx,
+                    |this, _, cx| this.refresh_targets(cx),
+                ))),
+            Some(TargetsState::Loading(_)) | None => self
+                .side_panel(p, "Local saves and destinations", None)
+                .child(
+                    self.accessibility.text(
+                        div()
+                            .px_3()
+                            .py_3()
+                            .text_sm()
+                            .text_color(p.muted)
+                            .child("Reading local saves and saved destinations…"),
+                        "targets-loading",
+                        "Reading local saves and saved destinations",
+                        Role::Status,
+                    ),
+                ),
+        };
+        stack.child(panel).into_any_element()
     }
 
     fn setup_diagnostics(
@@ -1568,6 +1907,7 @@ impl Render for Launcher {
             .filter(|task| !inline_activity && !task.activity.cancel.load(Ordering::Acquire));
         let stack_activity = narrow && footer_meter.is_some();
         let frame = col()
+            .id("launcher-frame")
             .size_full()
             .bg(p.frame)
             .text_color(p.ink())
@@ -1579,6 +1919,42 @@ impl Render for Launcher {
             })
             .track_focus(&self.root_focus)
             .key_context("CarbonDesktop")
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+                if !event.dragging() {
+                    if this.rail_drag.take().is_some() {
+                        cx.notify();
+                    }
+                    return;
+                }
+                let Some((start_x, start_width)) = this
+                    .rail_drag
+                    .as_ref()
+                    .map(|drag| (drag.start_x, drag.start_width))
+                else {
+                    return;
+                };
+                let width = start_width + (f32::from(event.position.x) - start_x);
+                if clamp_rail_width(width) != this.rail_width {
+                    this.set_rail_width(width);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.rail_drag.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.rail_drag.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .when(self.popup.is_some(), |owner| {
                 owner
                     .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
@@ -1594,7 +1970,9 @@ impl Render for Launcher {
             .on_action(cx.listener(|this, _: &shell::OpenView, win, cx| {
                 this.open_shell_menu(shell::Page::View, win, cx)
             }))
-            .on_action(cx.listener(|this, _: &FindInstance, win, cx| this.find(win, cx)))
+            .on_action(
+                cx.listener(|this, _: &FindInstance, win, cx| this.reveal_library(win, cx, true)),
+            )
             .on_action(cx.listener(|this, _: &NewInstance, win, cx| {
                 this.editor(popup::Mode::Create, win, cx)
             }))
@@ -1602,8 +1980,20 @@ impl Render for Launcher {
                 cx.listener(|this, _: &ImportPack, win, cx| this.pick(Picker::Pack, win, cx)),
             )
             .on_action(cx.listener(|this, _: &Back, win, cx| {
-                if this.show_detail {
+                if back_returns_to_detail(
+                    this.search_back_to_detail,
+                    this.show_detail,
+                    is_narrow(win),
+                ) {
+                    this.search_back_to_detail = false;
+                    this.show_detail = true;
+                    this.detail_focus.focus(win);
+                    cx.notify();
+                } else if this.show_detail {
+                    this.search_back_to_detail = false;
                     this.find(win, cx);
+                } else {
+                    this.search_back_to_detail = false;
                 }
             }))
             .on_action(
@@ -1681,7 +2071,13 @@ impl Render for Launcher {
                         body.child(self.sidebar(p, narrow, cx))
                     })
                     .when(!narrow || self.show_detail, |body| {
-                        body.child(self.workspace(p, narrow, cx))
+                        body.child(self.workspace(
+                            p,
+                            narrow,
+                            narrow
+                                || f32::from(window.viewport_size().width) - self.rail_width < 620.,
+                            cx,
+                        ))
                     }),
             )
             .child(
