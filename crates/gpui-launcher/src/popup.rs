@@ -512,8 +512,8 @@ impl Render for Popup {
                             .as_ref()
                             .is_none_or(|profile| profile.imported_pack.is_none()),
                         |content| {
-                            content.child(div().flex().flex_wrap().gap_2().children(VanillaVersion::ALL.map(
-                                |version| {
+                            content.child(div().flex().flex_wrap().gap_2().children(
+                                VanillaVersion::ALL.map(|version| {
                                     let treatment = if version == form.version {
                                         Partition::Selected
                                     } else {
@@ -541,8 +541,8 @@ impl Render for Popup {
                                             cx.notify();
                                         },
                                     )
-                                },
-                            )))
+                                }),
+                            ))
                         },
                     )
                     .child(row("Maximum memory (MiB)", &form.memory))
