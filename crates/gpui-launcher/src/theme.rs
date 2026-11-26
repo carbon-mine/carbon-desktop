@@ -47,7 +47,7 @@ pub fn compact_action(
 ) -> Button {
     action_button(id, palette, treatment, disabled, cx)
         .h(px(32.))
-        .when(!disabled, |button| {
+        .when(!disabled && !matches!(treatment, Partition::Selected), |button| {
             button.border_1().border_color(palette.stroke)
         })
 }
