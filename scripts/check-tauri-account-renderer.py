@@ -14,14 +14,20 @@ BRIDGE = r"""
   const profile = {id: '0ddfed53-76d4-47f4-ab31-8cd392aa4a03', name: 'Test instance',
     version: '26.3', memoryMiB: 2048, windowWidth: 1280, windowHeight: 720};
   window.accountDialogCalls = 0;
+  window.accountReads = 0;
   window.__TAURI_INTERNALS__ = {
     transformCallback() { return 1; },
     async invoke(command) {
       switch (command) {
         case 'personal_library': return [profile];
-        case 'minecraft_account_status': return status;
+        case 'minecraft_account_status':
+          window.accountReads += 1;
+          return status;
         case 'show_minecraft_accounts':
           window.accountDialogCalls += 1;
+          if (afterDialog !== status) {
+            await new Promise(resolve => { window.finishAccountDialog = resolve; });
+          }
           status = afterDialog;
           return;
         default: throw new Error('Unhandled in account renderer test: ' + command);
@@ -40,6 +46,9 @@ class QuietHandler(SimpleHTTPRequestHandler):
 def verify(browser, address, status, label, explanation, *, after_dialog=None):
     page = browser.new_page(viewport={"width": 1040, "height": 760})
     try:
+        if after_dialog:
+            # Only an explicit refresh on dialog return can satisfy this case.
+            page.add_init_script("window.setInterval = () => 0")
         page.add_init_script(f"({BRIDGE})({json.dumps(status)}, {json.dumps(after_dialog or status)})")
         page.goto(address)
         toolbar = page.get_by_role("button", name=label, exact=True)
@@ -50,6 +59,13 @@ def verify(browser, address, status, label, explanation, *, after_dialog=None):
         else:
             toolbar.click()
             page.wait_for_function("window.accountDialogCalls === 1")
+            if after_dialog:
+                search = page.get_by_role("searchbox", name="Find an instance")
+                search.focus()
+                expect(search).to_be_focused()
+                reads = page.evaluate("window.accountReads")
+                page.evaluate("window.finishAccountDialog()")
+                page.wait_for_function("before => window.accountReads > before", arg=reads)
             returned_label = "Minecraft account" if after_dialog == "verified" else label
             expect(page.get_by_role("button", name=returned_label, exact=True)).to_be_focused()
         if status in ("unsupported", "unavailable"):
