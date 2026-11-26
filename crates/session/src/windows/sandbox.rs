@@ -289,6 +289,11 @@ fn environment(own: &Path) -> io::Result<Vec<u16>> {
     Ok(result)
 }
 
+pub(super) struct LaunchObservation {
+    pub(super) smoke: bool,
+    pub(super) boundary_empty: bool,
+}
+
 pub(super) fn launch(
     profile: &Profile,
     java: &Path,
@@ -296,7 +301,7 @@ pub(super) fn launch(
     classpath: &Path,
     foreign: &Path,
     read_only: &Path,
-    smoke: bool,
+    observation: &mut LaunchObservation,
 ) -> io::Result<()> {
     let java_path = wide(java);
     let working = wide(own);
@@ -321,7 +326,11 @@ pub(super) fn launch(
         OsStr::new("FixtureSession"),
         foreign.as_os_str(),
         read_only.as_os_str(),
-        OsStr::new(if smoke { "smoke" } else { "interactive" }),
+        OsStr::new(if observation.smoke {
+            "smoke"
+        } else {
+            "interactive"
+        }),
     ])?;
     let env = environment(own)?;
     unsafe {
@@ -363,6 +372,7 @@ pub(super) fn launch(
             &startup.StartupInfo,
             &mut info,
         ))?;
+        observation.boundary_empty = false;
         let process = Handle(info.hProcess);
         let thread = Handle(info.hThread);
         let verified = check_token(process.0, profile.sid).and_then(|()| {
@@ -384,10 +394,17 @@ pub(super) fn launch(
         if ResumeThread(thread.0) == u32::MAX {
             return Err(Error::last_os_error());
         }
-        let deadline = if smoke { 30_000 } else { 30 * 60_000 };
+        let deadline = if observation.smoke {
+            30_000
+        } else {
+            30 * 60_000
+        };
         if WaitForSingleObject(process.0, deadline) != WAIT_OBJECT_0 {
             return Err(Error::other("The fixed Java session did not exit in time"));
         }
+        // Admission verified job membership. This fixed job permits only one
+        // active process, so termination of its sole member establishes drain.
+        observation.boundary_empty = true;
         let mut exit = 0;
         win(GetExitCodeProcess(process.0, &mut exit))?;
         if exit != 0 {

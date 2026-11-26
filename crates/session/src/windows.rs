@@ -2,7 +2,7 @@
 mod registry;
 mod sandbox;
 
-use crate::{SessionError, SessionReport};
+use crate::{reservation::RunReservation, SessionError, SessionReport};
 use registry::SessionLease;
 use sandbox::Profile;
 use std::{
@@ -57,13 +57,14 @@ pub(super) fn run(
     ensure_dir(&save_dir).map_err(SessionError::Data)?;
     let profile_guard =
         open_regular(&save_dir.join("sample.lock"), true).map_err(SessionError::Data)?;
-    profile_guard.try_lock().map_err(lock_error)?;
+    let reservation = RunReservation::acquire(&save_dir, profile_guard)?;
     let saved_count = save_dir.join("count");
     let initial = read_count(&saved_count)
         .map_err(SessionError::Data)?
         .unwrap_or(0);
 
-    let lease = SessionLease::begin(&saves).map_err(SessionError::Isolation)?;
+    let lease =
+        SessionLease::begin(&saves, id, reservation.id()).map_err(SessionError::Isolation)?;
     let profile = Profile::new(&lease.profile_name(false)).map_err(SessionError::Isolation)?;
     let neighbor = Profile::new(&lease.profile_name(true)).map_err(SessionError::Isolation)?;
     let own = local_state(&profile).map_err(SessionError::Isolation)?;
@@ -92,16 +93,25 @@ pub(super) fn run(
     }
     let witness = staged.join("readonly-witness");
     write_new(&witness, b"protected fixture").map_err(SessionError::Isolation)?;
-    sandbox::launch(
+    reservation.record_admission().map_err(SessionError::Data)?;
+    let mut observation = sandbox::LaunchObservation {
+        smoke,
+        boundary_empty: true,
+    };
+    let result = sandbox::launch(
         &profile,
         &java.join("bin/java.exe"),
         &own,
         &payload,
         &foreign,
         &witness,
-        smoke,
-    )
-    .map_err(SessionError::Isolation)?;
+        &mut observation,
+    );
+    if !observation.boundary_empty {
+        return Err(SessionError::RecoveryRequired);
+    }
+    reservation.confirm_empty()?;
+    result.map_err(SessionError::Isolation)?;
     if read_small(&own.join("window-shown"), 7)
         .map_err(SessionError::Isolation)?
         .as_deref()
