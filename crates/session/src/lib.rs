@@ -9,6 +9,9 @@ mod reservation;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod windows;
 
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub mod windows_state;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionReport {
