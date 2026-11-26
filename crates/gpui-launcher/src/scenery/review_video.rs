@@ -98,11 +98,13 @@ impl Reader {
                 "2",
                 "-c:v",
                 "h264",
-                "-ss",
+                "-i",
             ])
-            .arg(format!("{:.9}", (step % CYCLE) as f64 / FPS as f64))
-            .arg("-i")
             .arg(file)
+            // Skip frames on the continuous output timeline. Seeking the input
+            // changes where FFmpeg restarts it at subsequent loop boundaries.
+            .arg("-ss")
+            .arg(format!("{:.9}", (step % CYCLE) as f64 / FPS as f64))
             .args([
                 "-map",
                 "0:v:0",
