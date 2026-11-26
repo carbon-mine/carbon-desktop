@@ -40,3 +40,31 @@ fn authoring_references_are_explicit_and_finished_assets_need_no_source() {
         );
     }
 }
+
+#[test]
+fn sixty_hz_packs_are_supported_and_the_rate_is_bounded() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join("poster.jpg"), b"fixture").unwrap();
+    fs::write(root.join("scene.frames"), b"fixture").unwrap();
+    for (fps, valid) in [
+        (0, false),
+        (24, true),
+        (30, true),
+        (48, true),
+        (60, true),
+        (61, false),
+    ] {
+        let view = json!({"id":"sky","family":"sky","name":"Sky","attribution":"Fixture","poster":"poster.jpg","frames":"scene.frames","fps":fps,"playback":"loop"});
+        fs::write(
+            root.join("manifest.json"),
+            json!({"version":1,"views":[view]}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            catalog::generate(root, root.join("generated.rs"), None).is_ok(),
+            valid,
+            "{fps}"
+        );
+    }
+}
