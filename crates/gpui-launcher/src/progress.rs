@@ -253,7 +253,12 @@ pub fn observe_linux_motion(cx: &mut Context<super::Launcher>) {
                     .unwrap_or(false),
             };
             if this
-                .update(cx, |this, _| this.reduced_motion = reduced)
+                .update(cx, |this, cx| {
+                    if this.reduced_motion != reduced {
+                        this.reduced_motion = reduced;
+                        cx.notify();
+                    }
+                })
                 .is_err()
             {
                 break;

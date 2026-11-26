@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
+mod scenery;
 mod targets;
 
 use super::theme::{Partition, compact_action, label};
@@ -33,6 +34,7 @@ pub enum Kind {
     Profile(Mode, Option<Profile>),
     Server(Profile),
     Targets(Uuid, carbon_profiles::InstanceTargets),
+    Scenery(super::scenery::Landscape),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
     Notice {
@@ -66,6 +68,7 @@ struct Popup {
     form: Option<Form>,
     server: Option<ServerForm>,
     targets: Option<TargetDialog>,
+    scene: Option<super::scenery::Landscape>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
     account: Option<AccountDialog>,
@@ -81,6 +84,7 @@ fn title(kind: &Kind) -> &'static str {
         Kind::Profile(Mode::Clone, _) => "Clone instance",
         Kind::Server(_) => "Edit server address",
         Kind::Targets(..) => "Launch targets",
+        Kind::Scenery(_) => "Home scenery",
         Kind::ImportPack(..) => "Import modpack",
         Kind::Account(_) => "Minecraft account",
         Kind::Notice { title, .. } => title,
@@ -102,6 +106,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
         Kind::Profile(..) => (417., 340.),
         Kind::Server(..) => (262., 220.),
         Kind::Targets(..) => (460., 300.),
+        Kind::Scenery(_) => (432., 296.),
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
         Kind::Account(_) => (430., 280.),
@@ -188,6 +193,7 @@ impl Popup {
         let focus = cx.focus_handle();
         let mut server = None;
         let mut targets = None;
+        let mut scene = None;
         let (form, pack, notice, account) = match kind {
             Kind::Profile(mode, original) => {
                 let name = original
@@ -264,6 +270,11 @@ impl Popup {
                 server = Some(ServerForm { original, input });
                 (None, None, None, None)
             }
+            Kind::Scenery(current) => {
+                focus.focus(window);
+                scene = Some(current);
+                (None, None, None, None)
+            }
             Kind::Targets(id, snapshot) => {
                 focus.focus(window);
                 targets = Some(TargetDialog::new(id, snapshot));
@@ -315,6 +326,7 @@ impl Popup {
             form,
             server,
             targets,
+            scene,
             pack,
             notice,
             account,
@@ -705,6 +717,9 @@ impl Render for Popup {
                 Role::Alert,
             ));
         }
+        if let Some(scene) = self.scene {
+            content = content.child(self.scene_choices(scene, cx));
+        }
         if let Some(error) = &self.error {
             let reason = if self.pack.is_some() {
                 format!("Could not import this pack. {error}")
@@ -737,7 +752,7 @@ impl Render for Popup {
                 "Close"
             };
             (dismiss, Partition::Neutral)
-        } else if self
+        } else if self.scene.is_some() || self
             .targets
             .as_ref()
             .is_some_and(|targets| !targets.editing())
