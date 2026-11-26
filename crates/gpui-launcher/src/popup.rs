@@ -7,7 +7,7 @@ use super::{Launcher, account_panel::AccountPanel};
 use accesskit::Role;
 use account::AccountDialog;
 use carbon_pack::PackReview;
-use carbon_profiles::{Profile, ProfileAction, VanillaVersion};
+use carbon_profiles::{Profile, ProfileAction, ServerAddress, VanillaVersion};
 use gpui::{
     AnyWindowHandle, Bounds, Context, Entity, FocusHandle, TitlebarOptions, WeakEntity, Window,
     WindowBounds, WindowDecorations, WindowOptions, actions, div, prelude::*, px, size,
@@ -30,6 +30,7 @@ pub enum Mode {
 pub enum Kind {
     Profile(Mode, Option<Profile>),
     Icon(Profile),
+    Server(Profile),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
     Notice {
@@ -48,6 +49,11 @@ struct Form {
     version: VanillaVersion,
 }
 
+struct ServerForm {
+    original: Profile,
+    input: Entity<InputState>,
+}
+
 struct Popup {
     accessibility: super::accessibility::Accessibility,
     parent: AnyWindowHandle,
@@ -57,6 +63,7 @@ struct Popup {
     focus: FocusHandle,
     icon: Option<icon::Picker>,
     form: Option<Form>,
+    server: Option<ServerForm>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
     account: Option<AccountDialog>,
@@ -70,6 +77,7 @@ fn title(kind: &Kind) -> &'static str {
         Kind::Profile(Mode::Create, _) => "New vanilla instance",
         Kind::Profile(Mode::Edit, _) => "Edit instance",
         Kind::Profile(Mode::Clone, _) => "Clone instance",
+        Kind::Server(_) => "Edit server address",
         Kind::ImportPack(..) => "Import modpack",
         Kind::Icon(_) => "Choose instance icon",
         Kind::Account(_) => "Minecraft account",
@@ -91,6 +99,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
     let (height, minimum_height) = match &kind {
         Kind::Icon(_) => (466., 330.),
         Kind::Profile(..) => (417., 340.),
+        Kind::Server(..) => (262., 220.),
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
         Kind::Account(_) => (430., 280.),
@@ -176,6 +185,7 @@ impl Popup {
             super::accessibility::Accessibility::new(window, cx, title(&kind).into());
         let focus = cx.focus_handle();
         let mut icon = None;
+        let mut server = None;
         let (form, pack, notice, account) = match kind {
             Kind::Icon(profile) => {
                 icon = Some(icon::Picker::new(&profile, window, cx));
@@ -236,6 +246,26 @@ impl Popup {
                     None,
                 )
             }
+            Kind::Server(original) => {
+                let address = original
+                    .server_address
+                    .as_ref()
+                    .map_or("", ServerAddress::as_str);
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("Hostname or IP address")
+                        .default_value(address.to_owned())
+                });
+                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.commit(window, cx);
+                    }
+                })
+                .detach();
+                input.update(cx, |input, cx| input.focus(window, cx));
+                server = Some(ServerForm { original, input });
+                (None, None, None, None)
+            }
             Kind::ImportPack(path, review) => {
                 focus.focus(window);
                 (None, Some((path, review)), None, None)
@@ -277,6 +307,7 @@ impl Popup {
             focus,
             icon,
             form,
+            server,
             pack,
             notice,
             account,
@@ -320,6 +351,31 @@ impl Popup {
     }
 
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(form) = &self.server {
+            let result = ServerAddress::parse_optional(form.input.read(cx).value().as_str())
+                .and_then(|address| {
+                    carbon_profiles::set_server_address(
+                        &self.root_path,
+                        form.original.id,
+                        form.original.server_address.as_ref(),
+                        address,
+                    )
+                });
+            match result {
+                Ok(profile) => {
+                    self.server = None;
+                    let _ = self.owner.update(cx, |launcher, cx| {
+                        launcher.server_saved(profile, cx);
+                    });
+                    window.remove_window();
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    cx.notify();
+                }
+            }
+            return;
+        }
         let Some(form) = &self.form else {
             return;
         };
@@ -354,6 +410,10 @@ impl Popup {
                             .original
                             .as_ref()
                             .and_then(|profile| profile.imported_pack.clone()),
+                        server_address: form
+                            .original
+                            .as_ref()
+                            .and_then(|profile| profile.server_address.clone()),
                         name,
                         version: form.version,
                         memory_mib,
@@ -469,7 +529,7 @@ impl Render for Popup {
             .on_action(cx.listener(|this, _: &Save, window, cx| {
                 if this.icon.is_some() {
                     this.save_icon(window, cx);
-                } else if this.form.is_some() {
+                } else if this.form.is_some() || this.server.is_some() {
                     this.commit(window, cx);
                 } else if this.notice.is_some() {
                     window.remove_window();
@@ -509,6 +569,13 @@ impl Render for Popup {
             if form.mode == Mode::Clone {
                 content = content
                     .child("Copy this instance’s preferences. Game data and saves stay separate.");
+                if form
+                    .original
+                    .as_ref()
+                    .is_some_and(|profile| profile.server_address.is_some())
+                {
+                    content = content.child("The copy starts without a server address.");
+                }
             } else {
                 content = content
                     .child("Minecraft version")
@@ -575,6 +642,18 @@ impl Render for Popup {
                             .child(row("Window height", &form.height).flex_1().min_w(px(124.))),
                     );
             }
+        } else if let Some(server) = &self.server {
+            content =
+                content
+                    .child(row("Server address", &server.input))
+                    .child(self.accessibility.text(
+                    div().text_sm().text_color(p.muted).child(
+                        "Example: play.example.org:25565. Clear the field to remove the binding.",
+                    ),
+                    "server-help",
+                    "Example: play.example.org:25565. Clear the field to remove the binding.",
+                    Role::Label,
+                ));
         } else if let Some((_, review)) = &self.pack {
             content =
                 content
@@ -617,6 +696,8 @@ impl Render for Popup {
         if let Some(error) = &self.error {
             let reason = if self.pack.is_some() {
                 format!("Could not import this pack. {error}")
+            } else if self.server.is_some() {
+                error.clone()
             } else {
                 format!("Could not save this instance. {error}")
             };
@@ -673,11 +754,11 @@ impl Render for Popup {
                 cx,
                 |this, window, cx| this.account_dismiss(window, cx),
             ))
-            .when_some(self.form.as_ref(), |bar, form| {
-                let name = match form.mode {
-                    Mode::Create => "Create instance",
-                    Mode::Edit => "Save changes",
-                    Mode::Clone => "Create copy",
+            .when(self.form.is_some() || self.server.is_some(), |bar| {
+                let name = match self.form.as_ref().map(|form| form.mode) {
+                    Some(Mode::Create) => "Create instance",
+                    Some(Mode::Clone) => "Create copy",
+                    _ => "Save changes",
                 };
                 bar.child(self.control(
                     label(

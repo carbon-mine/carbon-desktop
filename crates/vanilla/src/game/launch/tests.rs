@@ -22,6 +22,7 @@ fn profile(version: VanillaVersion) -> Profile {
         window_height: 720,
         icon_id: None,
         imported_pack: None,
+        server_address: None,
     }
 }
 
