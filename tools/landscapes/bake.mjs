@@ -3,10 +3,10 @@
 import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile, rename } from 'node:fs/promises';
+import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const views = ['riverside', 'farmland', 'alpine', 'marsh', 'orchard', 'riverside-overhead', 'farmland-overhead'];
+const manifest = JSON.parse(await readFile(new URL('../../design-system/landscapes/manifest.json', import.meta.url), 'utf8'));
 const framesPerView = 48;
 const output = fileURLToPath(new URL('../../design-system/landscapes/', import.meta.url));
 const assets = await build({
@@ -29,7 +29,9 @@ try {
     ? route.fulfill({ contentType: 'text/html', body: html })
     : route.abort());
   const digest = createHash('sha256');
-  for (const view of views) {
+  for (const entry of manifest.views) {
+    if (!entry.frames) continue;
+    const view = entry.id;
     await page.goto(base + (view.endsWith('-overhead') ? '?overhead' : '?scenic') + '#' + view.replace('-overhead', ''));
     await page.waitForFunction(() => typeof window.paintScenicFrame === 'function');
     const frames = [];
@@ -51,7 +53,8 @@ try {
     });
     offsets.writeUInt32LE(length, offsets.length - 4);
     const packed = Buffer.concat([offsets, ...frames]);
-    const dest = output + '/' + view + '.frames';
+    const dest = output + '/' + entry.frames;
+    await writeFile(output + '/' + entry.poster, frames[0]);
     await writeFile(dest + '.next', packed);
     await rename(dest + '.next', dest);
     digest.update(packed);
