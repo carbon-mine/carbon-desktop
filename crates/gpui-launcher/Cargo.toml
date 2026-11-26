@@ -9,6 +9,7 @@ license = "MPL-2.0"
 anyhow = "1"
 accesskit = "=0.25.2"
 async-channel = "=2.5.0"
+futures = "0.3"
 carbon-account = { path = "../account" }
 carbon-profiles = { path = "../profiles" }
 carbon-pack = { path = "../pack" }
@@ -18,6 +19,8 @@ carbon-setup = { path = "../setup" }
 carbon-runtime = { path = "../runtime" }
 carbon-vanilla = { path = "../vanilla" }
 gpui = "=0.2.2"
+zune-core = "=0.5.3"
+zune-jpeg = "=0.5.15"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }
 gpui-component = "=0.5.1"
 tempfile = "3"
@@ -39,8 +42,6 @@ accesskit_unix = "=0.24.1"
 ashpd = { version = "=0.11.1", default-features = false, features = ["async-std"] }
 x11rb = { version = "=0.13.2", features = ["randr"] }
 
-[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-futures = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
