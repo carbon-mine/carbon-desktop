@@ -169,6 +169,7 @@ fn after_present(step: usize, due: Instant, now: Instant, period: Duration) -> (
 pub struct SceneView {
     landscape: Landscape,
     video: Option<review_video::Reader>,
+    decoder_cancel: review_video::Cancellation,
     video_failed: bool,
     image: Option<Arc<RenderImage>>,
     step: usize,
@@ -184,11 +185,15 @@ pub struct SceneView {
 
 impl SceneView {
     pub fn new(landscape: Landscape, cx: &mut Context<Self>) -> Self {
-        cx.on_release(|view, app| retire(view.image.take(), app))
-            .detach();
+        cx.on_release(|view, app| {
+            view.decoder_cancel.cancel();
+            retire(view.image.take(), app);
+        })
+        .detach();
         let mut view = Self {
             landscape,
             video: None,
+            decoder_cancel: Default::default(),
             video_failed: false,
             image: None,
             step: 0,
@@ -210,6 +215,7 @@ impl SceneView {
         }
         self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
+        std::mem::take(&mut self.decoder_cancel).cancel();
         self.video.take();
         self.video_failed = false;
         self.landscape = landscape;
@@ -227,6 +233,7 @@ impl SceneView {
         }
         self.interrupt.take();
         self.generation = self.generation.wrapping_add(1);
+        std::mem::take(&mut self.decoder_cancel).cancel();
         self.video.take();
         self.playing = playing;
         self.next_due = None;
@@ -263,6 +270,7 @@ impl SceneView {
             (bytes, due, step)
         };
         let previous_reader = self.video.take();
+        let decoder_cancel = self.decoder_cancel.clone();
         let generation = self.generation;
         let (interrupt, interrupted) = async_channel::bounded::<()>(1);
         self.interrupt = Some(interrupt);
@@ -279,7 +287,13 @@ impl SceneView {
                                 false,
                             );
                         }
-                        match review_video::Reader::frame(previous_reader, source, scene.id, step) {
+                        match review_video::Reader::frame(
+                            previous_reader,
+                            decoder_cancel,
+                            source,
+                            scene.id,
+                            step,
+                        ) {
                             Ok((reader, image)) => return (Some(image), Some(reader), false),
                             Err(err) => {
                                 eprintln!(

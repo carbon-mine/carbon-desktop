@@ -6,7 +6,7 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     process::{Child, ChildStdout, Command, Stdio},
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 const WIDTH: u32 = 1440;
@@ -42,14 +42,41 @@ impl Source {
     }
 }
 
-pub(super) struct Reader {
+#[derive(Default, Clone)]
+pub(super) struct Cancellation(Arc<Mutex<DecoderState>>);
+
+#[derive(Default)]
+struct DecoderState {
+    cancelled: bool,
     child: Option<Child>,
+}
+
+impl Cancellation {
+    pub(super) fn cancel(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.cancelled = true;
+        if let Some(mut child) = state.child.take() {
+            let _ = child.kill();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
+}
+
+pub(super) struct Reader {
+    cancellation: Cancellation,
     pipe: ChildStdout,
     next: usize,
 }
 
 impl Reader {
-    fn start(source: &Source, file: &Path, step: usize) -> io::Result<Self> {
+    fn start(
+        source: &Source,
+        file: &Path,
+        step: usize,
+        cancellation: Cancellation,
+    ) -> io::Result<Self> {
         let mut command = Command::new(&source.decoder);
         #[cfg(windows)]
         {
@@ -97,14 +124,24 @@ impl Reader {
             .stderr(Stdio::null())
             .spawn()?;
         let pipe = child.stdout.take().expect("piped video output");
+        let mut state = cancellation.0.lock().unwrap();
+        if state.cancelled {
+            drop(state);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        state.child = Some(child);
+        drop(state);
         Ok(Self {
-            child: Some(child),
+            cancellation,
             pipe,
             next: step,
         })
     }
     pub(super) fn frame(
         previous: Option<Self>,
+        cancellation: Cancellation,
         source: &Source,
         id: &str,
         step: usize,
@@ -113,7 +150,12 @@ impl Reader {
         // late tick and rebase the clock to avoid a backlog or repeated seeks.
         let mut reader = match previous {
             Some(reader) => reader,
-            _ => Self::start(source, &source.directory.join(format!("{id}.mp4")), step)?,
+            _ => Self::start(
+                source,
+                &source.directory.join(format!("{id}.mp4")),
+                step,
+                cancellation,
+            )?,
         };
         let mut bytes = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
         for _ in 0..=step.wrapping_sub(reader.next).min(2) {
@@ -129,11 +171,6 @@ impl Reader {
 }
 impl Drop for Reader {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-        }
+        self.cancellation.cancel();
     }
 }
