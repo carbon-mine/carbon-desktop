@@ -265,7 +265,11 @@ impl Accessibility {
         role: Role,
     ) -> Semantic {
         let mut node = Node::new(role);
-        node.set_label(text.into());
+        if role == Role::Label {
+            node.set_value(text.into());
+        } else {
+            node.set_label(text.into());
+        }
         if matches!(role, Role::Status | Role::Alert) {
             node.set_live(if role == Role::Alert {
                 Live::Assertive
