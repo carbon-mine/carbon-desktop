@@ -30,6 +30,7 @@ BRIDGE = """
     installReject: null,
     clientPicks: 0,
     dialogName: null,
+    importedPack: null,
     emit(event, payload) { handlers[listeners[event]]({event, payload}); }
   };
   const report = {
@@ -107,7 +108,14 @@ BRIDGE = """
         if (state.failedAction === command) throw 'The response was lost after the personal update.';
         return {profiles:structuredClone(profiles), selectedId:created.id};
       }
-      if (command === 'import_pack' || command === 'apply_desktop_theme') return null;
+      if (command === 'import_pack') {
+        const imported = state.importedPack;
+        if (!imported) return null;
+        state.importedPack = null;
+        profiles.push(imported);
+        return {id: imported.id};
+      }
+      if (command === 'apply_desktop_theme') return null;
       if (command === 'minecraft_account_status') return 'unavailable';
       throw new Error('Unexpected command ' + command);
     }
@@ -194,6 +202,27 @@ def test_profile_dialog_return(browser, address):
     clone.click()
     page.wait_for_function("reviewTest.requests.some(([cmd, args]) => cmd === 'edit_profile_dialog' && args.mode === 'clone' && args.profileId === 'a1cb6fd0-42cb-475a-a198-177a28cc4c15')")
     expect(clone).to_be_focused()
+    page.close()
+
+
+def test_pack_import(browser, address):
+    page = open_case(browser, address)
+    expect(page.get_by_role("heading", name="Personal world")).to_be_visible()
+    imported = {
+        "id": "3f1b6f6e-6f6e-4a1c-9c0e-2f7a1e2d3c4b",
+        "name": "Forest pack",
+        "version": "1.21.1",
+        "memoryMiB": 2048,
+        "windowWidth": 1280,
+        "windowHeight": 720,
+        "importedPack": {"name": "Forest", "loader": None, "pendingFiles": 1},
+    }
+    page.evaluate("(profile) => {reviewTest.importedPack = profile}", imported)
+    page.keyboard.press("Control+o")
+    expect(page.get_by_role("heading", name="Forest pack", exact=True)).to_be_focused()
+    row = page.get_by_role("button", name="Forest pack Imported pack 1.21.1")
+    expect(row).to_have_attribute("aria-current", "true")
+    expect(page.get_by_role("heading", name="Pack preparation pending")).to_be_visible()
     page.close()
 
 
@@ -300,6 +329,25 @@ def test_navigation(browser, address, captures):
     page.close()
 
 
+def test_appearance_keeps_search_selection(browser, address):
+    page = open_case(browser, address)
+    page.keyboard.press("Control+f")
+    search = page.get_by_role("searchbox", name="Find an instance")
+    expect(search).to_be_focused()
+    page.keyboard.type("Personal")
+    page.keyboard.press("Shift+ArrowLeft")
+    for theme in ("dark", "light"):
+        page.evaluate("(theme) => reviewTest.emit('desktop-menu', 'theme-' + theme)", theme)
+        expect(page.locator("html")).to_have_attribute("data-carbon-theme", theme)
+        page.wait_for_function("""theme => reviewTest.requests
+            .filter(([cmd]) => cmd === 'apply_desktop_theme').at(-1)?.[1].preference === theme""",
+            arg=theme)
+        expect(search).to_be_focused()
+        expect(search).to_have_value("Personal")
+        assert search.evaluate("el => [el.selectionStart, el.selectionEnd]") == [7, 8]
+    page.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=Path(".artifacts/renderer-test"))
@@ -318,9 +366,11 @@ def main():
                 test_independent_initial_loads(browser, address)
                 test_namespace_reload_after_mutation(browser, address)
                 test_profile_dialog_return(browser, address)
+                test_pack_import(browser, address)
                 test_install(browser, address)
                 test_diagnostic_recovery(browser, address)
                 test_navigation(browser, address, args.captures)
+                test_appearance_keeps_search_selection(browser, address)
                 print("Passed renderer checks for install, recovery, native-dialog requests, keyboard focus and reflow.")
         finally:
             server.shutdown()
