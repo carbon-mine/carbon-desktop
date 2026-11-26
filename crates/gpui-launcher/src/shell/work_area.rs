@@ -109,11 +109,14 @@ pub(super) fn for_display(
     screen_relative_area(display, left, top, visible.size.width, visible.size.height)
 }
 
-/// Places an AppKit work area onto GPUI's global top-left coordinates.
+/// Clips an AppKit work area measured inside its screen to the GPUI display.
 ///
-/// `NSScreen` reports `frame` and `visibleFrame` relative to that screen's own
-/// origin, while GPUI display bounds are global. Offset by the display origin
-/// before intersecting; on the primary display the offset is zero.
+/// gpui 0.2.2 reports every macOS display with origin `(0, 0)` and applies
+/// window bounds relative to the target screen
+/// (`platform/mac/window.rs`: `screen_frame.origin.x + bounds.origin.x`).
+/// `NSScreen` `frame`/`visibleFrame` use the same screen-relative convention,
+/// so the offsets must stay screen-relative: adding the display origin here
+/// would move a secondary screen's window off that screen.
 #[cfg(any(target_os = "macos", test))]
 fn screen_relative_area(
     display: gpui::Bounds<gpui::Pixels>,
@@ -132,10 +135,7 @@ fn screen_relative_area(
     }
 
     let work_area = Bounds::new(
-        point(
-            px(f32::from(display.origin.x) + left as f32),
-            px(f32::from(display.origin.y) + top as f32),
-        ),
+        point(px(left as f32), px(top as f32)),
         size(px(width as f32), px(height as f32)),
     );
     intersect(work_area, display)
@@ -287,20 +287,31 @@ mod tests {
     use gpui::{Bounds, point, px, size};
 
     #[test]
-    fn a_secondary_screen_moves_its_work_area_onto_global_coordinates() {
-        // A screen left of the primary with a Dock along its bottom edge.
-        let display = Bounds::new(point(px(-1920.), px(0.)), size(px(1920.), px(1080.)));
+    fn a_bottom_dock_inset_stays_screen_relative() {
+        // gpui 0.2.2 gives every macOS display a zero origin, and windows are
+        // placed relative to their screen, so the inset keeps that origin.
+        let display = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
         let area = screen_relative_area(display, 0., 0., 1920., 1020.).unwrap();
-        assert_eq!(area.origin, point(px(-1920.), px(0.)));
+        assert_eq!(area.origin, point(px(0.), px(0.)));
         assert_eq!(area.size, size(px(1920.), px(1020.)));
     }
 
     #[test]
     fn a_left_dock_inset_stays_on_its_own_screen() {
-        let display = Bounds::new(point(px(-1920.), px(0.)), size(px(1920.), px(1080.)));
+        let display = Bounds::new(point(px(0.), px(0.)), size(px(1920.), px(1080.)));
         let area = screen_relative_area(display, 70., 0., 1850., 1080.).unwrap();
-        assert_eq!(area.origin, point(px(-1850.), px(0.)));
+        assert_eq!(area.origin, point(px(70.), px(0.)));
         assert_eq!(area.size, size(px(1850.), px(1080.)));
+    }
+
+    #[test]
+    fn a_menu_bar_inset_survives_the_y_flip() {
+        // AppKit's visibleFrame starts below the menu bar, so the top inset
+        // must move down from the screen's top edge.
+        let display = Bounds::new(point(px(0.), px(0.)), size(px(1512.), px(982.)));
+        let area = screen_relative_area(display, 0., 25., 1512., 957.).unwrap();
+        assert_eq!(area.origin, point(px(0.), px(25.)));
+        assert_eq!(area.size, size(px(1512.), px(957.)));
     }
 
     #[test]
