@@ -220,6 +220,14 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
+      - name: Exercise launcher interactions in the built renderer
+        if: matrix.platform == 'Windows x64'
+        run: |
+          python -m venv "$RUNNER_TEMP/renderer-env"
+          browser_python="$RUNNER_TEMP/renderer-env/Scripts/python.exe"
+          "$browser_python" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r scripts/renderer-ci-requirements.txt
+          "$browser_python" scripts/test-profile-renderer.py --directory dist --channel msedge
+
       - name: Build both desktop editions
         run: cargo build --locked -p carbon-desktop -p carbon-desktop-gpui
 

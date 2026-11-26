@@ -15,6 +15,13 @@ Each job verifies the runner, Rust host, Node and Bun architectures. It checks t
 
 ## Reproduce locally
 
+The Windows x64 job also runs the built Svelte interface in headless Microsoft Edge. A disposable bridge fixture exercises install review, cancellation and retry, offline file verification, native-dialog requests, keyboard focus and narrow-window reflow in both themes. Native dialog contents, GPUI rendering and game execution require their own checks. To repeat this renderer check on Windows x64, build the frontend, install the pinned wheels in a Python virtual environment, and run:
+
+```powershell
+python -m pip install --only-binary=:all: --require-hashes -r scripts/renderer-ci-requirements.txt
+python scripts/test-profile-renderer.py --directory dist --channel msedge
+```
+
 Use the native Rust, Node and Bun versions in the workflow. Python 3 runs the design seed verifier. CI verifies the SHA-256 for each architecture’s Bun archive. [Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
 
 - **Windows** requires the MSVC build tools for the host architecture and the Windows SDK. The Windows fixture compiler requires a native JDK capable of `javac --release 17`. CI uses Temurin for x64 and a checksum-pinned Microsoft Build of OpenJDK for ARM64. Tauri also uses WebView2. [Microsoft OpenJDK](https://learn.microsoft.com/en-us/java/openjdk/download) · [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
