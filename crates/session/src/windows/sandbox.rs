@@ -15,6 +15,9 @@ use windows_sys::Win32::{
     System::{Com::CoTaskMemFree, JobObjects::*, Threading::*},
 };
 
+#[cfg(test)]
+mod state_worker;
+
 fn wide(s: impl AsRef<OsStr>) -> Vec<u16> {
     s.as_ref().encode_wide().chain([0]).collect()
 }
