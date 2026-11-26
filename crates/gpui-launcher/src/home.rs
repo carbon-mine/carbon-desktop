@@ -432,9 +432,11 @@ impl Launcher {
         let button = compact_action("home-pick", p, Partition::Neutral, false, cx)
             .w_full()
             .h(px(42.))
+            .border_color(p.control_line)
             .justify_start()
             .gap_2()
-            .px_2()
+            .pl_2()
+            .pr(px(34.))
             .child(
                 Icon::Builtin(carbon_profiles::icons::displayed(&profile)).render(px(24.), p.ink),
             )
@@ -446,21 +448,33 @@ impl Launcher {
                     .font_semibold()
                     .truncate()
                     .child(pick_text),
-            )
-            .child(div().text_color(p.muted).child("\u{25be}"));
+            );
         col()
             .gap_2()
             .child(div().text_sm().text_color(p.muted).child(eyebrow))
-            .child(self.control(
-                button,
-                "home-pick",
-                &pick_label,
-                Role::Button,
-                self.popup.is_some(),
-                None,
-                cx,
-                |this, window, cx| this.open_home_switcher(window, cx),
-            ))
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .child(self.control(
+                        button,
+                        "home-pick",
+                        &pick_label,
+                        Role::Button,
+                        self.popup.is_some(),
+                        None,
+                        cx,
+                        |this, window, cx| this.open_home_switcher(window, cx),
+                    ))
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(12.))
+                            .top(px(13.))
+                            .size(px(16.))
+                            .child(Icon::ChevronDown.render(px(16.), p.ink)),
+                    ),
+            )
             .child(div().text_sm().text_color(p.muted).child(metadata))
             .child(self.accessibility.text(
                 div().text_sm().text_color(p.muted).child(readiness),
