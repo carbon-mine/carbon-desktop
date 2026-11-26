@@ -1,3 +1,5 @@
+#[cfg(any(windows, target_os = "linux"))]
+use crate::account::Dialog as AccountDialog;
 use crate::Library;
 use carbon_profiles::Profile;
 #[cfg(any(windows, target_os = "linux"))]
@@ -26,6 +28,14 @@ fn dark_theme(owner: &WebviewWindow) -> bool {
 mod linux;
 #[cfg(windows)]
 mod windows;
+
+#[cfg(any(windows, target_os = "linux"))]
+pub fn show_accounts(owner: &WebviewWindow, dialog: AccountDialog) -> Result<(), String> {
+    #[cfg(windows)]
+    return windows::show_accounts(owner, dialog, dark_theme(owner));
+    #[cfg(target_os = "linux")]
+    return linux::show_accounts(owner, dialog, dark_theme(owner));
+}
 
 #[derive(Clone, Copy, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

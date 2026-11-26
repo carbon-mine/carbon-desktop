@@ -1,6 +1,12 @@
 use super::{Form, Mode, ProfileAction, VanillaVersion};
+use crate::account::{Control, Dialog as AccountDialog};
 use gtk::{
     prelude::*, ComboBoxText, Dialog, DialogFlags, Entry, Grid, Label, ResponseType, SpinButton,
+};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
 };
 use tauri::WebviewWindow;
 
@@ -19,16 +25,18 @@ fn style(dialog: &Dialog, dark: bool) -> Option<DialogStyle> {
     let context = dialog.style_context();
     context.add_class("carbon-dialog");
     context.add_class(if dark { "carbon-dark" } else { "carbon-light" });
-    if let Some(button) = dialog.widget_for_response(ResponseType::Accept) {
+    let accept = dialog.widget_for_response(ResponseType::Accept);
+    if let Some(button) = &accept {
         button.style_context().add_class("suggested-action");
-        if let Some(row) = button
-            .parent()
-            .and_then(|p| p.downcast::<gtk::ButtonBox>().ok())
-        {
-            row.set_layout_style(gtk::ButtonBoxStyle::Expand);
-            row.set_homogeneous(true);
-            row.set_spacing(0);
-        }
+    }
+    if let Some(row) = accept
+        .or_else(|| dialog.widget_for_response(ResponseType::Close))
+        .and_then(|button| button.parent())
+        .and_then(|p| p.downcast::<gtk::ButtonBox>().ok())
+    {
+        row.set_layout_style(gtk::ButtonBoxStyle::Expand);
+        row.set_homogeneous(true);
+        row.set_spacing(0);
     }
     let settings = dialog.settings()?;
     if settings.gtk_theme_name().is_some_and(|theme| {
@@ -50,6 +58,194 @@ fn style(dialog: &Dialog, dark: bool) -> Option<DialogStyle> {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
     Some(DialogStyle { screen, provider })
+}
+
+struct AccountWidgets {
+    heading: Label,
+    message: Label,
+    code: Label,
+    saved: Label,
+    accounts: ComboBoxText,
+    buttons: [gtk::Button; 5],
+    close: gtk::Button,
+    rows: RefCell<Vec<(uuid::Uuid, String)>>,
+    rendering: Cell<bool>,
+}
+
+impl AccountWidgets {
+    fn render(&self, account: &AccountDialog) {
+        self.rendering.set(true);
+        self.heading.set_text(account.heading());
+        self.message.set_text(&account.message());
+        let code = account.code();
+        self.code.set_visible(code.is_some());
+        self.code.set_text(&code.map_or_else(String::new, |code| {
+            format!("Microsoft sign-in code: {code}")
+        }));
+        let rows = account.rows();
+        if rows != *self.rows.borrow() {
+            self.accounts.remove_all();
+            for (id, text) in &rows {
+                self.accounts.append(Some(&id.to_string()), text);
+            }
+            *self.rows.borrow_mut() = rows;
+        }
+        let saved_accounts = !self.rows.borrow().is_empty();
+        self.saved.set_visible(saved_accounts);
+        self.accounts.set_visible(saved_accounts);
+        self.accounts
+            .set_active_id(account.selected.map(|id| id.to_string()).as_deref());
+        self.close.set_label(if account.confirming() {
+            "Back"
+        } else {
+            "Close"
+        });
+        for (button, control) in self.buttons.iter().zip(account.controls().slots()) {
+            if let Some(Control(label, _)) = control {
+                button.set_label(label);
+                button.show();
+            } else {
+                if button.has_focus() {
+                    self.close.grab_focus();
+                }
+                button.hide();
+            }
+        }
+        self.rendering.set(false);
+    }
+}
+
+pub(super) fn show_accounts(
+    parent: &WebviewWindow,
+    account: AccountDialog,
+    dark: bool,
+) -> Result<(), String> {
+    let owner = parent
+        .gtk_window()
+        .map_err(|_| "The owner window is unavailable.")?;
+    let dialog = Dialog::with_buttons(
+        Some("Minecraft accounts"),
+        Some(&owner),
+        DialogFlags::MODAL | DialogFlags::DESTROY_WITH_PARENT,
+        &[],
+    );
+    dialog.set_default_size(490, -1);
+    dialog.set_resizable(false);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    content.set_margin_start(20);
+    content.set_margin_end(20);
+    content.set_margin_top(18);
+    content.set_margin_bottom(14);
+    let heading = Label::new(None);
+    heading.set_xalign(0.);
+    heading.style_context().add_class("account-heading");
+    let message = Label::new(None);
+    message.set_xalign(0.);
+    message.set_line_wrap(true);
+    message.set_line_wrap_mode(gtk::pango::WrapMode::WordChar);
+    message.set_max_width_chars(50);
+    let accounts = ComboBoxText::new();
+    let saved = Label::with_mnemonic("Saved _accounts");
+    saved.set_xalign(0.);
+    saved.set_mnemonic_widget(Some(&accounts));
+    let code = Label::new(None);
+    code.set_xalign(0.);
+    code.set_selectable(true);
+    content.add(&heading);
+    content.add(&message);
+    content.add(&code);
+    content.add(&saved);
+    content.add(&accounts);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    content.add(&row);
+    dialog.content_area().add(&content);
+    let buttons = std::array::from_fn(|index| {
+        let button = gtk::Button::new();
+        let response = ResponseType::Other(index as u16 + 1);
+        if index == 0 {
+            dialog.add_action_widget(&button, response);
+            button.style_context().add_class("suggested-action");
+        } else {
+            row.add(&button);
+            let dialog = dialog.downgrade();
+            button.connect_clicked(move |_| {
+                if let Some(dialog) = dialog.upgrade() {
+                    dialog.response(response);
+                }
+            });
+        }
+        button
+    });
+    let close = gtk::Button::with_label("Close");
+    close.set_can_default(true);
+    dialog.add_action_widget(&close, ResponseType::Close);
+    dialog.set_default_response(ResponseType::Close);
+    let _style = style(&dialog, dark);
+    let widgets = Rc::new(AccountWidgets {
+        heading,
+        message,
+        code,
+        saved,
+        accounts,
+        buttons,
+        close,
+        rows: RefCell::new(Vec::new()),
+        rendering: Cell::new(false),
+    });
+    dialog.show_all();
+    let account = Rc::new(RefCell::new(account));
+    widgets.render(&account.borrow());
+    widgets.close.grab_focus();
+    widgets.accounts.connect_changed({
+        let widgets = Rc::downgrade(&widgets);
+        let account = Rc::clone(&account);
+        move |combo| {
+            let Some(widgets) = widgets.upgrade() else {
+                return;
+            };
+            if !widgets.rendering.get() {
+                if let Some(id) = combo.active_id().and_then(|id| id.parse().ok()) {
+                    let mut account = account.borrow_mut();
+                    account.select(id);
+                    widgets.render(&account);
+                }
+            }
+        }
+    });
+
+    // GtkDialog runs the nested main loop. Only an open window polls native account state.
+    let timer = gtk::glib::timeout_add_local(Duration::from_millis(250), {
+        let account = Rc::clone(&account);
+        let widgets = Rc::clone(&widgets);
+        move || {
+            let mut account = account.borrow_mut();
+            if account.refresh() {
+                widgets.render(&account);
+            }
+            gtk::glib::ControlFlow::Continue
+        }
+    });
+    loop {
+        let response = dialog.run();
+        let mut account = account.borrow_mut();
+        match response {
+            ResponseType::Other(n @ 1..=5) => {
+                if let Some(Control(_, action)) = account.controls().slots()[usize::from(n - 1)] {
+                    account.perform(action, |code| {
+                        gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(code);
+                        true
+                    });
+                }
+            }
+            ResponseType::None => break,
+            _ if account.dismiss() => break,
+            _ => {}
+        }
+        widgets.render(&account);
+    }
+    timer.remove();
+    dialog.close();
+    Ok(())
 }
 
 pub(super) fn message_dialog(

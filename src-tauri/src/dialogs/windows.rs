@@ -5,6 +5,10 @@ use windows_sys::Win32::{
     Foundation::HWND, System::LibraryLoader::GetModuleHandleW, UI::WindowsAndMessaging::*,
 };
 
+#[path = "windows_account.rs"]
+mod account;
+pub(super) use account::show_accounts;
+
 #[path = "windows_style.rs"]
 mod paint;
 use paint::Style;
@@ -78,7 +82,13 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, msg: u32, wparam: usize, lpara
         if msg == WM_SETTINGCHANGE {
             let updated = Style::new((*pointer).style.dark);
             (*pointer).style = updated;
-            updated.init(hwnd);
+            updated.init(
+                hwnd,
+                &[IDOK, IDCANCEL],
+                &[NAME, NUMBERS[0], NUMBERS[1], NUMBERS[2]],
+                Some(VERSION),
+                IDOK,
+            );
             windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd, ptr::null(), 1);
         }
         if let Some(result) = (*pointer).style.message(hwnd, msg, wparam, lparam) {
@@ -89,7 +99,13 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, msg: u32, wparam: usize, lpara
         WM_INITDIALOG => {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
             let state = &*(lparam as *const State);
-            state.style.init(hwnd);
+            state.style.init(
+                hwnd,
+                &[IDOK, IDCANCEL],
+                &[NAME, NUMBERS[0], NUMBERS[1], NUMBERS[2]],
+                Some(VERSION),
+                IDOK,
+            );
             let form = match state.body {
                 Body::Form(form) => form,
                 Body::Notice {
