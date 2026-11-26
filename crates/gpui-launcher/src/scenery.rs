@@ -446,7 +446,7 @@ mod tests {
                 .unwrap(),
             };
             if mode != Some(ColorSpace::BGRA) {
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     pixel.swap(0, 2);
                 }
             }
@@ -463,7 +463,13 @@ mod tests {
                     let elapsed = start.elapsed().as_micros();
                     if repetition == 0 {
                         assert_eq!(pixels, decode_path(jpeg, None));
-                        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 255));
+                        assert!(
+                            pixels
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .all(|pixel| pixel[3] == 255)
+                        );
                     } else {
                         samples[path].push(elapsed);
                     }
