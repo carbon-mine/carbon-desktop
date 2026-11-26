@@ -104,7 +104,7 @@
   let installReviewHeading = $state<HTMLHeadingElement>()
   let requirementsFor = $state<string | null>(null)
   let launchReview = $state<{ profileId: string; message?: string } | null>(null)
-  let launchReviewRequest = 0
+  let reviewingInputs = $state(false)
   let primary = $state<HTMLButtonElement>()
   let workspace = $state<HTMLElement>()
   let theme = $state<ThemePreference>('system')
@@ -217,18 +217,24 @@
     changeTab('Overview')
     await tick()
     document.getElementById('launch-readiness')?.focus()
-    if (personalId !== profileId || (launchReview?.profileId === profileId && launchReview.message === undefined)) return
-    const request = ++launchReviewRequest
+  }
+
+  async function reviewInstalledLaunchInputs() {
+    const profileId = personalId
+    if (!profileId || reviewingInputs || personalDisabled) return
+    reviewingInputs = true
     launchReview = { profileId }
     let result: {message: string}
     try {
       result = await invoke<{ message: string }>('review_installed_launch_inputs', { profileId })
-    } catch {
-      result = { message: 'The launch input review was interrupted. Try again.' }
+    } catch (error) {
+      result = { message: errorText(error) }
+    } finally {
+      reviewingInputs = false
     }
-    if (request === launchReviewRequest) {
-      launchReview = personalId === profileId ? { profileId, message: result.message } : null
-    }
+    launchReview = view === 'library' && personalId === profileId && profileTab === 'Overview'
+      ? { profileId, message: result.message }
+      : null
   }
 
   function errorText(reason: unknown) {
@@ -836,7 +842,14 @@
                 {#if gamePrepared || gameReceipt || requirementsFor === personal.id || packAwaitingSupport(personal)}
                   <div class="readiness"><h4 id="launch-readiness" tabindex="-1">Play requirements</h4>
                     {#if launchReview?.profileId === personal.id}
-                      <p role="status">{launchReview.message ?? 'Checking installed launch inputs…'}</p>
+                      <p role="status">{launchReview.message ?? 'Verifying installed game files and managed Java…'}</p>
+                    {:else if reviewingInputs}
+                      <p role="status">A launch input review is in progress.</p>
+                    {/if}
+                    {#if !personal.importedPack}
+                      <button disabled={reviewingInputs || personalDisabled} onclick={reviewInstalledLaunchInputs}>
+                        Review installed launch inputs
+                      </button>
                     {/if}
                     {#if setupReport?.blockedReasons.length}
                       {#each setupReport.blockedReasons as reason}<p>{reason}</p>{/each}

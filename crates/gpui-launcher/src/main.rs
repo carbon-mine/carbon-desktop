@@ -73,6 +73,7 @@ struct Setup {
     inspection: Option<Inspection>,
     plan: Option<GameFilePlan>,
     receipt: Option<GameFilesPrepared>,
+    launch_input_review: Option<String>,
     error: Option<String>,
 }
 
@@ -370,6 +371,7 @@ impl Launcher {
                             inspection: Some(inspection),
                             plan: None,
                             receipt: None,
+                            launch_input_review: None,
                             error: None,
                         });
                     }
@@ -505,9 +507,11 @@ impl Launcher {
                 inspection: None,
                 plan: None,
                 receipt: None,
+                launch_input_review: None,
                 error: None,
             });
             setup.error = None;
+            setup.launch_input_review = None;
         }
         let work = cx
             .background_executor()
@@ -575,7 +579,10 @@ impl Launcher {
         let setup = profile.and_then(|profile| self.setup.get_mut(&profile.id));
         match result {
             Ok(Outcome::LaunchInputs(review)) => {
-                self.message = review.message;
+                if let Some(setup) = setup {
+                    setup.launch_input_review = Some(review.message);
+                }
+                self.message = "Launch input review finished.".into();
             }
             Ok(Outcome::Review(inspection, plan)) => {
                 if let Some(setup) = setup {
@@ -759,7 +766,8 @@ impl Launcher {
             "Checking installed launch inputs",
             false,
             cx,
-            move |root, _| {
+            move |root, activity| {
+                activity.progress("Verifying installed game files and managed Java…".into());
                 Ok(Outcome::LaunchInputs(
                     carbon_setup::review_installed_launch_inputs(&root, id),
                 ))

@@ -1,6 +1,6 @@
 # Vanilla launch adapter comparison
 
-This review covers planning for the pinned Minecraft 26.3 release and 24w14a snapshot on Windows and Linux x86-64. The local Rust planner is the selected development producer. The experimental Play requirements action in both shells uses the same shared, read-only input review. Protected execution remains gated.
+This review covers planning for the pinned Minecraft 26.3 release and 24w14a snapshot on Windows and Linux x86-64. The local Rust planner is the selected development producer. Both shells open Play requirements immediately and offer an explicit read-only review of installed inputs. Protected execution remains gated.
 
 ## Corpus
 
@@ -61,7 +61,7 @@ The WSL2 corpus trace runs the in-memory argument builder with synthetic paths. 
 
 ### Review already installed inputs
 
-The experimental Play requirements action in GPUI and the named Tauri command `review_installed_launch_inputs` call `carbon_setup::review_installed_launch_inputs`. The shared operation reads an initialized profile and a previously activated, app-managed private game view under existing locks. It checks the manifest, active receipt and private bytes against the installed file map, leases the archive-verified app-managed runtime and runs the audited argument builder. A missing, changed or busy input returns a review message. The returned summary contains version, platform, Java information and argument counts. The runtime lease and private paths stay in Rust. The review leaves launch authorization, native extraction and admission to the trusted account and runner work.
+**Review installed launch inputs** in the GPUI instance task and the Tauri Play requirements invokes `carbon_setup::review_installed_launch_inputs`. Each host reserves one setup operation while verification runs, with a status message that describes the work. GPUI attaches the completion to its originating instance. Tauri drops the result if the user is viewing another instance or screen when it completes. The shared operation reads an initialized profile and a previously activated, app-managed private game view under existing locks. It checks the manifest, active receipt and private bytes against the installed file map, leases the archive-verified app-managed runtime and runs the audited argument builder. A missing, changed or busy input returns a review message. The returned summary contains version, platform, Java information and argument counts. The runtime lease and private paths stay in Rust. The review leaves launch authorization, native extraction and admission to the trusted account and runner work.
 
 A native Windows x64 debug integration run used a disposable copy of the retained verified 26.3 private view and receipts. The existing managed-Java setup first prepared the pinned Temurin 25 kit. The separately timed review verified 75 classpath entries and five unresolved identity slots in 57.79 seconds. It preserved the active receipt and synthetic save canary and left the staging directory absent. The headless Svelte bridge fixture checked keyboard focus, the named request and the rendered result with mock IPC. The native shell walkthrough and a Linux x64 installed-input run remain open. The expensive rehash runs on explicit user action and needs owner review before production adoption.
 

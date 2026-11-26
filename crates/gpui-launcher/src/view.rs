@@ -751,6 +751,26 @@ impl Launcher {
                                         ),
                                     )
                                 },
+                            )
+                            .when(profile.imported_pack.is_none(), |task| {
+                                task.child(row().child(self.command(
+                                    p,
+                                    "review-launch-inputs",
+                                    "Review installed launch inputs",
+                                    false,
+                                    !can_change,
+                                    cx,
+                                    |this, _, cx| this.review_launch_inputs(cx),
+                                )))
+                            })
+                            .when_some(
+                                setup.and_then(|setup| setup.launch_input_review.as_deref()),
+                                |task, message| task.child(self.accessibility.text(
+                                    div().text_sm().text_color(p.muted).child(message.to_owned()),
+                                    "launch-input-review-result",
+                                    message,
+                                    Role::Status,
+                                )),
                             ),
                     )
                     .when_some(task_action, |task, action| task.child(action));
@@ -918,7 +938,6 @@ impl Launcher {
             cx,
             |this, window, cx| {
                 this.tab = Tab::Overview;
-                this.review_launch_inputs(cx);
                 let focus = this.task_focus.clone();
                 window.on_next_frame(move |window, _| focus.focus(window));
                 cx.notify();
