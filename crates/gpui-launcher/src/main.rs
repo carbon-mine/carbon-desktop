@@ -1520,14 +1520,19 @@ fn main() -> anyhow::Result<()> {
             }
         })
         .detach();
+        let initial = shell::initial_bounds(&data.path, cx);
+        let extent = initial.get_bounds().size;
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Carbon Desktop · GPUI".into()),
                     ..Default::default()
                 }),
-                window_bounds: Some(shell::initial_bounds(&data.path, cx)),
-                window_min_size: Some(size(px(380.), px(420.))),
+                window_bounds: Some(initial),
+                window_min_size: Some(size(
+                    px(380.).min(extent.width),
+                    px(420.).min(extent.height),
+                )),
                 window_decorations: Some(WindowDecorations::Server),
                 app_id: Some("dev.carbonmine.gpui".into()),
                 show: !cfg!(windows),
