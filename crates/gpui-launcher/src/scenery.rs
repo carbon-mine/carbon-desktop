@@ -276,37 +276,47 @@ impl SceneView {
         self.interrupt = Some(interrupt);
         self.busy = true;
         cx.spawn(async move |this, cx| {
-            let (decoded, reader, video_failed) = cx
-                .background_executor()
-                .spawn(async move {
-                    if let Some(source) = video_source {
-                        if poster {
-                            return (
-                                source.poster(scene.id).or_else(|| decode(bytes)),
-                                None,
-                                false,
+            let timeout_cancel = decoder_cancel.clone();
+            let decode_job = cx.background_executor().spawn(async move {
+                if let Some(source) = video_source {
+                    if poster {
+                        return (
+                            source.poster(scene.id).or_else(|| decode(bytes)),
+                            None,
+                            false,
+                        );
+                    }
+                    match review_video::Reader::frame(
+                        previous_reader,
+                        decoder_cancel,
+                        source,
+                        scene.id,
+                        step,
+                    ) {
+                        Ok((reader, image)) => return (Some(image), Some(reader), false),
+                        Err(err) => {
+                            eprintln!(
+                                "H.264 scenery {}: {}; using bundled playback",
+                                scene.id, err
                             );
-                        }
-                        match review_video::Reader::frame(
-                            previous_reader,
-                            decoder_cancel,
-                            source,
-                            scene.id,
-                            step,
-                        ) {
-                            Ok((reader, image)) => return (Some(image), Some(reader), false),
-                            Err(err) => {
-                                eprintln!(
-                                    "H.264 scenery {}: {}; using bundled playback",
-                                    scene.id, err
-                                );
-                                return (decode(bytes), None, true);
-                            }
+                            return (decode(bytes), None, true);
                         }
                     }
-                    (decode(bytes), None, false)
-                })
-                .await;
+                }
+                (decode(bytes), None, false)
+            });
+            let (decoded, reader, video_failed) = if video_source.is_some() && !poster {
+                let timeout = cx.background_executor().timer(Duration::from_secs(3));
+                match futures::future::select(decode_job, Box::pin(timeout)).await {
+                    futures::future::Either::Left((result, _)) => result,
+                    futures::future::Either::Right((_, pending)) => {
+                        timeout_cancel.cancel();
+                        pending.await
+                    }
+                }
+            } else {
+                decode_job.await
+            };
             let remaining = due.saturating_duration_since(Instant::now());
             if !remaining.is_zero() {
                 futures::future::select(
