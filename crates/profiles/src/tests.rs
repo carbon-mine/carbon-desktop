@@ -639,6 +639,7 @@ fn binding_and_icon_changes_preserve_each_other_and_restore_the_automatic_sprite
     let bound = set_server_address(root, id, None, Some(address.clone()))
         .unwrap()
         .profile;
+    assert_eq!(bound.icon_id, None);
     assert_eq!(icons::displayed(&bound).id, "beacon");
     let fox = icons::catalog()
         .iter()
@@ -655,4 +656,18 @@ fn binding_and_icon_changes_preserve_each_other_and_restore_the_automatic_sprite
     assert_eq!(icons::displayed(&unbound).id, "fox");
     let reset = icons::set_icon(root, id, Some("fox"), None).unwrap();
     assert_eq!(icons::displayed(&reset).id, "pack");
+    let bound = set_server_address(root, id, None, Some(address.clone()))
+        .unwrap()
+        .profile;
+    assert_eq!(icons::displayed(&bound).id, "beacon");
+    let automatic = set_server_address(root, id, Some(&address), None)
+        .unwrap()
+        .profile;
+    assert_eq!(automatic.icon_id, None);
+    assert_eq!(icons::displayed(&automatic).id, "pack");
+    icons::set_icon(root, id, None, Some("fox")).unwrap();
+    let bound = set_server_address(root, id, None, Some(address))
+        .unwrap()
+        .profile;
+    assert_eq!(bound.icon_id.as_deref(), Some("fox"));
 }
