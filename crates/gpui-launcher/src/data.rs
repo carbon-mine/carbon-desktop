@@ -19,6 +19,15 @@ pub struct DataRoot {
 }
 
 impl DataRoot {
+    /// Open an explicitly selected development fixture root. The command layer
+    /// has already refused a normal per-user library and seeded this directory.
+    pub fn at(path: PathBuf) -> Self {
+        Self {
+            path,
+            _temporary: None,
+        }
+    }
+
     pub fn open(temporary: bool, seed: bool, comparison: bool) -> Result<Self> {
         let session = temporary
             .then(|| {
