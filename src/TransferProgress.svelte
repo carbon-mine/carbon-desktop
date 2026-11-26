@@ -73,8 +73,12 @@
   .rail { block-size: 4px; overflow: hidden; background: var(--desktop-line); border-radius: 2px; }
   .rail span { display: block; block-size: 100%; background: var(--desktop-action); transform-origin: left; }
   .technical { margin-block: 0.25rem 0; font-variant-numeric: tabular-nums; }
-  .busy span { inline-size: 30%; animation: travel 1.35s ease-in-out infinite alternate; }
-  @keyframes travel { from { transform: translateX(0); } to { transform: translateX(233%); } }
+  .busy span { inline-size: 30%; transform: translateX(116%); animation: travel 2.2s ease-in-out 2; }
+  @keyframes travel {
+    0%, 100% { transform: translateX(116%); }
+    25% { transform: translateX(0); }
+    75% { transform: translateX(233%); }
+  }
   .frozen span { animation: none; transform: translateX(116%); }
   @media (prefers-reduced-motion: reduce) {
     .busy span { animation: none; transform: translateX(116%); }

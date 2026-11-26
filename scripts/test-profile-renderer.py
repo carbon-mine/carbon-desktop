@@ -322,6 +322,12 @@ def test_transfer_motion(browser, address):
     expect(busy).to_have_count(1)
     assert busy.get_attribute("value") is None
     assert page.locator(".busy span").evaluate("el => getComputedStyle(el).animationName") == "none"
+    page.emulate_media(reduced_motion="no-preference")
+    motion_seconds = page.locator(".busy span").evaluate("""el => {
+        const style = getComputedStyle(el);
+        return parseFloat(style.animationDuration) * Number(style.animationIterationCount);
+    }""")
+    assert 0 < motion_seconds <= 5
     page.close()
 
 
