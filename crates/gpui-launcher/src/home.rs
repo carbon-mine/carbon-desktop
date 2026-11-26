@@ -292,10 +292,9 @@ impl Launcher {
                     .child(account),
             );
         let heading = col()
-            .absolute()
-            .top(px(if compact { 12. } else { 26. }))
-            .left(inset)
-            .right(inset)
+            .flex_none()
+            .mt(px(if compact { 12. } else { 26. }))
+            .mx(inset)
             .gap_2()
             .child(
                 row()
@@ -333,28 +332,33 @@ impl Launcher {
                     .h(px(if compact { 124. } else { 146. }))
                     .object_fit(gpui::ObjectFit::Fill),
             )
-            .child(heading)
-            .child(self.home_launchbox(p, compact, cx))
+            .child(
+                col()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .id("home-hero-scroll")
+                    .overflow_y_scroll()
+                    .child(heading)
+                    .child(div().flex_1().min_h(px(8.)))
+                    .child(self.home_launchbox(p, compact, cx)),
+            )
             .into_any_element()
     }
 
     fn home_launchbox(&self, p: Palette, compact: bool, cx: &Context<Self>) -> AnyElement {
-        let mut panel = col()
-            .absolute()
-            .bottom(px(if compact { 12. } else { 26. }))
-            .left(home_inset(compact))
+        let panel = col()
+            .flex_none()
+            .mb(px(if compact { 12. } else { 26. }))
+            .mx(home_inset(compact))
             .bg(p.layer)
             .border_1()
             .border_color(p.stroke)
             .px_4()
-            .py_4()
+            .py(px(if compact { 8. } else { 16. }))
             .gap_2();
-        panel = if compact {
-            panel.right(home_inset(compact))
-        } else {
-            panel.w(px(330.))
-        };
         panel
+            .when(!compact, |panel| panel.w(px(330.)))
             .child(self.home_launchbox_content(p, cx))
             .into_any_element()
     }
