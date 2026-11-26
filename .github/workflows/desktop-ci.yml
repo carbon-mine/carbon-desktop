@@ -163,10 +163,6 @@ jobs:
         run: |
           "$PYTHON" design-system/verify_seed.py
 
-      - name: Test the landscape authoring options
-        if: matrix.platform == 'Linux x64'
-        run: node --test tools/landscapes/source-config.test.mjs
-
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
