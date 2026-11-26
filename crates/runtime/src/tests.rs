@@ -254,7 +254,7 @@ fn stale_stage_is_discarded_and_a_competing_installer_is_refused() {
 
 #[test]
 fn launch_lease_verifies_managed_java_without_writing_and_holds_the_lock() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fixture_root();
     let bytes = fixture_zip(&[]);
     let spec = Box::leak(Box::new(spec(&bytes, Format::Zip)));
     assert!(matches!(
