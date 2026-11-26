@@ -5,23 +5,14 @@ import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import sunrise from './assets/qwantani_sunrise_puresky_1k.hdr';
 import dusk from './assets/qwantani_dusk_2_puresky_1k.hdr';
 import grainUrl from './assets/siding-grain.png';
-import { buildWorld } from './world.js';
-import { buildFarm } from './farm.js';
-import { buildAlpine } from './alpine.js';
+import { geometry as sceneFactories } from 'carbon:geometry';
+import definitions from './sources.json';
+import { cameraFor } from './source-config.mjs';
 
-import {buildMarsh} from './marsh.js';
-import {buildOrchard} from './orchard.js';
-
-const landscapes={
- farmland:{build:buildFarm, name:'Dewfall Farm', eye:[10.8,4.35,17.6], target:[-2.45,2.35,-3.75], sun:[23,15,-13]},
- riverside:{build:buildWorld, name:'Riverside Mill', eye:[12,5.25,20], target:[-.9,3.45,-3], sun:[-21,15,-7], water:true},
- alpine:{build:buildAlpine, name:'Alpine Lake', eye:[10,4.5,21], target:[6.5,5.2,-11], sun:[-30,19,-6], water:true, dusk:true},
- marsh:{build:buildMarsh, name:'Willow Marsh',eye:[9.2,4.05,18.4],target:[-1.1,2.7,-8],sun:[-16,13,-24],fov:49,water:true,dusk:true},
- orchard:{build:buildOrchard, name:'Cider Orchard',eye:[8.8,5.5,16.8],target:[-1.8,2.6,-8.5],sun:[-18,15,8]},
-};
-const requested=location.hash.slice(1);
-const id=Object.hasOwn(landscapes,requested)?requested:'farmland';
-const spec=landscapes[id];
+const params = new URLSearchParams(location.search);
+const id = params.get('source');
+const camera = cameraFor(definitions, { source: id, camera: params.get('camera') });
+const spec = { ...definitions[id], build: sceneFactories[id] };
 const canvas = document.querySelector('canvas');
 const alpine=id==='alpine', farm=id==='farmland', marsh=id==='marsh';
 for(const link of document.querySelectorAll('nav a')) link.setAttribute('aria-current', (link.hash === '#'+id)?'page':'false');
@@ -41,10 +32,8 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xc5aaa0, 0.014);
 if(alpine)scene.fog=new THREE.FogExp2(0x9aacc1,.009);
 const cam = new THREE.PerspectiveCamera(42, 1, 0.15, 180);
-const overhead = new URLSearchParams(location.search).has('overhead');
-if (overhead && !['riverside', 'farmland'].includes(id)) throw new Error('No overhead composition for this scene');
-const aim = new THREE.Vector3(...(overhead ? (farm ? [-1, 0, 0] : [-2, 0, -2]) : spec.target));
-cam.position.set(...(overhead ? (farm ? [1, 32, 8] : [3, 33, 7]) : spec.eye));
+const aim = new THREE.Vector3(...camera.target);
+cam.position.set(...camera.eye);
 const cameraOffset = cam.position.clone().sub(aim);
 const vertical = new THREE.Vector3(0, 1, 0);
 cam.lookAt(aim);

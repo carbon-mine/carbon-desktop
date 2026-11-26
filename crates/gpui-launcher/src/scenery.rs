@@ -39,6 +39,28 @@ impl Landscape {
     pub fn from_id(id: &str) -> Option<Self> {
         Self::lookup(Self::ALL, id)
     }
+    pub fn shuffle(previous: Option<Self>, seed: u128) -> Self {
+        Self::shuffle_in(Self::ALL, previous, seed)
+    }
+    fn shuffle_in(catalog: &[Self], previous: Option<Self>, seed: u128) -> Self {
+        let mut choices: Vec<_> = catalog
+            .iter()
+            .copied()
+            .filter(|view| previous.is_none_or(|old| old.family() != view.family()))
+            .collect();
+        if choices.is_empty() {
+            choices.extend(
+                catalog
+                    .iter()
+                    .copied()
+                    .filter(|&view| Some(view) != previous),
+            );
+        }
+        if choices.is_empty() {
+            return catalog[0];
+        }
+        choices[(seed % choices.len() as u128) as usize]
+    }
     fn lookup(catalog: &[Self], id: &str) -> Option<Self> {
         catalog.iter().copied().find(|view| view.id() == id)
     }
@@ -243,6 +265,15 @@ mod tests {
             1
         );
         assert!(Landscape::from_id(extra.id()).is_none());
+        assert!((0..EXTENDED.len()).any(|seed| Landscape::shuffle_in(
+            EXTENDED,
+            Some(EXTENDED[0]),
+            seed as u128
+        ) == extra));
+        assert_eq!(
+            Landscape::shuffle_in(&[extra], Some(extra), 0).id(),
+            extra.id()
+        );
         assert!(decode(extra.0.poster).is_some());
         let frames = Frames::open(extra.0.motion.unwrap()).unwrap();
         assert!(decode(frames.at(frames.index(2)).unwrap()).is_some());
