@@ -13,6 +13,7 @@ import definitions from './sources.json';
 import { cameraFor } from './source-config.mjs';
 
 const params = new URLSearchParams(location.search);
+const budget = Math.min(8294400, Math.max(160000, Number(params.get('pixels')) || 1600000));
 const id = params.get('source');
 const camera = cameraFor(definitions, { source: id, camera: params.get('camera') });
 const spec = { ...definitions[id], build: sceneFactories[id] };
@@ -351,7 +352,7 @@ function draw(){
 }
 function resize(){
  const w=innerWidth,h=innerHeight;
- const pixelRatio=Math.min(devicePixelRatio,1.5, Math.sqrt(1600000/(w*h)));
+ const pixelRatio=Math.min(devicePixelRatio,1.5, Math.sqrt(budget/(w*h)));
  renderer.setPixelRatio(pixelRatio);renderer.setSize(w,h,false);cam.aspect=w/h;
  // Protect the authored horizontal composition in shallow launcher headers.
  // A continuous lens change avoids a jump as the window crosses a breakpoint.
