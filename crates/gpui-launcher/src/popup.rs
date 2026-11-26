@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
 
-use super::theme::{Partition, compact_action, label, partition, partition_strip};
+use super::theme::{Partition, compact_action, label};
 use super::{Launcher, account_panel::AccountPanel};
 use accesskit::Role;
 use account::AccountDialog;
@@ -579,18 +579,15 @@ impl Render for Popup {
                             .as_ref()
                             .is_none_or(|profile| profile.imported_pack.is_none()),
                         |content| {
-                            content.child(partition_strip(p).children(VanillaVersion::ALL.map(
-                                |version| {
+                            content.child(div().flex().flex_wrap().gap_2().children(
+                                VanillaVersion::ALL.map(|version| {
                                     let treatment = if version == form.version {
                                         Partition::Selected
                                     } else {
                                         Partition::Neutral
                                     };
                                     let option = label(
-                                        partition(version.id(), p, treatment, false, cx)
-                                            .h(px(36.))
-                                            .min_w(px(62.))
-                                            .px_1(),
+                                        compact_action(version.id(), p, treatment, false, cx),
                                         version.id(),
                                         p,
                                         treatment,
@@ -611,8 +608,8 @@ impl Render for Popup {
                                             cx.notify();
                                         },
                                     )
-                                },
-                            )))
+                                }),
+                            ))
                         },
                     )
                     .child(row("Maximum memory (MiB)", &form.memory))

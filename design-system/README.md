@@ -99,6 +99,11 @@ Icons or Segoe MDL2 Assets on Windows when available. It carries original
 portable fallback paths for other systems and pairs each icon with visible
 text or an accessible control name. No Microsoft font file is bundled.
 
+- For GPUI controls, use the shared SVG icon set. Draw small icons on the
+  16-unit grid with rounded stroke ends and joins. Use a softly rounded,
+  filled silhouette for Play so the mark remains legible at toolbar size.
+  Review new icons beside existing controls at actual size and fractional
+  display scaling. Give each control a text label or accessible name.
 - Use the `instance-tabs` pattern when an instance has distinct tasks.
   Keep a visible active marker and a programmatic selected state. Arrow
   keys change tabs, Home and End seek the edges, and Tab moves into the

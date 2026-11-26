@@ -871,24 +871,12 @@ impl Launcher {
                         .font_semibold()
                         .child("Instance settings"),
                 )
-                .child(stage(
-                    "Minecraft version",
-                    profile.version.id().into(),
-                    p,
-                    true,
-                ))
-                .child(stage(
-                    "Maximum memory",
-                    format!("{} MiB", profile.memory_mib),
-                    p,
-                    true,
-                ))
-                .child(stage(
-                    "Starting window",
-                    format!("{} × {}", profile.window_width, profile.window_height),
-                    p,
-                    true,
-                ))
+                .child(
+                    col().px_5()
+                        .child(detail_row("Minecraft version", profile.version.id().into(), p))
+                        .child(detail_row("Maximum memory", format!("{} MiB", profile.memory_mib), p))
+                        .child(detail_row("Starting window", format!("{} × {}", profile.window_width, profile.window_height), p)),
+                )
                 .child(
                     command_row(p)
                         .child(self.command(
@@ -941,7 +929,14 @@ impl Launcher {
         };
         let play = compact_action("play", p, Partition::Neutral, self.popup.is_some(), cx)
             .min_w(px(82.))
-            .child(div().font_semibold().text_color(p.ink).child("▷  Play"));
+            .child(
+                row()
+                    .gap_1()
+                    .font_semibold()
+                    .text_color(p.ink)
+                    .child(Icon::Play.render(px(16.), p.ink))
+                    .child("Play"),
+            );
         let play = self.control(
             play,
             "play",
@@ -1781,31 +1776,8 @@ fn detail_row(label: &'static str, status: String, p: Palette) -> gpui::Div {
         .border_t_1()
         .border_color(p.stroke)
         .text_sm()
-        .child(div().w(px(112.)).flex_none().font_semibold().child(label))
+        .child(div().w(px(132.)).flex_none().font_semibold().child(label))
         .child(div().min_w_0().flex_1().text_color(p.muted).child(status))
-}
-
-fn stage(title: &'static str, value: String, p: Palette, complete: bool) -> gpui::Div {
-    row()
-        .gap_2()
-        .px_5()
-        .py_2()
-        .border_b_1()
-        .border_color(p.stroke)
-        .items_start()
-        .child(
-            div()
-                .flex_none()
-                .text_color(if complete { p.success } else { p.muted })
-                .child(if complete { "✓" } else { "○" }),
-        )
-        .child(
-            col()
-                .min_w_0()
-                .gap_1()
-                .child(div().font_semibold().child(title))
-                .child(div().text_sm().text_color(p.muted).child(value)),
-        )
 }
 
 fn fixture_status(item: &InstanceView) -> &'static str {
