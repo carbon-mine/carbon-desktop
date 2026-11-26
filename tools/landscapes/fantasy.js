@@ -13,6 +13,7 @@ export function addFantasy(box,id) {
     alpine:[-39,18.7,-38,.87], marsh:[-27,10.4,-40,.90],
     orchard:[-31,11.7,-37,.70],
   };
+  if (!Object.hasOwn(isles,id)) return;
   const [ix,iy,iz,size]=isles[id];
   const island=at(ix,iy,iz,.11,size);
   const turf=id==='alpine'?'#d0dfe3':id==='marsh'?'#627863':'#839957';

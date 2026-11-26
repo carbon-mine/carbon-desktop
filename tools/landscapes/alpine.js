@@ -212,5 +212,9 @@ export function buildAlpine(box) {
     }
   }
 
-  return {chimney:[homeX+.82*cos-.88*sin,base+3.66,homeZ-.82*sin-.88*cos]};
+  const snowOrigins=[[-9,-1],[-11,-12],[13,-3],[16,-17]].map(([x,z])=>{
+    const v=banks.reduce((a,b)=>Math.hypot(b.x-x,b.z-z)<Math.hypot(a.x-x,a.z-z)?b:a);
+    return [v.x,v.y,v.z];
+  });
+  return {snowOrigins,chimney:[homeX+.82*cos-.88*sin,base+3.66,homeZ-.82*sin-.88*cos]};
 }

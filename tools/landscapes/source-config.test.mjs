@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import {addClouds} from './clouds.js';
+import {addFantasy} from './fantasy.js';
 import { cameraFor, validateOutputs } from './source-config.mjs';
 const sources = JSON.parse(await readFile(new URL('sources.json', import.meta.url), 'utf8'));
 test('a public view ID is independent of the authored camera', () => {
@@ -20,4 +22,14 @@ test('authoring cannot write through relative paths or replace a supplied pack',
     assert.throws(() => validateOutputs([{...authored, poster}]), /Invalid local output/);
   }
   assert.throws(() => validateOutputs([authored,{id:'supplied',poster:'FARM.JPG'}]), /Shared output/);
+});
+
+test('new landscapes can omit the bundled horizon props', () => {
+  for (const decorate of [addClouds, addFantasy]) {
+    const boxes = [];
+    decorate((...args) => boxes.push(args), 'new-valley');
+    assert.equal(boxes.length, 0);
+    decorate((...args) => boxes.push(args), 'riverside');
+    assert.ok(boxes.length > 0);
+  }
 });
