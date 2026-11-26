@@ -3,8 +3,6 @@ fn main() {
         "edit_profile_dialog",
         "apply_desktop_theme",
         "personal_library",
-        "edit_server_dialog",
-        "copy_server_address",
         "open_game_folder",
         "fixture_library",
         "fixture_action",

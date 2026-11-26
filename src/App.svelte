@@ -8,7 +8,6 @@
   import markLight from '../design-system/inherited/brand/mark-light.svg'
   import markDark from '../design-system/inherited/brand/mark-dark.svg'
   import DesktopIcon from '../design-system/DesktopIcon.svelte'
-  import ServerDetails from './ServerDetails.svelte'
   import '../design-system/inherited/tokens.css'
   import '../design-system/workspace.css'
   import './review.css'
@@ -96,8 +95,6 @@
   let fixtureFailure = $state<{ text: string; instance?: Id; targetVerification: boolean } | null>(null)
   let personalFailure = $state('')
   let packFailure = $state('')
-  let serverFailure = $state<{id: string; text: string} | null>(null)
-  let copyInProgress = $state(false)
   let selectedTargetFailure = $derived(view === 'review' && fixtureFailure?.targetVerification && fixtureFailure.instance === selected)
   let search = $state<HTMLInputElement>()
   let heading = $state<HTMLHeadingElement>()
@@ -130,7 +127,6 @@
   })
   let accountDialogOpen = $state(false)
   let accountDialogError = $state('')
-  let canCopyServer = $derived(!copyInProgress && !busy && !accountDialogOpen && !nativePickerActive)
 
   onMount(() => {
     const media = matchMedia('(prefers-color-scheme: dark)')
@@ -715,52 +711,6 @@
     }
   }
 
-  async function editServer(profile: PersonalProfile, opener: HTMLButtonElement) {
-    if (personalDisabled || copyInProgress || nativePickerActive || accountDialogOpen) return
-    busy = true
-    serverFailure = null
-    try {
-      const result = await invoke<{profile: PersonalProfile; message: string} | null>('edit_server_dialog', {
-        profileId: profile.id, expected: profile.serverAddress ?? null
-      })
-      const saved = result?.profile
-      if (result && saved?.id === profile.id) {
-        profiles = profiles.map(current => current.id === saved.id ? {
-          ...current, serverAddress: saved.serverAddress, serverJoinMessage: saved.serverJoinMessage
-        } : current)
-        message = profile.name + ' · ' + result.message
-      }
-    } catch (reason) {
-      serverFailure = {id: profile.id, text: errorText(reason)}
-    } finally {
-      busy = false
-      await tick()
-      if (personalId === profile.id) {
-        if (opener.isConnected) opener.focus()
-        else heading?.focus()
-      }
-    }
-  }
-
-  async function copyServer(profile: PersonalProfile) {
-    if (!profile.serverAddress || !canCopyServer) return
-    copyInProgress = true
-    serverFailure = null
-    try {
-      await invoke('copy_server_address', {profileId: profile.id, expected: profile.serverAddress})
-      message = profile.name + ' · Server address copied.'
-    } catch (reason) {
-      serverFailure = {id: profile.id, text: errorText(reason)}
-    } finally {
-      copyInProgress = false
-    }
-  }
-
-  function reloadServerDetails() {
-    serverFailure = null
-    void refreshPersonal()
-  }
-
   async function showSetupActivity(profileId: string) {
     await selectPersonal(profileId)
     changeTab('Overview')
@@ -1029,15 +979,6 @@
               </div>
               <p class="section-help">Creates a separate instance with its own version and launch settings.</p>
               {/if}
-            {/if}
-            {#if profileTab === 'Settings' || personal.serverAddress}
-              <ServerDetails profile={personal}
-                editable={!personalDisabled && !copyInProgress && !nativePickerActive && !accountDialogOpen}
-                canCopy={canCopyServer}
-                error={serverFailure?.id === personal.id ? serverFailure.text : ''}
-                onEdit={opener => editServer(personal!, opener)}
-                onCopy={() => copyServer(personal!)}
-                onReload={reloadServerDetails} />
             {/if}
             {/if}
           </div>

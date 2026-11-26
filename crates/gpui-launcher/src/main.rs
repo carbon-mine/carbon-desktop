@@ -1134,7 +1134,7 @@ impl Launcher {
         match carbon_profiles::server_profile(&self.root.path, id) {
             Ok(profile) if profile.server_address.as_ref() == Some(&address) => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(address.to_string()));
-                self.message = "Server address copied.".into();
+                self.message = "Server address copy requested.".into();
             }
             Ok(profile) => {
                 self.message = if profile.server_address.is_some() {

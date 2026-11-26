@@ -115,7 +115,7 @@ unsafe fn render(hwnd: HWND, state: &State) {
     InvalidateRect(hwnd, ptr::null(), 1);
 }
 
-pub(super) unsafe fn copy_text(owner: HWND, code: &str) -> bool {
+unsafe fn copy_code(owner: HWND, code: &str) -> bool {
     let code = wide(code);
     let memory = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(code.as_slice()));
     if memory.is_null() {
@@ -204,7 +204,7 @@ unsafe extern "system" fn dialog_proc(hwnd: HWND, msg: u32, wparam: usize, lpara
                 state
                     .account
                     .borrow_mut()
-                    .perform(action, |code| copy_text(hwnd, code));
+                    .perform(action, |code| copy_code(hwnd, code));
                 render(hwnd, state);
             } else {
                 return 0;

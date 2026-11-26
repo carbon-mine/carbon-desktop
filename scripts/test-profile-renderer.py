@@ -31,9 +31,6 @@ BRIDGE = """
     clientPicks: 0,
     dialogName: null,
     importedPack: null,
-    serverEdit: undefined,
-    deferServerDialog: false,
-    deferServerCopy: false,
     emit(event, payload) { handlers[listeners[event]]({event, payload}); }
   };
   const report = {
@@ -117,35 +114,6 @@ BRIDGE = """
         state.importedPack = null;
         profiles.push(imported);
         return {id: imported.id};
-      }
-      if (command === 'edit_server_dialog') {
-        const profile = profiles.find(profile => profile.id === args.profileId);
-        if (!profile || (profile.serverAddress ?? null) !== args.expected) throw 'The binding changed.';
-        const address = state.serverEdit;
-        const previous = profile.serverAddress ?? null;
-        state.serverEdit = undefined;
-        if (state.deferServerDialog)
-          await new Promise(resolve => { state.finishServerDialog = resolve; });
-        if (address === undefined) return null;
-        if (address === null) {
-          delete profile.serverAddress;
-          delete profile.serverJoinMessage;
-        } else {
-          profile.serverAddress = address;
-          profile.serverJoinMessage = profile.importedPack
-            ? 'Join server is unavailable. This local pack still needs supported client files or a qualified loader.'
-            : 'Join server is unavailable while protected Minecraft launch is in development.';
-        }
-        const message = address === previous ? 'No server address changes.'
-          : address ? 'Server address saved.' : 'Server address removed.';
-        return {profile: structuredClone(profile), message};
-      }
-      if (command === 'copy_server_address') {
-        if (profiles.find(profile => profile.id === args.profileId)?.serverAddress !== args.expected)
-          throw 'The binding changed.';
-        if (state.deferServerCopy)
-          await new Promise(resolve => { state.finishServerCopy = resolve; });
-        return;
       }
       if (command === 'apply_desktop_theme') return null;
       if (command === 'minecraft_account_status') return 'unavailable';
@@ -255,75 +223,6 @@ def test_pack_import(browser, address):
     row = page.get_by_role("button", name="Forest pack Imported pack 1.21.1")
     expect(row).to_have_attribute("aria-current", "true")
     expect(page.get_by_role("heading", name="Pack preparation pending")).to_be_visible()
-    page.get_by_role("tab", name="Settings").click()
-    page.evaluate("reviewTest.serverEdit = '[2001:db8::1]:25565'")
-    page.get_by_role("button", name="Set server address").click()
-    page.get_by_role("tab", name="Overview").click()
-    server = page.get_by_role("region", name="Multiplayer")
-    expect(server.get_by_text("[2001:db8::1]:25565", exact=True)).to_be_visible()
-    expect(server.get_by_text("Forest · Minecraft 1.21.1 · 1 pending file", exact=True)).to_be_visible()
-    expect(server.get_by_text("Join server is unavailable. This local pack still needs supported client files or a qualified loader.")).to_be_visible()
-    page.close()
-
-
-def test_server_binding(browser, address, captures):
-    page = open_case(browser, address)
-    page.get_by_role("tab", name="Settings").click()
-    section = page.get_by_role("region", name="Multiplayer")
-    set_address = section.get_by_role("button", name="Set server address")
-    expect(set_address).to_be_visible()
-    if captures:
-        page.screenshot(path=str(captures / "server-unbound-settings.png"))
-    page.evaluate("reviewTest.deferServerDialog = true")
-    set_address.focus()
-    page.keyboard.press("Enter")
-    page.wait_for_function("typeof reviewTest.finishServerDialog === 'function'")
-    search = page.get_by_role("searchbox", name="Find an instance")
-    search.focus()
-    expect(search).to_be_focused()
-    page.evaluate("reviewTest.deferServerDialog = false; reviewTest.finishServerDialog()")
-    expect(set_address).to_be_focused()
-    expect(section.get_by_role("button", name="Copy server address")).to_have_count(0)
-    page.evaluate("reviewTest.serverEdit = null")
-    set_address.press("Enter")
-    expect(page.get_by_role("status")).to_contain_text("No server address changes.")
-
-    destination = "play.example.org:25565"
-    page.evaluate("address => {reviewTest.serverEdit = address}", destination)
-    set_address.press("Enter")
-    edit = section.get_by_role("button", name="Edit server address")
-    expect(edit).to_be_focused()
-    page.get_by_role("tab", name="Overview").click()
-    expect(section.get_by_text(destination, exact=True)).to_be_visible()
-    expect(section.get_by_text("Vanilla 1.21.1", exact=True)).to_be_visible()
-    expect(section.get_by_text("Join server is unavailable while protected Minecraft launch is in development.")).to_be_visible()
-    expect(section.get_by_role("button", name="Open Minecraft")).to_have_count(0)
-    if captures:
-        page.screenshot(path=str(captures / "server-bound-overview.png"))
-
-    mark = page.evaluate("reviewTest.requests.length")
-    copy = section.get_by_role("button", name="Copy server address")
-    page.evaluate("reviewTest.deferServerCopy = true")
-    copy.press("Enter")
-    expect(copy).to_be_disabled()
-    page.wait_for_function("typeof reviewTest.finishServerCopy === 'function'")
-    page.keyboard.press("Enter")
-    page.evaluate("reviewTest.finishServerCopy()")
-    expect(page.get_by_role("status")).to_contain_text("Server address copied.")
-    expect(copy).to_be_focused()
-    copied = page.evaluate("start => reviewTest.requests.slice(start)", mark)
-    assert copied == [["copy_server_address", {
-        "profileId": "0ddfed53-76d4-47f4-ab31-8cd392aa4a03", "expected": destination,
-    }]], copied
-
-    page.get_by_role("button", name="Legacy creative Vanilla").click()
-    expect(section).to_have_count(0)
-    page.get_by_role("button", name="Personal world Vanilla").click()
-    expect(section.get_by_text(destination, exact=True)).to_be_visible()
-    page.evaluate("reviewTest.serverEdit = null")
-    edit.press("Enter")
-    expect(section).to_have_count(0)
-    expect(page.get_by_role("heading", name="Personal world")).to_be_focused()
     page.close()
 
 
@@ -468,7 +367,6 @@ def main():
                 test_namespace_reload_after_mutation(browser, address)
                 test_profile_dialog_return(browser, address)
                 test_pack_import(browser, address)
-                test_server_binding(browser, address, args.captures)
                 test_install(browser, address)
                 test_diagnostic_recovery(browser, address)
                 test_navigation(browser, address, args.captures)

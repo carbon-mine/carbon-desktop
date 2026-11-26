@@ -68,15 +68,3 @@ BEGIN
     PUSHBUTTON     "Sign in with Microsoft", IDOK, 0, 160, 153, 30
     DEFPUSHBUTTON  "Close", IDCANCEL, 153, 160, 153, 30
 END
-
-2105 DIALOGEX 0, 0, 292, 110
-STYLE CARBON_DIALOG
-CAPTION "Edit server address"
-FONT 10, "Segoe UI"
-BEGIN
-    LTEXT         "Server &address", -1, 13, 10, 266, 11
-    EDITTEXT      1101, 13, 24, 266, 18, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT         "Example: play.example.org:25565. Clear the field to remove the binding.", -1, 13, 49, 266, 24, SS_NOPREFIX
-    DEFPUSHBUTTON "Save changes", IDOK, 0, 80, 146, 30
-    PUSHBUTTON    "Cancel", IDCANCEL, 146, 80, 146, 30
-END

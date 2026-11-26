@@ -1,8 +1,9 @@
 #[cfg(any(windows, target_os = "linux"))]
 use crate::account::Dialog as AccountDialog;
 use crate::Library;
+use carbon_profiles::Profile;
 #[cfg(any(windows, target_os = "linux"))]
-use carbon_profiles::{Profile, ProfileAction, ServerAddress, VanillaVersion};
+use carbon_profiles::{ProfileAction, VanillaVersion};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::{State, WebviewWindow};
@@ -34,62 +35,6 @@ pub fn show_accounts(owner: &WebviewWindow, dialog: AccountDialog) -> Result<(),
     return windows::show_accounts(owner, dialog, dark_theme(owner));
     #[cfg(target_os = "linux")]
     return linux::show_accounts(owner, dialog, dark_theme(owner));
-}
-
-#[cfg(any(windows, target_os = "linux"))]
-pub async fn edit_server(
-    window: WebviewWindow,
-    initial: Option<ServerAddress>,
-) -> Result<Option<Option<ServerAddress>>, String> {
-    let dark = dark_theme(&window);
-    let owner = window.clone();
-    let (send, mut receive) = tauri::async_runtime::channel(1);
-    window
-        .run_on_main_thread(move || {
-            #[cfg(windows)]
-            let value = windows::edit_server(&owner, initial.as_ref(), dark);
-            #[cfg(target_os = "linux")]
-            let value = linux::edit_server(&owner, initial.as_ref(), dark);
-            let _ = send.try_send(value);
-        })
-        .map_err(|_| "Could not display the native server editor.")?;
-    receive
-        .recv()
-        .await
-        .ok_or("The server editor closed unexpectedly.")?
-}
-
-#[cfg(any(windows, target_os = "linux"))]
-pub async fn copy_server(window: WebviewWindow, address: ServerAddress) -> Result<(), String> {
-    #[cfg(windows)]
-    let owner = window.clone();
-    let (send, mut receive) = tauri::async_runtime::channel(1);
-    window
-        .run_on_main_thread(move || {
-            #[cfg(windows)]
-            let _ = send.try_send(windows::copy_text(&owner, address.as_str()));
-            #[cfg(target_os = "linux")]
-            {
-                let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
-                clipboard.set_text(address.as_str());
-                clipboard.request_text(move |_, text| {
-                    let result = if text == Some(address.as_str()) {
-                        Ok(())
-                    } else {
-                        Err(
-                            "The clipboard could not confirm the address. Try copying it again."
-                                .into(),
-                        )
-                    };
-                    let _ = send.try_send(result);
-                });
-            }
-        })
-        .map_err(|_| "Could not open the system clipboard.")?;
-    receive
-        .recv()
-        .await
-        .ok_or("The system clipboard is unavailable.")?
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq)]
@@ -198,7 +143,7 @@ impl Form {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Edited {
-    profiles: Vec<crate::server::LibraryProfile>,
+    profiles: Vec<Profile>,
     selected_id: Uuid,
 }
 
@@ -305,7 +250,7 @@ pub async fn edit_profile_dialog(
             }
         };
         Ok(Some(Edited {
-            profiles: profiles.into_iter().map(Into::into).collect(),
+            profiles,
             selected_id,
         }))
     })
