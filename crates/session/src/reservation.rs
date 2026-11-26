@@ -48,15 +48,14 @@ impl RunReservation {
 
     /// The caller must have observed the current run's OS boundary empty.
     /// Dropping the reservation alone does not prove the boundary has drained.
-    pub(crate) fn confirm_empty(&self) -> Result<(), SessionError> {
+    pub(crate) fn confirm_empty(
+        &self,
+        open_marker: impl FnOnce(&Path) -> io::Result<File>,
+    ) -> Result<(), SessionError> {
         let path = self.directory.join(PENDING);
-        let metadata = fs::symlink_metadata(&path).map_err(SessionError::Data)?;
-        if !metadata.is_file() {
-            return Err(SessionError::RecoveryRequired);
-        }
         let expected = self.record_bytes();
         let mut actual = Vec::new();
-        File::open(&path)
+        open_marker(&path)
             .and_then(|file| {
                 file.take(expected.len() as u64 + 1)
                     .read_to_end(&mut actual)
@@ -90,6 +89,7 @@ mod tests {
     const DIRECTORY: &str = "CARBON_TEST_RESERVATION_DIRECTORY";
     const OTHER: &str = "CARBON_TEST_RESERVATION_OTHER";
     const OWNER_EXITED: i32 = 71;
+    const LEASE_PROBE_OK: i32 = 72;
 
     fn reserve(directory: &Path) -> Result<RunReservation, SessionError> {
         let guard = File::options()
@@ -100,6 +100,15 @@ mod tests {
             .open(directory.join("sample.lock"))
             .unwrap();
         RunReservation::acquire(directory, guard)
+    }
+
+    fn confirm(run: &RunReservation) -> Result<(), SessionError> {
+        run.confirm_empty(|path| {
+            #[cfg(all(windows, target_arch = "x86_64"))]
+            return crate::windows::open_regular(path, false);
+            #[cfg(not(all(windows, target_arch = "x86_64")))]
+            File::open(path)
+        })
     }
 
     #[test]
@@ -115,7 +124,8 @@ mod tests {
         let independent = reserve(&other).unwrap();
         independent.record_admission().unwrap();
         assert!(has_pending_run(&other).unwrap());
-        independent.confirm_empty().unwrap();
+        confirm(&independent).unwrap();
+        std::process::exit(LEASE_PROBE_OK);
     }
 
     #[test]
@@ -135,16 +145,22 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         let first = reserve(owned.path()).unwrap();
         first.record_admission().unwrap();
-        let status = Command::new(env::current_exe().unwrap())
-            .args(["--exact", "reservation::tests::lease_probe"])
-            .env(DIRECTORY, owned.path())
-            .env(OTHER, other.path())
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let probe = |test| {
+            Command::new(env::current_exe().unwrap())
+                .args(["--exact", test])
+                .env(DIRECTORY, owned.path())
+                .env(OTHER, other.path())
+                .status()
+                .unwrap()
+        };
+        assert!(probe("reservation::tests::misspelled_probe").success());
+        assert_eq!(
+            probe("reservation::tests::lease_probe").code(),
+            Some(LEASE_PROBE_OK)
+        );
         assert!(has_pending_run(owned.path()).unwrap());
         assert!(!has_pending_run(other.path()).unwrap());
-        first.confirm_empty().unwrap();
+        confirm(&first).unwrap();
         let prior_id = first.id();
         drop(first);
         assert_ne!(reserve(owned.path()).unwrap().id(), prior_id);
@@ -178,9 +194,23 @@ mod tests {
         let path = owned.path().join(PENDING);
         fs::write(&path, Uuid::new_v4().as_bytes()).unwrap();
         assert!(matches!(
-            first.confirm_empty(),
+            confirm(&first),
             Err(SessionError::RecoveryRequired)
         ));
         assert!(path.exists());
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn hard_linked_record_is_rejected_by_the_windows_handle_check() {
+        let owned = tempfile::tempdir().unwrap();
+        let first = reserve(owned.path()).unwrap();
+        first.record_admission().unwrap();
+        let path = owned.path().join(PENDING);
+        let alias = owned.path().join("alias");
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(matches!(confirm(&first), Err(SessionError::Data(_))));
+        assert_eq!(fs::read(&alias).unwrap(), first.record_bytes());
+        assert_eq!(fs::read(&path).unwrap(), first.record_bytes());
     }
 }

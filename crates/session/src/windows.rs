@@ -63,8 +63,13 @@ pub(super) fn run(
         .map_err(SessionError::Data)?
         .unwrap_or(0);
 
-    let lease =
-        SessionLease::begin(&saves, id, reservation.id()).map_err(SessionError::Isolation)?;
+    let lease = SessionLease::begin(&saves, id, reservation.id()).map_err(|error| {
+        if error.kind() == ErrorKind::WouldBlock {
+            SessionError::RecoveryRequired
+        } else {
+            SessionError::Isolation(error)
+        }
+    })?;
     let profile = Profile::new(&lease.profile_name(false)).map_err(SessionError::Isolation)?;
     let neighbor = Profile::new(&lease.profile_name(true)).map_err(SessionError::Isolation)?;
     let own = local_state(&profile).map_err(SessionError::Isolation)?;
@@ -110,7 +115,7 @@ pub(super) fn run(
     if !observation.boundary_empty {
         return Err(SessionError::RecoveryRequired);
     }
-    reservation.confirm_empty()?;
+    reservation.confirm_empty(|path| open_regular(path, false))?;
     result.map_err(SessionError::Isolation)?;
     if read_small(&own.join("window-shown"), 7)
         .map_err(SessionError::Isolation)?
@@ -176,7 +181,7 @@ fn check_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn open_regular(path: &Path, create: bool) -> io::Result<File> {
+pub(super) fn open_regular(path: &Path, create: bool) -> io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .write(create)

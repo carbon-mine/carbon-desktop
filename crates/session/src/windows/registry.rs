@@ -8,10 +8,10 @@ use std::{
 };
 use uuid::Uuid;
 
-const SCAN_LIMIT: usize = 64;
 const RETIRE_LIMIT: usize = 4;
 const MARKER: &str = "owner-v2";
 const OWNER_HEADER: &str = "carbon-desktop-sample-session-v2";
+const LEGACY_MARKER: &str = "owner-v1";
 const OWNER_LOCK: &str = "owner.lock";
 
 pub(super) struct SessionLease {
@@ -108,9 +108,29 @@ fn can_retire(registry: &Path, instance: Uuid) -> io::Result<bool> {
     Ok(!has_pending_run(&profile)?)
 }
 
+fn legacy_bytes(id: Uuid) -> Vec<u8> {
+    format!("carbon-desktop-sample-session-v1\n{id}\n").into_bytes()
+}
+
+fn unresolved_legacy_run(path: &Path, id: Uuid) -> bool {
+    let expected = legacy_bytes(id);
+    if !matches!(
+        read_small(&path.join(LEGACY_MARKER), expected.len()),
+        Ok(Some(bytes)) if bytes == expected
+    ) {
+        return false;
+    }
+    // Older records do not identify the instance. The live owner's instance
+    // lock handles contention; a lost owner provides no boundary evidence.
+    let Ok(guard) = open_regular(&path.join(OWNER_LOCK), false) else {
+        return true;
+    };
+    !matches!(guard.try_lock(), Err(TryLockError::WouldBlock))
+}
+
 fn recover(registry: &Path) -> io::Result<()> {
     let mut retired = 0;
-    for item in fs::read_dir(registry)?.take(SCAN_LIMIT) {
+    for item in fs::read_dir(registry)? {
         let item = item?;
         let name = item.file_name();
         let Some(name) = name.to_str() else { continue };
@@ -122,6 +142,15 @@ fn recover(registry: &Path) -> io::Result<()> {
         }
         let path = item.path();
         if check_dir(&path).is_err() {
+            continue;
+        }
+        if unresolved_legacy_run(&path, id) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "A previous sample has an unresolved legacy run",
+            ));
+        }
+        if retired == RETIRE_LIMIT {
             continue;
         }
         let Ok(Some(record)) = read_small(&path.join(MARKER), owner_bytes(id, id).len()) else {
@@ -147,9 +176,6 @@ fn recover(registry: &Path) -> io::Result<()> {
             );
         }
         retired += 1;
-        if retired == RETIRE_LIMIT {
-            break;
-        }
     }
     Ok(())
 }
@@ -187,14 +213,6 @@ mod tests {
         let unknown = live.registry.join(Uuid::new_v4().to_string());
         fs::create_dir(&unknown).unwrap();
         fs::write(unknown.join(MARKER), b"not owned").unwrap();
-        let legacy_id = Uuid::new_v4();
-        let legacy = live.registry.join(legacy_id.to_string());
-        fs::create_dir(&legacy).unwrap();
-        fs::write(
-            legacy.join("owner-v1"),
-            format!("carbon-desktop-sample-session-v1\n{legacy_id}\n"),
-        )
-        .unwrap();
 
         let id = Uuid::new_v4();
         let path = live.registry.join(id.to_string());
@@ -211,7 +229,6 @@ mod tests {
         let next = SessionLease::begin(root.path(), instance, Uuid::new_v4()).unwrap();
         assert!(live.stage().exists());
         assert!(unknown.exists());
-        assert!(legacy.exists());
         assert!(!path.exists());
         let recreated = sandbox::Profile::new(&peer).unwrap();
         drop(recreated);
@@ -219,6 +236,39 @@ mod tests {
         let next_path = next.path.clone();
         drop(next);
         assert!(!next_path.exists());
+    }
+
+    #[test]
+    fn unresolved_legacy_owner_fences_admission_without_removing_files() {
+        let root = tempfile::tempdir().unwrap();
+        let instance = Uuid::new_v4();
+        let registry = root.path().join("transient");
+        ensure_dir(&root.path().join(instance.to_string())).unwrap();
+        ensure_dir(&registry).unwrap();
+        let id = Uuid::new_v4();
+        let legacy = registry.join(id.to_string());
+        ensure_dir(&legacy).unwrap();
+        fs::write(legacy.join(LEGACY_MARKER), legacy_bytes(id)).unwrap();
+        let legacy_guard = open_regular(&legacy.join(OWNER_LOCK), true).unwrap();
+        legacy_guard.lock().unwrap();
+        let live = SessionLease::begin(root.path(), instance, Uuid::new_v4()).unwrap();
+        let live_path = live.path.clone();
+
+        drop(legacy_guard);
+        assert_eq!(
+            SessionLease::begin(root.path(), instance, Uuid::new_v4())
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            fs::read(legacy.join(LEGACY_MARKER)).unwrap(),
+            legacy_bytes(id)
+        );
+        assert!(live_path.exists());
+        drop(live);
+        assert!(!live_path.exists());
     }
 
     #[test]
