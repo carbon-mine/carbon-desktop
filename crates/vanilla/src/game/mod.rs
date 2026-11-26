@@ -1,3 +1,4 @@
+pub mod launch;
 mod plan;
 #[cfg(test)]
 mod tests;

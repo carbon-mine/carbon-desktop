@@ -34,6 +34,8 @@ The credential-free Windows debug executable built successfully. The locked laun
 
 ## Roots and inputs
 
+The [vanilla launch adapter checkpoint](discovery/launch-adapter.md) adds one trusted Rust planner for 26.3 and 24w14a. The pinned corpus passed on the Windows host and under WSL2, and the WSL2 argument pass recorded no helper, socket or write attempts. The Play gate remains in place. Both shells still need the approved account decision and trusted runner for admission.
+
 The verified Desktop root was an empty sibling of the saved Panel checkout. Local Git was initialized here on branch `main`. The saved design source is Panel commit `38cfd2263d20ac97bc9051be461201598ca932ad`. Several product documents are untracked in that checkout. Their SHA-256 identities below identify the working copies used for this build.
 
 | Saved Panel input | SHA-256 |

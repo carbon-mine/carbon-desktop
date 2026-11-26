@@ -92,6 +92,8 @@ pub struct PreparedInstanceView {
     _lease: File,
     paths: InstancePaths,
     summary: InstanceViewSummary,
+    root: PathBuf,
+    plan: Plan,
 }
 
 impl PreparedInstanceView {
@@ -101,6 +103,63 @@ impl PreparedInstanceView {
 
     pub fn summary(&self) -> &InstanceViewSummary {
         &self.summary
+    }
+
+    pub(super) fn plan(&self) -> &Plan {
+        &self.plan
+    }
+
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(super) fn verify_for_launch(&self) -> Result<(), String> {
+        let s = &self.summary;
+        let expected = Receipt::new(s.profile_id, &s.version, &s.metadata_sha1, &s.platform);
+        let binding = serde_json::to_vec(&expected).map_err(|_| "Invalid view binding.")?;
+        let active = self.root.join("game-files-v1").join("active");
+        let versions = self.root.join("vanilla-metadata-v1").join("versions");
+        for dir in [
+            &self.root,
+            &self.root.join("game-files-v1"),
+            &self.root.join("vanilla-metadata-v1"),
+            &self.root.join("instances-v1"),
+            &active,
+            &versions,
+            self.paths
+                .content_dir
+                .parent()
+                .ok_or("Invalid view directory.")?,
+            &self.paths.game_dir,
+        ] {
+            if !ordinary_dir(dir)? {
+                return Err("The verified game directories are unavailable.".into());
+            }
+        }
+        let receipt = cache::read(&active.join(format!("{}.json", s.profile_id)), 4096)?;
+        let pin = cache::read(&versions.join(format!("{}.json", s.version)), 4096)?;
+        let selected = super::selected(&self.root, s.profile_id)?;
+        let current_pin = pin
+            .and_then(|raw| serde_json::from_slice::<crate::Pin>(&raw).ok())
+            .filter(|pin| pin.valid_for(&s.version, crate::release_type(selected)));
+        if receipt.and_then(|raw| serde_json::from_slice::<Receipt>(&raw).ok()) != Some(expected)
+            || current_pin.is_none_or(|pin| pin.sha1 != s.metadata_sha1)
+            || selected.id() != s.version
+        {
+            return Err("The selected game version or activation has changed.".into());
+        }
+        let layout = Layout::new(&self.plan, &binding)?;
+        let mut progress = Observer {
+            callback: |_| true,
+            files: 0,
+            bytes: 0,
+            total_files: layout.files.len(),
+            total_bytes: layout.total_bytes,
+        };
+        if !verified_content(&self.paths.content_dir, &layout, &mut progress)? {
+            return Err("The leased private game files need verification or repair.".into());
+        }
+        Ok(())
     }
 }
 
@@ -388,10 +447,7 @@ fn publish(content: &Path, previous: &Path, staged: &Path, owner: &Path) -> Resu
 }
 
 pub(super) fn supports_layout(plan: &Plan) -> Result<(), String> {
-    if !matches!(
-        plan.summary.platform.as_str(),
-        "windows-x86_64" | "linux-x86_64"
-    ) {
+    if Platform::launch_platform(&plan.summary.platform).is_none() {
         return Err("Private vanilla game preparation supports Windows and Linux x86-64.".into());
     }
     if !plan.native_archives.is_empty() {
@@ -532,5 +588,7 @@ pub(super) fn materialize(
         _lease: lease,
         paths,
         summary,
+        root: root.to_owned(),
+        plan: plan.clone(),
     })
 }
