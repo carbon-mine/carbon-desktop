@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use carbon_profiles::icons::{InstanceIcon, catalog};
-use gpui::{AnyElement, AssetSource, Pixels, Rgba, SharedString, img, prelude::*, svg};
+use gpui::{AnyElement, AssetSource, Pixels, Rgba, SharedString, Svg, img, prelude::*, svg};
 use std::borrow::Cow;
 
 #[derive(Clone, Copy)]
@@ -55,8 +55,8 @@ pub fn brand_mark(light_ink: bool, height: Pixels) -> Svg {
 
 const BRAND: [(&str, &[u8]); 3] = [
     (
-        "brand/home-identity-shadow.png",
-        include_bytes!("../assets/home-identity-shadow.png"),
+        "brand/home-header-shade.png",
+        include_bytes!("../assets/home-header-shade.png"),
     ),
     (
         "brand/mark-light.svg",
