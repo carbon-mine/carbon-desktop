@@ -3,9 +3,14 @@ mod folder;
 pub mod icons;
 mod server;
 mod storage;
+mod targets;
 pub use folder::open_game_folder;
 pub use server::{
     server_profile, set_server_address, ServerAddress, ServerBindingUpdate, ServerJoinReadiness,
+};
+pub use targets::{
+    change_instance_targets, instance_targets, validate_target_label, InstanceTargets, LocalWorld,
+    SavedDestination, TargetAction, TargetKey,
 };
 #[cfg(test)]
 mod tests;

@@ -912,7 +912,9 @@ impl Launcher {
                     .child(command_row(p).child(self.command(p, "reimport-pack", "Import pack", false, self.busy(), cx,
                         |this, window, cx| this.pick(Picker::Pack, window, cx))))),
         };
-        let play_status = if pack_blocked {
+        let play_status = if profile.server_address.is_some() {
+            "Join unavailable"
+        } else if pack_blocked {
             "Pack requirements"
         } else if settled && !jdk_ready {
             "Java required"
@@ -927,6 +929,7 @@ impl Launcher {
         } else {
             "Setup required"
         };
+        let primary_label = Self::primary_label(profile);
         let play = compact_action("play", p, Partition::Neutral, self.popup.is_some(), cx)
             .min_w(px(82.))
             .child(
@@ -935,22 +938,17 @@ impl Launcher {
                     .font_semibold()
                     .text_color(p.ink)
                     .child(Icon::Play.render(px(16.), p.ink))
-                    .child("Play"),
+                    .child(primary_label),
             );
         let play = self.control(
             play,
             "play",
-            "Play",
+            primary_label,
             Role::Button,
             self.popup.is_some(),
             None,
             cx,
-            |this, window, cx| {
-                this.tab = Tab::Overview;
-                let focus = this.task_focus.clone();
-                window.on_next_frame(move |window, _| focus.focus(window));
-                cx.notify();
-            },
+            Self::activate_primary,
         );
         col()
             .child(
@@ -1018,11 +1016,34 @@ impl Launcher {
                     )),
             )
             .child(self.workspace_tabs(&[Tab::Overview, Tab::Settings], p, cx))
-            .child(body)
+            .when(profile.server_address.is_none(), |detail| {
+                detail.child(
+                    row()
+                        .px_5()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(p.stroke)
+                        .child(self.command(
+                            p,
+                            "launch-targets",
+                            "Targets…",
+                            false,
+                            self.popup.is_some()
+                                || self.picker_open
+                                || self.profile_issue.is_some(),
+                            cx,
+                            Self::open_targets,
+                        )),
+                )
+            })
             .when(
-                profile.server_address.is_some() || self.tab == Tab::Settings,
-                |body| body.child(self.server_details(profile, p, cx)),
+                self.tab == Tab::Overview && profile.server_address.is_some(),
+                |detail| detail.child(self.server_details(profile, p, cx)),
             )
+            .child(body)
+            .when(self.tab == Tab::Settings, |detail| {
+                detail.child(self.server_details(profile, p, cx))
+            })
             .into_any_element()
     }
 
@@ -1031,16 +1052,19 @@ impl Launcher {
         profile: &carbon_profiles::Profile,
         p: Palette,
         cx: &Context<Self>,
-    ) -> gpui::Div {
+    ) -> super::accessibility::Semantic {
         let enabled = !self.busy() && self.popup.is_none() && self.profile_issue.is_none();
         let address = profile.server_address.as_ref();
         let guidance = profile.server_join_readiness().message();
         let mut panel = col()
+            .id("server-details")
+            .track_focus(&self.server_focus)
             .px_5()
             .py_4()
             .gap_2()
             .border_t_1()
             .border_color(p.stroke)
+            .focus(|panel| panel.border_color(p.accent))
             .child(self.accessibility.text(
                 div().font_semibold().child("Multiplayer"),
                 "server-heading",
@@ -1078,7 +1102,7 @@ impl Launcher {
                     Role::Label,
                 ));
         }
-        panel
+        panel = panel
             .child(self.accessibility.text(
                 div().text_sm().text_color(p.muted).child(guidance),
                 "server-readiness",
@@ -1109,7 +1133,14 @@ impl Launcher {
                         cx,
                         |this, window, cx| this.server_editor(window, cx),
                     )),
-            )
+            );
+        self.accessibility.focus_group(
+            panel,
+            "join-requirements",
+            "Multiplayer and join requirements",
+            Role::Group,
+            &self.server_focus,
+        )
     }
 
     fn setup_diagnostics(
