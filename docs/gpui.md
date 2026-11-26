@@ -2,6 +2,12 @@
 
 This branch is the native Rust-rendered alternative for the frontend comparison. It uses the same Carbon profile, runtime, vanilla game file, fixture store and protected Windows sample-session crates as the standalone candidate. Both editions keep their live data in separate roots.
 
+## Initial window size
+
+The first launcher window uses a preferred GPUI layout of 1368 × 808 logical pixels. On Windows the native menu occupies 20 pixels of that layout at 96 DPI, leaving a 1368 × 788 client. It shrinks to fit a smaller display. A usable saved position, size and maximized state takes precedence. The Minecraft game window has its own resolution setting.
+
+The owner selected the client size of an observed, unmaximized official launcher as the reference. On Windows build 26300 at 96 DPI, launcher v3.44.1-2.6.2 (package 2.6.2.0 x64) measured 1368 × 788 client, 1370 × 820 visible DWM frame and 1384 × 827 outer Win32 frame. The owner’s 1371 × 821 screenshot corroborates the visible frame. The comparison used a running signed-in official launcher. Its factory first-run placement remains unverified. The previous fresh Carbon window measured 1040 × 740 client, 1042 × 792 visible and 1056 × 799 outer. These figures distinguish the native menu and decoration sizes from the launcher’s logical sizing input.
+
 ## Build and run
 
 On Windows, use the MSVC Rust toolchain, Windows SDK and a JDK that supplies `javac` when compiling the protected sandbox fixture. From this checkout:

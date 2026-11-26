@@ -912,6 +912,7 @@ dependencies = [
  "gpui-component",
  "image",
  "muda",
+ "objc2",
  "objc2-app-kit",
  "raw-window-handle",
  "rfd",
@@ -920,6 +921,7 @@ dependencies = [
  "tempfile",
  "uuid",
  "windows 0.61.3",
+ "x11rb",
 ]
 
 [[package]]

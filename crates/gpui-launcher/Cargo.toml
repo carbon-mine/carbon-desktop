@@ -32,17 +32,19 @@ rfd = "0.17"
 accesskit_windows = "=0.35.2"
 raw-window-handle = "0.6"
 muda = { version = "=0.20.0", default-features = false }
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 accesskit_unix = "=0.24.1"
 ashpd = { version = "=0.11.1", default-features = false, features = ["async-std"] }
+x11rb = { version = "=0.13.2", features = ["randr"] }
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 futures = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSScreen"] }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
