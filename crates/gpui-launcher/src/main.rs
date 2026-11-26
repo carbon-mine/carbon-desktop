@@ -75,8 +75,9 @@ pub(crate) enum Surface {
 
 /// The state restored by Back. Only launcher-owned identity and view choices
 /// are retained, never a filesystem path or a worker snapshot.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 struct HistoryEntry {
+    origin: Option<gpui::ElementId>,
     surface: Surface,
     review: bool,
     personal: Option<Uuid>,
@@ -214,7 +215,6 @@ struct Launcher {
     root_focus: FocusHandle,
     detail_focus: FocusHandle,
     home_focus: FocusHandle,
-    switcher_focus: FocusHandle,
     rail_resize_focus: FocusHandle,
     activity_focus: FocusHandle,
     task_focus: FocusHandle,
@@ -235,7 +235,6 @@ struct Launcher {
     history: Vec<HistoryEntry>,
     artwork: artwork::HomeArtwork,
     home_order: home::HomeOrder,
-    home_switcher_open: bool,
     diagnostics_open: bool,
     show_detail: bool,
     library_scroll: ScrollHandle,
@@ -369,7 +368,6 @@ impl Launcher {
             root_focus,
             detail_focus: cx.focus_handle(),
             home_focus: cx.focus_handle().tab_stop(true),
-            switcher_focus: cx.focus_handle().tab_stop(true),
             rail_resize_focus: cx.focus_handle().tab_stop(true),
             activity_focus: cx.focus_handle(),
             task_focus: cx.focus_handle(),
@@ -389,7 +387,6 @@ impl Launcher {
             history: Vec::new(),
             home_order,
             artwork,
-            home_switcher_open: false,
             diagnostics_open: false,
             show_detail: false,
             library_scroll: ScrollHandle::new(),
@@ -470,7 +467,6 @@ impl Launcher {
             return;
         }
         let switched = self.show_surface(Surface::Library, window, cx);
-        self.home_switcher_open = false;
         let narrow = is_narrow(window);
         self.search_back_to_detail =
             narrow && return_to_detail && (self.show_detail || self.search_back_to_detail);

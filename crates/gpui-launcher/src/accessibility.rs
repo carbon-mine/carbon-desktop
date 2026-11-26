@@ -95,6 +95,7 @@ struct Frame {
 }
 
 struct State {
+    focus_after_paint: RefCell<Option<ElementId>>,
     title: String,
     pinned_snapshot: Snapshot,
     #[cfg(any(windows, target_os = "linux"))]
@@ -109,6 +110,12 @@ struct State {
 pub struct Accessibility(Rc<State>);
 
 impl Accessibility {
+    /// Resolve a navigation destination against the newly mounted button.
+    /// A handle from the old surface can point to a control that no longer exists.
+    pub fn focus_button_after_paint(&self, id: impl Into<ElementId>) {
+        self.0.focus_after_paint.replace(Some(id.into()));
+    }
+
     pub fn new<T: Render>(window: &mut Window, cx: &mut Context<T>, title: String) -> Self {
         let snapshot = Snapshot::default();
         #[cfg(any(windows, target_os = "linux"))]
@@ -118,6 +125,7 @@ impl Accessibility {
         #[cfg(not(any(windows, target_os = "linux")))]
         let _ = (window, cx);
         let state = Rc::new(State {
+            focus_after_paint: RefCell::default(),
             title,
             pinned_snapshot: snapshot,
             #[cfg(any(windows, target_os = "linux"))]
@@ -496,6 +504,13 @@ impl Element for Semantic {
                 node.set_bounds(rect(clipped, scale(window)));
             }
             if let Some(focus) = focus {
+                let focus_requested = matches!(&self.binding, Binding::Button(button_id, _)
+                    if self.state.focus_after_paint.borrow().as_ref() == Some(button_id));
+                if focus_requested {
+                    self.state.focus_after_paint.take();
+                    let target = focus.clone();
+                    window.on_next_frame(move |window, _| target.focus(window));
+                }
                 if focus.is_focused(window) {
                     frame.focus = Some(id);
                 }
@@ -588,6 +603,7 @@ impl State {
         _cx: &mut App,
     ) {
         let mut frame = self.frame.take();
+        self.focus_after_paint.take();
         for (id, node) in &mut frame.nodes {
             if let Some(children) = frame.children.remove(id) {
                 node.set_children(children);

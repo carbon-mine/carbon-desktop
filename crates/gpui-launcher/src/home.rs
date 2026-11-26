@@ -156,8 +156,9 @@ impl Launcher {
             Some(selected),
             cx,
             move |this, window, cx| {
-                this.show_surface(surface, window, cx);
-                this.root_focus.focus(window);
+                let origin = SharedString::from(format!("surface-{name}"));
+                this.show_surface_from(surface, Some(origin.clone().into()), window, cx);
+                this.accessibility.focus_button_after_paint(origin);
             },
         )
     }
@@ -325,9 +326,6 @@ impl Launcher {
         } else {
             panel.w(px(330.))
         };
-        if self.home_switcher_open {
-            panel = panel.child(self.quick_switcher(p, cx));
-        }
         panel
             .child(self.home_launchbox_content(p, cx))
             .into_any_element()
@@ -406,11 +404,7 @@ impl Launcher {
                     .truncate()
                     .child(pick_text),
             )
-            .child(div().text_color(p.muted).child(if self.home_switcher_open {
-                "▴"
-            } else {
-                "▾"
-            }));
+            .child(div().text_color(p.muted).child("\u{25be}"));
         col()
             .gap_2()
             .child(div().text_sm().text_color(p.muted).child(eyebrow))
@@ -420,9 +414,9 @@ impl Launcher {
                 &pick_label,
                 Role::Button,
                 self.popup.is_some(),
-                Some(self.home_switcher_open),
+                None,
                 cx,
-                |this, window, cx| this.toggle_home_switcher(window, cx),
+                |this, window, cx| this.open_home_switcher(window, cx),
             ))
             .child(
                 div()
@@ -603,286 +597,32 @@ impl Launcher {
             false,
             Some(selected),
             cx,
-            move |this, window, cx| this.open_profile_from_home(id, window, cx),
+            move |this, window, cx| this.open_profile_from_home(id, SharedString::from(format!("home-shelf-{id}")).into(), window, cx),
         )
     }
 
-    fn quick_switcher(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
-        let mut list = col()
-            .id("home-switcher-list")
-            .gap_1()
-            .max_h(px(228.))
-            .overflow_y_scroll()
-            .py_1();
-        list = list.child(section_label("Instances", p));
-        for id in self.home_order.ordered_ids(&self.profiles) {
-            let Some(profile) = self.profiles.iter().find(|profile| profile.id == id) else {
-                continue;
-            };
-            let kind = profile_kind(profile);
-            let label = format!("{}, {kind}", profile.name);
-            let selected = self.personal == Some(id);
-            let button = compact_action(
-                SharedString::from(format!("switcher-profile-{id}")),
-                p,
-                Partition::Neutral,
-                false,
-                cx,
-            )
-            .w_full()
-            .h(px(40.))
-            .justify_start()
-            .px_2()
-            .child(
-                row()
-                    .w_full()
-                    .gap_2()
-                    .min_w_0()
-                    .child(home_mark(
-                        p,
-                        Icon::Builtin(carbon_profiles::icons::displayed(profile)),
-                    ))
-                    .child(
-                        col()
-                            .min_w_0()
-                            .flex_1()
-                            .items_start()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .truncate()
-                                    .font_semibold()
-                                    .child(profile.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(p.muted)
-                                    .child(kind.clone()),
-                            ),
-                    ),
-            );
-            list = list.child(self.control(
-                button,
-                SharedString::from(format!("switcher-profile-{id}")),
-                &label,
-                Role::ListBoxOption,
-                false,
-                Some(selected),
-                cx,
-                move |this, window, cx| this.select_home_profile(id, window, cx),
-            ));
+    fn open_home_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_some() || self.picker_open { return; }
+        let Some(id) = self.personal else { return; };
+        if !self.targets.contains_key(&id) {
+            self.load_targets(id, cx);
         }
-        let Some(profile) = self.selected_profile().cloned() else {
-            return self.switcher_panel(p, list, cx);
-        };
-        list = list.child(section_label("Destinations", p));
-        match self.targets.get(&profile.id) {
-            Some(TargetsState::Ready(snapshot)) => {
-                let mut count = 0;
-                for world in &snapshot.worlds {
-                    let key = world.key.clone();
-                    let selected = snapshot.selected.as_ref() == Some(&key);
-                    let label = format!("{}, local world", world.name);
-                    let button = compact_action(
-                        SharedString::from(format!("switcher-world-{}", world.name)),
-                        p,
-                        Partition::Neutral,
-                        false,
-                        cx,
-                    )
-                    .w_full()
-                    .h(px(36.))
-                    .justify_start()
-                    .px_2()
-                    .child(
-                        row()
-                            .gap_2()
-                            .min_w_0()
-                            .child(home_mark(p, Icon::Instance))
-                            .child(div().truncate().child(world.name.clone())),
-                    );
-                    let name = SharedString::from(format!("switcher-world-{}", world.name));
-                    let id = profile.id;
-                    list = list.child(self.control(
-                        button,
-                        name,
-                        &label,
-                        Role::ListBoxOption,
-                        false,
-                        Some(selected),
-                        cx,
-                        move |this, window, cx| {
-                            this.choose_home_target(id, key.clone(), window, cx)
-                        },
-                    ));
-                    count += 1;
-                }
-                for server in &snapshot.destinations {
-                    let key = TargetKey::Server(server.id);
-                    let selected = snapshot.selected.as_ref() == Some(&key);
-                    let label = format!("{}, saved server {}", server.name, server.address);
-                    let button = compact_action(
-                        SharedString::from(format!("switcher-server-{}", server.id)),
-                        p,
-                        Partition::Neutral,
-                        false,
-                        cx,
-                    )
-                    .w_full()
-                    .h(px(36.))
-                    .justify_start()
-                    .px_2()
-                    .child(
-                        row()
-                            .gap_2()
-                            .min_w_0()
-                            .child(home_mark(p, Icon::Instance))
-                            .child(
-                                col()
-                                    .min_w_0()
-                                    .items_start()
-                                    .child(div().truncate().child(server.name.clone()))
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_xs()
-                                            .text_color(p.muted)
-                                            .child(server.address.to_string()),
-                                    ),
-                            ),
-                    );
-                    let name = SharedString::from(format!("switcher-server-{}", server.id));
-                    let id = profile.id;
-                    list = list.child(self.control(
-                        button,
-                        name,
-                        &label,
-                        Role::ListBoxOption,
-                        false,
-                        Some(selected),
-                        cx,
-                        move |this, window, cx| {
-                            this.choose_home_target(id, key.clone(), window, cx)
-                        },
-                    ));
-                    count += 1;
-                }
-                if count == 0 {
-                    list = list.child(muted_line(
-                        p,
-                        "No saved worlds or destinations for this instance.",
-                    ));
-                }
-            }
-            Some(TargetsState::Loading(_)) | None => {
-                list = list.child(muted_line(p, "Reading destinations…"));
-            }
-            Some(TargetsState::Error(error)) => {
-                list = list.child(
-                    self.accessibility.text(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(p.warning)
-                            .child(error.clone()),
-                        "switcher-target-error",
-                        error.clone(),
-                        Role::Alert,
-                    ),
-                );
-            }
-        }
-        self.switcher_panel(p, list, cx)
+        popup::open(self, popup::Kind::HomeTargets, window, cx);
     }
 
-    fn switcher_panel(&self, p: Palette, list: impl IntoElement, cx: &Context<Self>) -> AnyElement {
-        let panel = col()
-            .id("home-switcher")
-            .mb_1()
-            .track_focus(&self.switcher_focus)
-            .bg(p.surface)
-            .border_1()
-            .border_color(p.stroke)
-            .child(
-                row()
-                    .px_2()
-                    .py_1()
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(p.stroke)
-                    .child(div().text_sm().font_semibold().child("Quick switcher"))
-                    .child(self.command(
-                        p,
-                        "home-switcher-close",
-                        "Close",
-                        false,
-                        false,
-                        cx,
-                        |this, window, cx| this.close_home_switcher(window, cx),
-                    )),
-            )
-            .child(list)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    this.close_home_switcher(window, cx);
-                    cx.stop_propagation();
-                }
-            }));
-        self.accessibility
-            .group(panel, "home-switcher", "Quick switcher", Role::Group)
-            .into_any_element()
-    }
-
-    fn toggle_home_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_profile().is_none() {
-            return;
-        }
-        self.home_switcher_open = !self.home_switcher_open;
-        if self.home_switcher_open {
-            if let Some(id) = self.personal
-                && !self.targets.contains_key(&id)
-            {
-                self.load_targets(id, cx);
-            }
-            let focus = self.switcher_focus.clone();
-            window.on_next_frame(move |window, _| focus.focus(window));
-        } else {
-            self.root_focus.focus(window);
-        }
-        cx.notify();
-    }
-
-    fn close_home_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.home_switcher_open {
-            self.home_switcher_open = false;
-            self.root_focus.focus(window);
+    pub(super) fn home_select_instance(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.profiles.iter().any(|p| p.id == id) {
+            self.select_personal(id, cx);
             cx.notify();
         }
     }
 
-    fn select_home_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        self.select_personal(id, cx);
-        self.home_switcher_open = false;
-        self.root_focus.focus(window);
-        cx.notify();
-    }
-
-    fn choose_home_target(
-        &mut self,
-        id: Uuid,
-        key: TargetKey,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.select_personal(id, cx);
-        self.home_switcher_open = false;
-        self.select_target(id, key, cx);
-        self.root_focus.focus(window);
-        cx.notify();
+    pub(super) fn home_select_target(&mut self, id: Uuid, key: TargetKey, cx: &mut Context<Self>) {
+        if self.personal == Some(id)
+            && self.selected_profile().is_some_and(|p| p.server_address.is_none())
+        {
+            self.select_target(id, key, cx);
+        }
     }
 
     /// Select a saved world or destination through the shared profile service.
@@ -926,23 +666,22 @@ impl Launcher {
 
     fn open_selected_from_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.personal {
-            self.open_profile_from_home(id, window, cx);
+            self.open_profile_from_home(id, "home-open".into(), window, cx);
         }
     }
 
-    fn open_profile_from_home(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_surface(Surface::Library, window, cx);
+    fn open_profile_from_home(&mut self, id: Uuid, origin: gpui::ElementId, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_surface_from(Surface::Library, Some(origin), window, cx);
         self.select_personal(id, cx);
         self.tab = Tab::Overview;
         self.show_detail = true;
-        self.home_switcher_open = false;
         self.focus_detail(window);
         cx.notify();
     }
 
     fn open_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_surface(Surface::Library, window, cx);
-        self.home_switcher_open = false;
+        self.show_surface_from(Surface::Library, Some("home-open-library".into()), window, cx);
+        self.focus_detail(window);
         cx.notify();
     }
 
@@ -985,15 +724,20 @@ impl Launcher {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.show_surface_from(surface, None, window, cx)
+    }
+
+    fn show_surface_from(
+        &mut self, surface: Surface, origin: Option<gpui::ElementId>, window: &mut Window, cx: &mut Context<Self>,
+    ) -> bool {
         if self.surface == surface {
             return false;
         }
-        self.record_history();
+        self.record_history(origin);
         if self.surface == Surface::Library {
             self.save_library_scroll();
         }
         self.surface = surface;
-        self.home_switcher_open = false;
         if surface == Surface::Library {
             self.restore_library_scroll();
         }
@@ -1005,10 +749,6 @@ impl Launcher {
     /// Return through the navigation history after the existing compact-detail
     /// Escape behavior has had a chance to handle the key.
     pub(super) fn history_back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.home_switcher_open {
-            self.close_home_switcher(window, cx);
-            return true;
-        }
         let Some(entry) = self.history.pop() else {
             return false;
         };
@@ -1022,7 +762,6 @@ impl Launcher {
         self.tab = entry.tab;
         self.show_detail = entry.show_detail;
         self.search_back_to_detail = false;
-        self.home_switcher_open = false;
         if entry.surface == Surface::Library {
             self.restore_library_scroll();
             if let Some(id) = self.personal
@@ -1031,13 +770,20 @@ impl Launcher {
                 self.load_targets(id, cx);
             }
         }
-        self.root_focus.focus(window);
+        let fallback = if entry.surface == Surface::Home {
+            self.home_focus.clone()
+        } else { self.detail_focus.clone() };
+        fallback.focus(window);
+        if let Some(origin) = entry.origin {
+            self.accessibility.focus_button_after_paint(origin);
+        }
         cx.notify();
         true
     }
 
-    fn record_history(&mut self) {
+    fn record_history(&mut self, origin: Option<gpui::ElementId>) {
         let entry = HistoryEntry {
+            origin,
             surface: self.surface,
             review: self.review,
             personal: self.personal,
@@ -1148,25 +894,9 @@ fn home_mark(p: Palette, icon: Icon) -> gpui::Div {
         .child(icon.render(px(17.), p.ink))
 }
 
-fn section_label(text: &'static str, p: Palette) -> gpui::Div {
-    div()
-        .px_2()
-        .pt_2()
-        .pb_1()
-        .text_xs()
-        .font_semibold()
-        .text_color(p.muted)
-        .child(text)
-}
 
-fn muted_line(p: Palette, text: &'static str) -> gpui::Div {
-    div()
-        .px_2()
-        .py_1()
-        .text_xs()
-        .text_color(p.muted)
-        .child(text)
-}
+
+
 
 #[cfg(test)]
 mod tests {
