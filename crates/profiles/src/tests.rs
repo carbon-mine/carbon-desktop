@@ -621,3 +621,38 @@ fn unknown_icon_displays_the_default_and_survives_unrelated_edits_and_reimport()
     assert!(reset.changed());
     assert_eq!(reset.save(root).unwrap().icon_id, None);
 }
+
+#[test]
+fn binding_and_icon_changes_preserve_each_other_and_restore_the_automatic_sprite() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let id = Uuid::new_v4();
+    let pack = ImportedPack {
+        name: "Synthetic pack".into(),
+        loader: None,
+        pending_files: 0,
+    };
+    let imported =
+        import_instance(root, id, VanillaVersion::Release26_3, pack, |_| Ok(())).unwrap();
+    let mut picker = icons::IconDraft::new(&imported);
+    let address = ServerAddress::parse("play.example.org").unwrap();
+    let bound = set_server_address(root, id, None, Some(address.clone()))
+        .unwrap()
+        .profile;
+    assert_eq!(icons::displayed(&bound).id, "beacon");
+    let fox = icons::catalog()
+        .iter()
+        .position(|icon| icon.id == "fox")
+        .unwrap()
+        + 1;
+    picker.choose(fox);
+    let chosen = picker.save(root).unwrap();
+    assert_eq!(chosen.server_address.as_ref(), Some(&address));
+    assert_eq!(icons::displayed(&chosen).id, "fox");
+    let unbound = set_server_address(root, id, Some(&address), None)
+        .unwrap()
+        .profile;
+    assert_eq!(icons::displayed(&unbound).id, "fox");
+    let reset = icons::set_icon(root, id, Some("fox"), None).unwrap();
+    assert_eq!(icons::displayed(&reset).id, "pack");
+}

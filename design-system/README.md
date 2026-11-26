@@ -120,6 +120,8 @@ keyboard paths, theme checks and the packaged-app verification still required.
 
 The 16 illustrations in `instance-icons/` are original Carbon Desktop artwork licensed under MPL-2.0. Each PNG preserves a 16-by-16 pixel drawing at six times its original size. Creature portraits, tools and magical or mechanical objects share a dark outline, upper-left light and cool shadow. The GPUI library, detail header and native picker display the same colored artwork in light and dark appearances. Command glyphs retain the shell foreground color.
 
+The automatic artwork is a meadow block for vanilla, a field pack for an import and a beacon for a server-bound instance. An explicit choice takes precedence.
+
 Store the chosen built-in ID in the profile. Keep these IDs stable across releases. If a newer ID is unavailable, display the automatic icon and preserve the stored preference until the player changes it.
 
 Windows GPUI captures show a [library with eight disposable instances](../docs/images/gpui-instance-sprites.png) and the [native icon picker in light appearance](../docs/images/gpui-instance-icon-picker.png).

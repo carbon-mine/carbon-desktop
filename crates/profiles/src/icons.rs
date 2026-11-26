@@ -50,7 +50,9 @@ fn known(id: &str) -> Option<&'static InstanceIcon> {
 }
 
 fn automatic(profile: &Profile) -> &'static InstanceIcon {
-    let id = if profile.imported_pack.is_some() {
+    let id = if profile.server_address.is_some() {
+        "beacon"
+    } else if profile.imported_pack.is_some() {
         "pack"
     } else {
         "block"
