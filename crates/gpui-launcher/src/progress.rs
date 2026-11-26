@@ -243,7 +243,7 @@ pub fn observe_linux_motion(cx: &mut Context<super::Launcher>) {
         let Ok(settings) = Settings::new().await else {
             return;
         };
-        let mut changes = settings.receive_setting_changed().await.ok();
+        let mut changes = settings.receive_setting_changed().await.ok().map(Box::pin);
         loop {
             let reduced = match settings.read::<u32>(APPEARANCE, "reduced-motion").await {
                 Ok(value) => value == 1,
@@ -261,16 +261,16 @@ pub fn observe_linux_motion(cx: &mut Context<super::Launcher>) {
             let Some(stream) = changes.as_mut() else {
                 break;
             };
-            let relevant = stream
-                .find(|event| {
-                    futures::future::ready(matches!(
-                        (event.namespace(), event.key()),
-                        (APPEARANCE, "reduced-motion") | (GNOME, "enable-animations")
-                    ))
-                })
-                .await;
-            if relevant.is_none() {
-                break;
+            loop {
+                let Some(event) = stream.next().await else {
+                    return;
+                };
+                if matches!(
+                    (event.namespace(), event.key()),
+                    (APPEARANCE, "reduced-motion") | (GNOME, "enable-animations")
+                ) {
+                    break;
+                }
             }
         }
     })
