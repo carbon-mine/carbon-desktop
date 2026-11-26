@@ -295,7 +295,7 @@ impl Launcher {
             .flex_none()
             .mt(px(if compact { 12. } else { 26. }))
             .mx(inset)
-            .gap_2()
+            .gap(px(if compact { 16. } else { 20. }))
             .child(
                 row()
                     .justify_between()
