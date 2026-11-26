@@ -6,9 +6,26 @@ import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import path from 'node:path';
+
+const {values:options}=parseArgs({options:{
+  'png-dir':{type:'string'}, view:{type:'string'}, size:{type:'string'}, frames:{type:'string'},
+}});
+const exportDir=options['png-dir'];
+if(!exportDir && (options.size || options.frames || options.view)) {
+  throw Error('Use --png-dir to export a separate lossless source study');
+}
+const resolution=/^(\d+)x(\d+)$/.exec(options.size??'960x540');
+if(!resolution) throw Error('Use a width and height such as 1440x810');
+const [width,height]=resolution.slice(1).map(Number);
+if(width<1 || height<1 || width*height>1600000) throw Error('Source size exceeds the native authoring pixel budget');
+const requestedFrames=Number(options.frames??1);
+if(!Number.isSafeInteger(requestedFrames) || requestedFrames<1) throw Error('--frames must be a positive integer');
 
 const manifest = JSON.parse(await readFile(new URL('../../design-system/landscapes/manifest.json', import.meta.url), 'utf8'));
 validateOutputs(manifest.views);
+if(options.view && !manifest.views.some(view=>view.id===options.view && view.bake)) throw Error('Unknown authored view '+options.view);
 if (!manifest.views.some(entry => entry.bake)) process.exit(0);
 const sources = JSON.parse(await readFile(new URL('sources.json', import.meta.url), 'utf8'));
 for (const entry of manifest.views) if (entry.bake) cameraFor(sources, entry.bake);
@@ -42,7 +59,7 @@ const browser = await chromium.launch(process.env.CHROME_PATH
   : { channel: 'chrome' });
 try {
   await mkdir(output, { recursive: true });
-  const page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1, reducedMotion: 'reduce' });
+  const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1, reducedMotion: 'reduce' });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.route(/^https?:/, route => route.request().url().startsWith(base)
@@ -50,11 +67,28 @@ try {
     : route.abort());
   const digest = createHash('sha256');
   for (const entry of manifest.views) {
-    if (!entry.bake) continue;
+    if (!entry.bake || (options.view && options.view!==entry.id)) continue;
     const view = entry.id;
     await page.goto(base + '?' + new URLSearchParams(entry.bake));
     await page.waitForFunction(() => typeof window.paintScenicFrame === 'function');
     const framesPerView = entry.frames ? entry.fps * cycleSeconds : 1;
+    if(exportDir){
+      if(requestedFrames>framesPerView) throw Error('Requested frames exceed the source cycle of '+view);
+      if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(view)) throw Error('Invalid source view ID');
+      const viewDir=path.join(exportDir,view);
+      await mkdir(viewDir,{recursive:true});
+      for(let index=0;index<requestedFrames;index++){
+        const raw=await page.evaluate(phase=>{
+          window.paintScenicFrame(phase);
+          return document.querySelector('canvas').toDataURL('image/png').split(',')[1];
+        },index/framesPerView);
+        if(errors.length) throw Error(view+' source render failed: '+errors.join('; '));
+        const name=String(index).padStart(3,'0')+'.png';
+        await writeFile(path.join(viewDir,name),Buffer.from(raw,'base64'),{flag:'wx'});
+      }
+      console.log(view,requestedFrames,'lossless source frames',width,height);
+      continue;
+    }
     const frames = [];
     for (let index = 0; index < (entry.frames ? framesPerView : 1); index++) {
       const jpg = await page.evaluate(fraction => {
@@ -98,7 +132,7 @@ try {
     digest.update(packed);
     console.log(view, packed.length, 'bytes', distinct.size, 'different camera frames');
   }
-  console.log('Pack set SHA-256', digest.digest('hex'));
+  if(!exportDir) console.log('Pack set SHA-256', digest.digest('hex'));
 } finally {
   await browser.close();
 }

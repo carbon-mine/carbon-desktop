@@ -33,7 +33,8 @@
           0
         ]
       }
-    }
+    },
+    "fov": 47
   },
   "riverside": {
     "module": "world.js",
@@ -70,7 +71,8 @@
         ]
       }
     },
-    "water": true
+    "water": true,
+    "fov": 47
   },
   "alpine": {
     "module": "alpine.js",
@@ -96,7 +98,8 @@
       }
     },
     "water": true,
-    "dusk": true
+    "dusk": true,
+    "fov": 48
   },
   "marsh": {
     "module": "marsh.js",
@@ -123,7 +126,7 @@
     },
     "water": true,
     "dusk": true,
-    "fov": 49
+    "fov": 55
   },
   "orchard": {
     "module": "orchard.js",
@@ -147,6 +150,7 @@
           -8.5
         ]
       }
-    }
+    },
+    "fov": 48
   }
 }

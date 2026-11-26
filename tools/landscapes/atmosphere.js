@@ -54,12 +54,26 @@ function deckGeometry(rows) {
   return geometry;
 }
 
-function makeDeck(scene, camera, overhead, dusk, seed) {
+function makeDeck(scene, camera, overhead, dusk, seed, id) {
   const formations=[
     {shape:0, x:-.96, y:overhead ? .77 : .75, distance:overhead ? 17 : 42, width:overhead ? .72 : .88, yaw:.38, offset:.04},
     {shape:1, x:.84, y:overhead ? -.84 : .94, distance:overhead ? 20 : 60, width:overhead ? .76 : .94, yaw:-.34, offset:.48},
     {shape:1, x:overhead ? 1.06 : .34, y:overhead ? .88 : .66, distance:overhead ? 24 : 75, width:.41, yaw:.65, offset:.76},
   ];
+  // Each skyline keeps different silhouettes and gaps around its landmark.
+  // The overhead camera also has enough sky clearance to read the top faces.
+  if(id==='alpine'){
+    formations[0].x=-.83; formations[0].width=1.08;
+    formations[1].x=1.00; formations[1].shape=0; formations[1].yaw=.64;
+    formations[2].x=.10; formations[2].y=.88;
+  } else if(id==='marsh'){
+    formations[0].x=-1.08; formations[0].shape=1; formations[0].yaw=-.48;
+    formations[1].x=.82; formations[1].width=.60; formations[1].y=.78;
+    formations[2].x=-.20; formations[2].y=.93;
+  } else if(id==='orchard'){
+    formations[0].x=-.82; formations[0].y=.93; formations[1].yaw=.28;
+    formations[2].x=.27; formations[2].shape=0;
+  }
   const strips=formations.map((spec,i)=>{
     const rows=decks[spec.shape];
     const material=new THREE.MeshBasicMaterial({
@@ -132,7 +146,7 @@ export function makeBreeze(scene,camera,overhead,dusk,sun,id) {
   const layer=new THREE.Group();
   camera.add(layer);scene.add(camera);
   const seed=[...id].reduce((s,c)=>s+c.charCodeAt(0),0)%17/17;
-  const deck=makeDeck(scene,camera,overhead,dusk,seed);
+  const deck=makeDeck(scene,camera,overhead,dusk,seed,id);
   const debris=makeDebris(id);layer.add(...debris);
   const glareMaterial=new THREE.ShaderMaterial({
     transparent:true,depthWrite:false,depthTest:false,

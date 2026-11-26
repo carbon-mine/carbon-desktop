@@ -1,6 +1,8 @@
 import {addFantasy} from './fantasy.js';
 import {addClouds} from './clouds.js';
 import {makeBreeze} from './atmosphere.js';
+import {makeFarmChaff} from './farm-atmosphere.js';
+import {makeBiomeMotifs} from './biome-motifs.js';
 import * as THREE from 'three';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import sunrise from './assets/qwantani_sunrise_puresky_1k.hdr';
@@ -63,6 +65,8 @@ const blocks = [];
 const emitBox=(x,y,z,w,h,d,color,ry=0,motion=null)=>blocks.push({x,y,z,w,h,d,color,ry,motion});
 const world = spec.build(emitBox) ?? {};
 addFantasy(emitBox,id);
+const farmChaff=farm ? makeFarmChaff(THREE,scene) : null;
+const biomeMotifs=makeBiomeMotifs(THREE,scene,id,world);
 const cycleSeconds=8;
 const turn=Math.PI*2;
 const overhead=cam.getWorldDirection(new THREE.Vector3()).y < -.65;
@@ -126,6 +130,15 @@ stone.onBeforeCompile = (shader)=>{
  // Wide cloud shadows brush terrain gradually, with the same phase on wrap.
  float shadowWave=sin(worldP.x*.18+worldP.z*.09-fieldTime)+.43*sin(worldP.z*.19-fieldTime);
  diffuseColor.rgb *= 1.-.045*smoothstep(.37,1.20,shadowWave);
+ ${farm ? `if(worldP.x < -7.9 && worldP.x > -18.4 && worldP.z > -11.6 && worldP.z < 3.2 && worldP.y>.33 && worldP.y<1.12){
+   float gust=.5+.5*sin(worldP.x*.76+worldP.z*.47-fieldTime*2.);
+   diffuseColor.rgb+=vec3(.052,.031,.007)*gust*max(localP.y+.5,0.);
+ }` : ''}
+ ${id==='orchard' ? `if(worldP.y < 1.55 && localP.y>.28 && worldP.x*worldP.x+worldP.z*worldP.z<640.){
+   float fleck=sin(worldP.x*1.04+worldP.z*.67+sin(fieldTime)*.34)
+             +.66*cos(worldP.z*1.28-worldP.x*.35+cos(fieldTime)*.26);
+   diffuseColor.rgb+=vec3(.085,.056,.018)*smoothstep(.79,1.61,fleck);
+ }` : ''}
  diffuseColor.rgb *= 1.0+(grain-.5)*.31*farFade;
  vec3 tile=floor((voxel+vec3(17.,3.,7.))/3.);
  float tileTone=fract(sin(dot(mod(tile,127.),vec3(31.13,15.37,51.71)))*721.79);
@@ -172,7 +185,7 @@ function animateModels(phase){
  if(!movingMesh)return;
  moving.forEach((b,i)=>{
   const m=b.motion;
-  const travel=1.05*(1-Math.cos(t));
+  const travel=.68*(1-Math.cos(t));
   const axis=m.drive?axleDirection.set(Math.cos(m.heading),0,-Math.sin(m.heading)):m.axis==='x'?axisX:m.axis==='y'?axisY:axisZ;
   const angle=m.drive?(m.radius?travel/m.radius:0):m.spin?t*Math.sign(m.spin):m.amplitude*(.5+.5*Math.sin(t+m.phase));
   pos.set(b.x,b.y,b.z);
@@ -188,7 +201,7 @@ const reflectCam = new THREE.PerspectiveCamera();
 const reflection = new THREE.WebGLRenderTarget(768,432,{type:THREE.HalfFloatType,depthBuffer:true});
 const time = {value:0};
 const waterMat = new THREE.ShaderMaterial({
- lights:true, uniforms:{...THREE.UniformsUtils.clone(THREE.UniformsLib.lights),mirrorMap:{value:reflection.texture}, mirrorProjection:{value:new THREE.Matrix4()},waveStrength:{value:marsh?.30:alpine?.53:1},time},
+ lights:true, uniforms:{...THREE.UniformsUtils.clone(THREE.UniformsLib.lights),mirrorMap:{value:reflection.texture}, mirrorProjection:{value:new THREE.Matrix4()},waveStrength:{value:marsh?.30:alpine?.53:1},millOutlet:{value:new THREE.Vector2(world.wheelContact?.[0]??999,world.wheelContact?.[2]??999)},time},
  vertexShader:`varying vec3 pos; varying vec4 projection; uniform mat4 mirrorProjection;
  #include <common>
  #include <shadowmap_pars_vertex>
@@ -196,7 +209,7 @@ const waterMat = new THREE.ShaderMaterial({
  vec3 transformedNormal=normalize(normalMatrix*normal);
  #include <shadowmap_vertex>
  }`,
- fragmentShader:`varying vec3 pos; varying vec4 projection; uniform sampler2D mirrorMap; uniform float time; uniform float waveStrength;
+ fragmentShader:`varying vec3 pos; varying vec4 projection; uniform sampler2D mirrorMap; uniform float time; uniform float waveStrength;uniform vec2 millOutlet;
  #include <common>
  #include <packing>
  #include <lights_pars_begin>
@@ -216,6 +229,14 @@ const waterMat = new THREE.ShaderMaterial({
  vec3 col=mix(base*(.38+.34*visibility),reflected,.24+.60*fresnel);
  float ripple=smoothstep(.84,.995,s*.64+c*.36);
  col+=vec3(.17,.14,.085)*visibility*ripple*waveStrength*(1.-smoothstep(15.,65.,dist));
+ ${id==='riverside' ? `vec2 outlet=pos.xz-millOutlet;
+   float radius=length(outlet*vec2(1.1,.82));
+   float ring=smoothstep(.68,.98,cos(11.*radius-time*4.));
+   float foam=ring*exp(-radius*1.35)*smoothstep(.05,.42,radius);
+   col+=foam*vec3(.24,.28,.26);` : ''}
+ ${alpine ? `float iceGlint=smoothstep(.91,.997,s*.64+c*.36)
+     *(.55+.45*sin(p.x*.5+p.y*.3+time));
+   col+=vec3(.18,.22,.24)*iceGlint*visibility;` : ''}
  gl_FragColor=vec4(col,1.);
  #include <tonemapping_fragment>
  #include <colorspace_fragment>
@@ -319,6 +340,8 @@ function draw(){
  if(chimney)smoke(phase);
  animateModels(phase);animateSeason(phase);time.value=phase*turn;
  breeze(phase);
+ farmChaff?.(phase);
+ biomeMotifs(phase);
  // Shadows move with the actor on each displayed frame. Static views reuse their map.
  if(moving.length)renderer.shadowMap.needsUpdate=true;
  if(spec.water && (lastMirror===-Infinity || (moving.length && elapsed-lastMirror>=1/12))){
@@ -370,7 +393,7 @@ window.paintScenicFrame = (fraction) => {
   const phase = fraction % 1;
   elapsed = phase * cycleSeconds;
   const eased = (1 - Math.cos(turn * phase)) * 0.5;
-  cam.position.copy(cameraOffset).applyAxisAngle(vertical, eased * 0.018).add(aim);
+  cam.position.copy(cameraOffset).applyAxisAngle(vertical, eased * 0.012).add(aim);
   cam.lookAt(aim);
   cam.updateMatrixWorld();
   lastMirror = -Infinity;
