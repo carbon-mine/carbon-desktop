@@ -77,13 +77,21 @@ impl Reader {
         step: usize,
         cancellation: Cancellation,
     ) -> io::Result<Self> {
+        Self::from_child(
+            Self::command(source, file, step).spawn()?,
+            step,
+            cancellation,
+        )
+    }
+
+    fn command(source: &Source, file: &Path, step: usize) -> Command {
         let mut command = Command::new(&source.decoder);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        let child = command
+        command
             .args([
                 "-nostdin",
                 "-v",
@@ -123,9 +131,8 @@ impl Reader {
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
-        Self::from_child(child, step, cancellation)
+            .stderr(Stdio::null());
+        command
     }
 
     fn from_child(mut child: Child, step: usize, cancellation: Cancellation) -> io::Result<Self> {
@@ -185,6 +192,21 @@ impl Drop for Reader {
 mod tests {
     use super::*;
     use std::{io::Write, sync::mpsc, time::Duration};
+
+    #[test]
+    fn looping_seek_is_applied_to_output_after_the_movie_input() {
+        let source = Source {
+            decoder: PathBuf::from("ffmpeg"),
+            directory: PathBuf::new(),
+        };
+        let command = Reader::command(&source, Path::new("scene.mp4"), CYCLE + 105);
+        let args: Vec<_> = command.get_args().collect();
+        let input = args.iter().position(|arg| *arg == "-i").unwrap();
+        let seek = args.iter().position(|arg| *arg == "-ss").unwrap();
+        assert_eq!(args[input + 1], "scene.mp4");
+        assert!(seek > input + 1, "input seeks change the loop boundary");
+        assert_eq!(args[seek + 1], "3.500000000");
+    }
 
     #[test]
     #[ignore = "child process used by cancellation_unblocks_a_partial_frame"]
