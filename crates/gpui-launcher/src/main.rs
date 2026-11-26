@@ -3,9 +3,11 @@
 
 mod accessibility;
 mod account_panel;
+mod artwork;
 mod data;
+mod home_playback;
+use carbon_desktop_gpui::scenery;
 mod home;
-mod home_scene;
 mod icons;
 mod popup;
 mod progress;
@@ -18,9 +20,9 @@ use carbon_store::{Action, InstanceId, InstanceView, Snapshot};
 use carbon_vanilla::{GameFilePlan, GameFilesPrepared};
 use data::{Activity, DataRoot, Inspection, size_label};
 use gpui::{
-    AnyWindowHandle, App, Application, Context, Entity, FocusHandle, KeyBinding, MouseButton, Point,
-    ScrollHandle, TitlebarOptions, Window, WindowDecorations, WindowOptions, actions, prelude::*, px,
-    size,
+    AnyWindowHandle, App, Application, Context, Entity, FocusHandle, KeyBinding, MouseButton,
+    Point, ScrollHandle, TitlebarOptions, Window, WindowDecorations, WindowOptions, actions,
+    prelude::*, px, size,
 };
 use gpui_component::{Root, input::InputState};
 use std::{
@@ -35,7 +37,14 @@ use uuid::Uuid;
 
 actions!(
     desktop,
-    [FindInstance, NewInstance, ImportPack, Back, FocusActivity]
+    [
+        FindInstance,
+        NewInstance,
+        ImportPack,
+        Back,
+        HistoryBack,
+        FocusActivity
+    ]
 );
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -224,6 +233,7 @@ struct Launcher {
     tab: Tab,
     surface: Surface,
     history: Vec<HistoryEntry>,
+    artwork: artwork::HomeArtwork,
     home_order: home::HomeOrder,
     home_switcher_open: bool,
     diagnostics_open: bool,
@@ -300,6 +310,7 @@ impl Launcher {
         )
         .detach();
         cx.observe_window_activation(window, |this, win, cx| {
+            cx.notify();
             if win.is_window_active() {
                 this.account
                     .update(cx, account_panel::AccountPanel::refresh);
@@ -342,6 +353,8 @@ impl Launcher {
         );
         #[cfg(not(windows))]
         let initial_message = "No active tasks".to_owned();
+        let home_order = home::HomeOrder::load(&root.path);
+        let artwork = artwork::HomeArtwork::new(&root.path, cx);
         let mut launcher = Self {
             #[cfg(target_os = "linux")]
             reduced_motion: true,
@@ -374,7 +387,8 @@ impl Launcher {
             tab: Tab::Overview,
             surface: start,
             history: Vec::new(),
-            home_order: home::HomeOrder::load(&root.path),
+            home_order,
+            artwork,
             home_switcher_open: false,
             diagnostics_open: false,
             show_detail: false,
@@ -455,14 +469,14 @@ impl Launcher {
         if self.popup.is_some() || self.picker_open {
             return;
         }
-        self.show_surface(Surface::Library, window, cx);
+        let switched = self.show_surface(Surface::Library, window, cx);
         self.home_switcher_open = false;
         let narrow = is_narrow(window);
         self.search_back_to_detail =
             narrow && return_to_detail && (self.show_detail || self.search_back_to_detail);
         let reveal_search = self.show_detail && narrow;
         self.show_detail = false;
-        if reveal_search {
+        if reveal_search || switched {
             let input = self.search.clone();
             window.on_next_frame(move |window, cx| {
                 input.update(cx, |input, cx| input.focus(window, cx));
@@ -1556,7 +1570,7 @@ fn main() -> anyhow::Result<()> {
             KeyBinding::new("ctrl-o", ImportPack, Some("CarbonDesktop")),
             KeyBinding::new("ctrl-w", shell::CloseLauncher, Some("CarbonDesktop")),
             KeyBinding::new("escape", Back, Some("CarbonDesktop")),
-            KeyBinding::new("alt-left", Back, Some("CarbonDesktop")),
+            KeyBinding::new("alt-left", HistoryBack, Some("CarbonDesktop")),
             KeyBinding::new("f6", FocusActivity, Some("CarbonDesktop")),
             KeyBinding::new("escape", popup::Close, Some("CarbonPopup")),
             KeyBinding::new("enter", popup::Save, Some("CarbonPopup")),

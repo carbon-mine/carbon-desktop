@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
 mod scenery;
+pub(crate) use scenery::ScenePicker;
 mod targets;
 
 use super::theme::{Partition, compact_action, label};
@@ -34,7 +35,7 @@ pub enum Kind {
     Profile(Mode, Option<Profile>),
     Server(Profile),
     Targets(Uuid, carbon_profiles::InstanceTargets),
-    Scenery(super::scenery::Landscape),
+    Scenery(ScenePicker),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
     Notice {
@@ -68,7 +69,7 @@ struct Popup {
     form: Option<Form>,
     server: Option<ServerForm>,
     targets: Option<TargetDialog>,
-    scene: Option<super::scenery::Landscape>,
+    scene: Option<ScenePicker>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
     account: Option<AccountDialog>,
@@ -717,7 +718,7 @@ impl Render for Popup {
                 Role::Alert,
             ));
         }
-        if let Some(scene) = self.scene {
+        if let Some(scene) = &self.scene {
             content = content.child(self.scene_choices(scene, cx));
         }
         if let Some(error) = &self.error {
@@ -752,10 +753,11 @@ impl Render for Popup {
                 "Close"
             };
             (dismiss, Partition::Neutral)
-        } else if self.scene.is_some() || self
-            .targets
-            .as_ref()
-            .is_some_and(|targets| !targets.editing())
+        } else if self.scene.is_some()
+            || self
+                .targets
+                .as_ref()
+                .is_some_and(|targets| !targets.editing())
         {
             ("Close", Partition::Neutral)
         } else {

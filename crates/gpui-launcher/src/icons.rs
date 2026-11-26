@@ -37,12 +37,27 @@ pub fn brand_mark(light_ink: bool, height: Pixels) -> Svg {
     } else {
         ("brand/mark-dark.svg", 0x202427)
     };
-    svg().path(path).flex_none().h(height).w(height * (81. / 87.75)).text_color(gpui::rgb(shade))
+    svg()
+        .path(path)
+        .flex_none()
+        .h(height)
+        .w(height * (81. / 87.75))
+        .text_color(gpui::rgb(shade))
 }
 
-const BRAND: [(&str, &[u8]); 2] = [
-    ("brand/mark-light.svg", include_bytes!("../../../design-system/inherited/brand/mark-light.svg")),
-    ("brand/mark-dark.svg", include_bytes!("../../../design-system/inherited/brand/mark-dark.svg")),
+const BRAND: [(&str, &[u8]); 3] = [
+    (
+        "brand/home-identity-shadow.png",
+        include_bytes!("../assets/home-identity-shadow.png"),
+    ),
+    (
+        "brand/mark-light.svg",
+        include_bytes!("../../../design-system/inherited/brand/mark-light.svg"),
+    ),
+    (
+        "brand/mark-dark.svg",
+        include_bytes!("../../../design-system/inherited/brand/mark-dark.svg"),
+    ),
 ];
 
 pub struct Assets;
@@ -71,7 +86,8 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(ICONS
             .iter()
-            .map(|(icon, _)| icon.path()).chain(BRAND.iter().map(|(name, _)| *name))
+            .map(|(icon, _)| icon.path())
+            .chain(BRAND.iter().map(|(name, _)| *name))
             .filter(|name| name.starts_with(path))
             .map(Into::into)
             .collect())

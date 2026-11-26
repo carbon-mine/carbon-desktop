@@ -15,10 +15,10 @@ use theme::{
     Palette, Partition, compact_action, label as control_label, partition, partition_strip,
 };
 
-fn col() -> gpui::Div {
+pub(super) fn col() -> gpui::Div {
     div().flex().flex_col()
 }
-fn row() -> gpui::Div {
+pub(super) fn row() -> gpui::Div {
     div().flex().items_center()
 }
 fn command_row(p: Palette) -> gpui::Div {
@@ -37,7 +37,7 @@ impl Launcher {
         clippy::too_many_arguments,
         reason = "A command binds styling, availability, and one action."
     )]
-    fn command<F>(
+    pub(super) fn command<F>(
         &self,
         p: Palette,
         id: impl Into<gpui::ElementId>,
@@ -80,7 +80,7 @@ impl Launcher {
         clippy::too_many_arguments,
         reason = "The toolbar binds its independent icon, text, and command state in one call."
     )]
-    fn toolbar_command(
+    pub(super) fn toolbar_command(
         &self,
         p: Palette,
         id: &'static str,
@@ -102,7 +102,7 @@ impl Launcher {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn control<F>(
+    pub(super) fn control<F>(
         &self,
         button: Button,
         id: impl Into<gpui::ElementId>,
@@ -194,7 +194,7 @@ impl Launcher {
                         },
                         p,
                         cx,
-                        move |this, _, cx| this.choose_personal(id, cx),
+                        move |this, _, cx| this.select_personal(id, cx),
                     )
                 })
                 .collect()
@@ -251,6 +251,7 @@ impl Launcher {
                         .py_2()
                         .gap(px(2.))
                         .overflow_y_scroll()
+                        .track_scroll(&self.library_scroll)
                         .children(entries)
                         .when(empty, |list| {
                             list.child(div().px_2().py_2().text_color(p.muted).child(
@@ -458,6 +459,7 @@ impl Launcher {
             .min_h_0()
             .min_w_0()
             .overflow_y_scroll()
+            .track_scroll(&self.detail_scroll)
             .bg(p.surface)
             .track_focus(&self.detail_focus)
             .tab_stop(false);
@@ -1909,6 +1911,7 @@ impl Launcher {
 
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_home_artwork(self.surface == super::Surface::Home, window, cx);
         let p = Palette::read(self.preference, window.appearance());
         if self.applied_dark != Some(p.dark) {
             self.applied_dark = Some(p.dark);
@@ -1928,7 +1931,8 @@ impl Render for Launcher {
         } else {
             self.selected_profile().is_some()
         };
-        let inline_activity = !self.review
+        let inline_activity = self.surface == Surface::Library
+            && !self.review
             && self.tab == Tab::Overview
             && (!narrow || self.show_detail)
             && self
@@ -1971,6 +1975,26 @@ impl Render for Launcher {
             .or(self.fixture_task.as_ref())
             .filter(|task| !inline_activity && !task.activity.cancel.load(Ordering::Acquire));
         let stack_activity = narrow && footer_meter.is_some();
+        let body: AnyElement = if self.surface == Surface::Home {
+            self.home_view(p, window, cx)
+        } else {
+            div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .when(!narrow || !self.show_detail || !have_detail, |body| {
+                    body.child(self.sidebar(p, narrow, cx))
+                })
+                .when(!narrow || self.show_detail, |body| {
+                    body.child(self.workspace(
+                        p,
+                        narrow,
+                        narrow || f32::from(window.viewport_size().width) - self.rail_width < 620.,
+                        cx,
+                    ))
+                })
+                .into_any_element()
+        };
         let frame = col()
             .id("launcher-frame")
             .size_full()
@@ -2045,106 +2069,127 @@ impl Render for Launcher {
                 cx.listener(|this, _: &ImportPack, win, cx| this.pick(Picker::Pack, win, cx)),
             )
             .on_action(cx.listener(|this, _: &Back, win, cx| {
-                if back_returns_to_detail(
-                    this.search_back_to_detail,
-                    this.show_detail,
-                    is_narrow(win),
-                ) {
+                if this.surface == Surface::Library
+                    && back_returns_to_detail(
+                        this.search_back_to_detail,
+                        this.show_detail,
+                        is_narrow(win),
+                    )
+                {
                     this.search_back_to_detail = false;
                     this.show_detail = true;
                     this.detail_focus.focus(win);
                     cx.notify();
-                } else if this.show_detail {
+                } else if this.surface == Surface::Library && this.show_detail {
                     this.search_back_to_detail = false;
                     this.find(win, cx);
                 } else {
                     this.search_back_to_detail = false;
+                    if !this.history_back(win, cx) {
+                        this.root_focus.focus(win);
+                    }
+                }
+            }))
+            .on_action(cx.listener(|this, _: &HistoryBack, win, cx| {
+                if !this.history_back(win, cx) {
+                    this.root_focus.focus(win);
                 }
             }))
             .on_action(
                 cx.listener(|this, _: &FocusActivity, win, _| this.activity_focus.focus(win)),
             )
-            .child(
-                row()
-                    .flex_wrap()
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(p.stroke)
-                    .child(self.toolbar_command(
-                        p,
-                        "new",
-                        "New instance",
-                        Icon::Add,
-                        self.busy(),
-                        cx,
-                        |this, win, cx| this.editor(popup::Mode::Create, win, cx),
-                    ))
-                    .when(cfg!(target_os = "linux"), |bar| {
-                        bar.child(self.command(
-                            p,
-                            "file-menu",
-                            "File",
-                            false,
-                            self.popup.is_some(),
-                            cx,
-                            |this, win, cx| this.open_shell_menu(shell::Page::File, win, cx),
-                        ))
-                        .child(self.command(
-                            p,
-                            "view-menu",
-                            "View",
-                            false,
-                            self.popup.is_some(),
-                            cx,
-                            |this, win, cx| this.open_shell_menu(shell::Page::View, win, cx),
-                        ))
-                    })
-                    .child(div().flex_1())
-                    .when_some(account_name.filter(|_| !narrow), |bar, name| {
-                        bar.child(
-                            self.accessibility.text(
-                                div()
-                                    .max_w(px(155.))
-                                    .truncate()
-                                    .text_sm()
-                                    .text_color(p.muted)
-                                    .child(name.clone()),
-                                "active-account-name",
-                                name,
-                                Role::Label,
-                            ),
+            .when(self.surface == Surface::Library, |shell| {
+                shell.child(
+                    row()
+                        .flex_wrap()
+                        .px_3()
+                        .py_2()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(p.stroke)
+                        .child(
+                            row()
+                                .gap_2()
+                                .pr_1()
+                                .child(icons::brand_mark(p.dark, px(24.)))
+                                .when(!narrow, |brand| {
+                                    brand.child(div().font_semibold().child("Carbon Desktop"))
+                                }),
                         )
-                    })
-                    .child(self.toolbar_command(
-                        p,
-                        "microsoft-account",
-                        account.toolbar_label(),
-                        Icon::Account,
-                        self.popup.is_some() || self.picker_open,
-                        cx,
-                        |this, window, cx| this.open_account(window, cx),
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .when(!narrow || !self.show_detail || !have_detail, |body| {
-                        body.child(self.sidebar(p, narrow, cx))
-                    })
-                    .when(!narrow || self.show_detail, |body| {
-                        body.child(self.workspace(
+                        .child(self.surface_tabs(p, cx))
+                        .when(!self.history.is_empty(), |bar| {
+                            bar.child(self.command(
+                                p,
+                                "history-back",
+                                "Back",
+                                false,
+                                self.popup.is_some(),
+                                cx,
+                                |this, window, cx| {
+                                    if !this.history_back(window, cx) {
+                                        this.root_focus.focus(window);
+                                    }
+                                },
+                            ))
+                        })
+                        .child(div().flex_none().w(px(1.)).h(px(20.)).bg(p.stroke))
+                        .child(self.toolbar_command(
                             p,
-                            narrow,
-                            narrow
-                                || f32::from(window.viewport_size().width) - self.rail_width < 620.,
+                            "new",
+                            "New instance",
+                            Icon::Add,
+                            self.busy(),
                             cx,
+                            |this, win, cx| this.editor(popup::Mode::Create, win, cx),
                         ))
-                    }),
-            )
+                        .when(cfg!(target_os = "linux"), |bar| {
+                            bar.child(self.command(
+                                p,
+                                "file-menu",
+                                "File",
+                                false,
+                                self.popup.is_some(),
+                                cx,
+                                |this, win, cx| this.open_shell_menu(shell::Page::File, win, cx),
+                            ))
+                            .child(self.command(
+                                p,
+                                "view-menu",
+                                "View",
+                                false,
+                                self.popup.is_some(),
+                                cx,
+                                |this, win, cx| this.open_shell_menu(shell::Page::View, win, cx),
+                            ))
+                        })
+                        .child(div().flex_1())
+                        .when_some(account_name.filter(|_| !narrow), |bar, name| {
+                            bar.child(
+                                self.accessibility.text(
+                                    div()
+                                        .max_w(px(155.))
+                                        .truncate()
+                                        .text_sm()
+                                        .text_color(p.muted)
+                                        .child(name.clone()),
+                                    "active-account-name",
+                                    name,
+                                    Role::Label,
+                                ),
+                            )
+                        })
+                        .child(self.toolbar_command(
+                            p,
+                            "microsoft-account",
+                            account.toolbar_label(),
+                            Icon::Account,
+                            self.popup.is_some() || self.picker_open,
+                            cx,
+                            |this, window, cx| this.open_account(window, cx),
+                        )),
+                )
+            })
+            .child(body)
             .child(
                 self.accessibility.focus_group(
                     div()
