@@ -925,16 +925,7 @@ impl Launcher {
         } else {
             "Setup required"
         };
-        let play = compact_action("play", p, Partition::Neutral, self.popup.is_some(), cx)
-            .min_w(px(82.))
-            .child(
-                row()
-                    .gap_1()
-                    .font_semibold()
-                    .text_color(p.ink)
-                    .child(Icon::Play.render(px(16.), p.ink))
-                    .child("Play"),
-            );
+        let play = theme::launch_action("Play", p, self.popup.is_some(), cx);
         let play = self.control(
             play,
             "play",
@@ -958,7 +949,7 @@ impl Launcher {
                     .gap_3()
                     .px_5()
                     .py_4()
-                    .bg(p.instance_background())
+                    .bg(p.layer)
                     .child(
                         row()
                             .min_w_0()
