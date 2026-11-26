@@ -1,4 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
+// The source export and the bundled pack render at the requested canvas size.
+// 8,294,400 pixels (3840 x 2160) bounds the authoring browser's GPU work.
+export const MAX_AUTHORING_PIXELS = 8_294_400;
+
+export function authoringSize(text) {
+  const match = /^([1-9][0-9]{0,4})x([1-9][0-9]{0,4})$/.exec(text ?? '');
+  if (!match) throw Error('Use a width and height such as 2560x1440');
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (width < 2 || height < 2) throw Error('Use at least 2x2 pixels');
+  if (width * height > MAX_AUTHORING_PIXELS) {
+    throw Error('Source size exceeds the ' + MAX_AUTHORING_PIXELS + '-pixel authoring budget');
+  }
+  return { width, height, pixels: width * height };
+}
+
 export function cameraFor(sources, reference) {
   if (!Object.hasOwn(sources, reference.source)) throw Error('Unknown authored scene: '+reference.source);
   const cameras=sources[reference.source].cameras;

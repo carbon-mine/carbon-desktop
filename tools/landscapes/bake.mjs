@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Run from this directory after npm ci. Chrome is needed only to bake the native assets.
 import { build } from 'esbuild';
-import { cameraFor, validateOutputs } from './source-config.mjs';
+import { authoringSize, cameraFor, validateOutputs } from './source-config.mjs';
 import { exportAvc } from './avc-export.mjs';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
@@ -18,13 +18,8 @@ const avcDir=options['avc-dir'];
 const exportDir=pngDir??avcDir;
 if(pngDir && avcDir) throw Error('Choose one export format per run');
 if(avcDir && options.frames) throw Error('AVC clips cover the complete authored cycle');
-if(!exportDir && (options.size || options.frames || options.view)) {
-  throw Error('Use --png-dir or --avc-dir for a separate source export');
-}
-const resolution=/^(\d+)x(\d+)$/.exec(options.size??(avcDir ? '1440x810' : '960x540'));
-if(!resolution) throw Error('Use a width and height such as 1440x810');
-const [width,height]=resolution.slice(1).map(Number);
-if(width<1 || height<1 || width*height>1600000) throw Error('Source size exceeds the native authoring pixel budget');
+if(!exportDir && options.frames) throw Error('Use --png-dir for a partial source export');
+const {width,height,pixels}=authoringSize(options.size??(avcDir ? '1440x810' : '960x540'));
 const requestedFrames=Number(options.frames??1);
 if(!Number.isSafeInteger(requestedFrames) || requestedFrames<1) throw Error('--frames must be a positive integer');
 
@@ -74,8 +69,15 @@ try {
   for (const entry of manifest.views) {
     if (!entry.bake || (options.view && options.view!==entry.id)) continue;
     const view = entry.id;
-    await page.goto(base + '?' + new URLSearchParams(entry.bake));
+    await page.goto(base + '?' + new URLSearchParams({...entry.bake, pixels:String(pixels)}));
     await page.waitForFunction(() => typeof window.paintScenicFrame === 'function');
+    const canvas = await page.evaluate(() => {
+      const element = document.querySelector('canvas');
+      return [element.width, element.height];
+    });
+    if(canvas[0]!==width || canvas[1]!==height) {
+      throw Error(view+' rendered a '+canvas.join('x')+' canvas instead of '+width+'x'+height);
+    }
     const framesPerView = entry.frames ? entry.fps * cycleSeconds : 1;
     if(avcDir){
       if(!entry.frames) throw Error('AVC export needs a motion frame rate for '+view);
