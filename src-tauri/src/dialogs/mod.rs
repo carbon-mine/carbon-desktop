@@ -74,6 +74,7 @@ impl Form {
     fn new(mode: Mode, original: Option<&Profile>) -> Result<Self, String> {
         let mut initial = match (mode, original) {
             (Mode::Create, None) => Profile {
+                icon_id: None,
                 id: Uuid::new_v4(),
                 name: String::new(),
                 version: VanillaVersion::Release26_3,
@@ -105,6 +106,7 @@ impl Form {
             })
         };
         let mut edited = Profile {
+            icon_id: self.initial.icon_id.clone(),
             id: self.initial.id,
             imported_pack: self.initial.imported_pack.clone(),
             server_address: self.initial.server_address.clone(),
