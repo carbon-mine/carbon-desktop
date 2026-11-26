@@ -1,10 +1,11 @@
 use crate::{
+    play::{self, Clock, Installation, LaunchDecision, PlayBlocker, PlayMode, Selection},
     vault::{SavedAccounts, Secret, Vault, ACCOUNT_LIMIT},
     AccountError, AuthenticatedAccount, DeviceClient, DevicePoll,
 };
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread,
@@ -60,6 +61,8 @@ impl Drop for Owner {
 }
 
 struct Core {
+    subject: Arc<()>,
+    registration: Option<Uuid>,
     state: Mutex<State>,
     changed: Condvar,
 }
@@ -98,6 +101,7 @@ struct State {
     saved: SavedAccounts,
     active: Option<Uuid>,
     live: BTreeMap<Uuid, AuthenticatedAccount>,
+    entitlement_denials: BTreeSet<Uuid>,
 }
 
 const SIGNED_OUT: &str = "Sign in with the Microsoft account that owns Minecraft: Java Edition.";
@@ -127,11 +131,15 @@ impl State {
             saved: SavedAccounts::default(),
             active: None,
             live: BTreeMap::new(),
+            entitlement_denials: BTreeSet::new(),
         }
     }
 
     fn schedule(&mut self, job: Job, message: &str) {
-        self.generation = self.generation.wrapping_add(1);
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("account revision exhausted");
         let ticket = Ticket {
             generation: self.generation,
             job,
@@ -185,6 +193,8 @@ impl State {
     fn replace_saved(&mut self, saved: SavedAccounts) {
         self.live
             .retain(|id, _| !self.saved.includes(*id) || saved.includes(*id));
+        self.entitlement_denials
+            .retain(|id| saved.includes(*id) || self.live.contains_key(id));
         self.saved = saved;
     }
 
@@ -244,6 +254,20 @@ impl Core {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
+    fn launch_selection<'a>(&'a self, state: &State) -> Selection<'a> {
+        Selection {
+            owner: &self.subject,
+            revision: state.generation,
+            registration: self.registration,
+            profile: state.active,
+            online_verified: state.active.is_some_and(|id| state.verified(id)),
+            entitlement_denied: state
+                .active
+                .is_some_and(|id| state.entitlement_denials.contains(&id)),
+            pending: state.ticket.is_some() || state.stopping,
+        }
+    }
+
     fn complete(&self, ticket: Ticket, status: AccountState, message: impl Into<String>) {
         let mut state = self.state();
         if state.current(ticket) {
@@ -296,6 +320,8 @@ impl Accounts {
             Some(_) => {}
         };
         let core = Arc::new(Core {
+            subject: Arc::new(()),
+            registration: client_id,
             state: Mutex::new(state),
             changed: Condvar::new(),
         });
@@ -320,6 +346,52 @@ impl Accounts {
 
     pub fn snapshot(&self) -> AccountView {
         self.owner.0.state().view()
+    }
+
+    /// Reports a fixed, redacted reason for this build's unavailable play mode.
+    pub fn play_blocker(&self, mode: PlayMode) -> PlayBlocker {
+        let core = &self.owner.0;
+        let state = core.state();
+        play::missing_evidence(core.launch_selection(&state), mode)
+    }
+
+    /// Requests a process-local typed decision from trusted account evidence.
+    /// Provider-approved offline and scoped online evidence are unavailable in this build.
+    pub fn prepare_launch(
+        &self,
+        mode: PlayMode,
+        installation: Option<Installation>,
+    ) -> Result<LaunchDecision, PlayBlocker> {
+        let core = &self.owner.0;
+        let state = core.state();
+        play::issue(
+            core.launch_selection(&state),
+            mode,
+            installation,
+            None,
+            Clock::now(),
+        )
+    }
+
+    /// Runs the final bounded native spawn admission under the account state lock.
+    /// The runner must already hold the exact protected installation lease. Keep
+    /// blocking waits, downloads, reentrant account calls, and IPC outside this callback.
+    pub fn with_launch_authority<T>(
+        &self,
+        decision: LaunchDecision,
+        installation: Option<Installation>,
+        start: impl FnOnce() -> T,
+    ) -> Result<T, PlayBlocker> {
+        let core = &self.owner.0;
+        let state = core.state();
+        play::admit(
+            decision,
+            core.launch_selection(&state),
+            installation,
+            None,
+            Clock::now(),
+            start,
+        )
     }
 
     pub fn begin(&self) {
@@ -533,6 +605,7 @@ fn publish(
     }
     let id = account.profile().id;
     state.active = Some(id);
+    state.entitlement_denials.remove(&id);
     state.live.insert(id, account);
     let status = state.stable_status();
     state.finish(status, message);
@@ -596,11 +669,11 @@ fn verify(
     let token = match vault.map_or(Ok(memory), |vault| vault.read(id)) {
         Ok(Some(token)) => token,
         Ok(None) => {
-            failed_verification(core, ticket, id, vault, None, NEED_VERIFY);
+            failed_verification(core, ticket, id, vault, None, false, NEED_VERIFY);
             return;
         }
         Err(()) => {
-            failed_verification(core, ticket, id, vault, None, VAULT_UNAVAILABLE);
+            failed_verification(core, ticket, id, vault, None, false, VAULT_UNAVAILABLE);
             return;
         }
     };
@@ -631,7 +704,7 @@ fn verify(
                 ) {
                     Ok(Some(saved)) => Some(saved),
                     _ => {
-                        failed_verification(core, ticket, id, None, None, VAULT_CHANGED);
+                        failed_verification(core, ticket, id, None, None, false, VAULT_CHANGED);
                         return;
                     }
                 }
@@ -642,7 +715,19 @@ fn verify(
         }
         Err(error) => {
             let rejected = (error == AccountError::RefreshRejected).then_some(token.as_str());
-            failed_verification(core, ticket, id, vault, rejected, &error.to_string());
+            let denied = matches!(
+                error,
+                AccountError::NotEntitled | AccountError::RefreshRejected
+            );
+            failed_verification(
+                core,
+                ticket,
+                id,
+                vault,
+                rejected,
+                denied,
+                &error.to_string(),
+            );
         }
     }
 }
@@ -653,6 +738,7 @@ fn failed_verification(
     id: Uuid,
     vault: Option<&Vault>,
     rejected: Option<&str>,
+    denied: bool,
     message: &str,
 ) {
     if !core.commit(ticket) {
@@ -671,6 +757,9 @@ fn failed_verification(
     };
     let mut state = core.state();
     if state.current(ticket) {
+        if denied {
+            state.entitlement_denials.insert(id);
+        }
         // Keep a session-only row for retry after transient failures, with its verification invalidated.
         if rejected.is_some() || state.saved.includes(id) {
             state.live.remove(&id);
@@ -703,6 +792,7 @@ fn remove(core: &Core, ticket: Ticket, id: Uuid, vault: Option<&Vault>) {
         return;
     }
     state.live.remove(&id);
+    state.entitlement_denials.remove(&id);
     match saved {
         Ok(saved) => {
             if state.retry_remove == Some(id) {
