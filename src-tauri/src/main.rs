@@ -160,6 +160,7 @@ fn main() {
             open_game_folder,
             import_pack,
             setup::inspect_vanilla_profile,
+            setup::review_installed_launch_inputs,
             setup::import_vanilla_client,
             setup::select_profile_java,
             setup::install_profile_java,

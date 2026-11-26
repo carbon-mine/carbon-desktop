@@ -61,6 +61,7 @@ enum Outcome {
     Review(Inspection, GameFilePlan),
     Files(GameFilesPrepared, Result<Inspection, String>),
     Inspected(Inspection, &'static str),
+    LaunchInputs(carbon_setup::LaunchInputReview),
     OpenedFolder,
     Sandbox(carbon_session::SessionReport),
     Fixtures(Snapshot),
@@ -573,6 +574,9 @@ impl Launcher {
         });
         let setup = profile.and_then(|profile| self.setup.get_mut(&profile.id));
         match result {
+            Ok(Outcome::LaunchInputs(review)) => {
+                self.message = review.message;
+            }
             Ok(Outcome::Review(inspection, plan)) => {
                 if let Some(setup) = setup {
                     setup.inspection = Some(inspection);
@@ -741,6 +745,24 @@ impl Launcher {
             move |path, _| {
                 data::inspect(&path, id, false)
                     .map(|report| Outcome::Inspected(report, "Instance setup checked."))
+            },
+        );
+    }
+
+    fn review_launch_inputs(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.selected_profile().cloned() else {
+            return;
+        };
+        let id = profile.id;
+        self.work(
+            Some(profile),
+            "Checking installed launch inputs",
+            false,
+            cx,
+            move |root, _| {
+                Ok(Outcome::LaunchInputs(
+                    carbon_setup::review_installed_launch_inputs(&root, id),
+                ))
             },
         );
     }

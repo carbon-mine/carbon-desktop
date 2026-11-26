@@ -50,6 +50,7 @@ pub enum PlanError {
     UnsupportedArgument,
     MissingMaterial,
     IncompatibleRuntime,
+    RuntimeUnavailable,
     InvalidProfile,
     AccountChanged,
     GenerationChanged,
@@ -78,6 +79,7 @@ impl fmt::Display for PlanError {
             Self::IncompatibleRuntime => {
                 "The verified app-managed Java runtime does not match the selected version."
             }
+            Self::RuntimeUnavailable => "Prepare or verify the required managed Java runtime.",
             Self::InvalidProfile => "The instance settings do not match the verified view.",
             Self::AccountChanged => "The selected Minecraft account or its evidence has changed.",
             Self::GenerationChanged => {
@@ -157,22 +159,14 @@ impl LaunchPlan<'_> {
     }
 
     pub fn summary(&self) -> LaunchSummary {
-        LaunchSummary {
-            version: self.profile.version.id(),
-            platform: self.view.summary().platform.clone(),
-            mode: self.mode,
-            main_class: self.main_class(),
-            java_major: self.runtime.major(),
-            java_release: self.runtime.release(),
-            classpath_entries: self.view.paths().class_path().len(),
-            jvm_arguments: self.jvm.len(),
-            game_arguments: self.game.len(),
-            identity_slots: self
-                .game
-                .iter()
-                .filter(|arg| matches!(arg, GameArgument::Identity(_)))
-                .count(),
-        }
+        summarize(
+            self.profile.version.id(),
+            self.view,
+            self.runtime,
+            self.mode,
+            &self.jvm,
+            &self.game,
+        )
     }
 
     /// Recheck with fresh trusted selection and generation state under supervisor ownership.
@@ -245,15 +239,10 @@ pub fn activation_digest(view: &PreparedInstanceView) -> [u8; 32] {
     digest.finalize().into()
 }
 
-/// Construct a plan entirely from already verified inputs. Holding the returned plan keeps
-/// both source leases borrowed. The caller supplies the trusted profile and account reference.
-pub fn plan_launch<'a>(
+fn audited_inputs(
     profile: &Profile,
-    view: &'a PreparedInstanceView,
-    runtime: &'a RuntimeLease,
-    mode: LaunchMode,
-    account: AccountReference,
-) -> Result<LaunchPlan<'a>, PlanError> {
+    view: &PreparedInstanceView,
+) -> Result<(Platform, u16), PlanError> {
     let summary = view.summary();
     let platform =
         Platform::launch_platform(&summary.platform).ok_or(PlanError::UnsupportedPlatform)?;
@@ -269,27 +258,96 @@ pub fn plan_launch<'a>(
         || profile.imported_pack.is_some()
         || profile.clone().normalize_input().is_err()
         || !view.paths().content_dir().is_absolute()
-        || !runtime.java_executable().is_absolute()
     {
         return Err(PlanError::InvalidProfile);
     }
-    let metadata = &view.plan().metadata;
-    let reviewed = corpus::reviewed(profile.version, metadata)?;
-    if runtime.major() != reviewed.java_major || !runtime.belongs_to(view.root()) {
+    let reviewed = corpus::reviewed(profile.version, &view.plan().metadata)?;
+    Ok((platform, reviewed.java_major))
+}
+
+fn build_arguments(
+    profile: &Profile,
+    view: &PreparedInstanceView,
+    runtime: &RuntimeLease,
+    platform: Platform,
+    java_major: u16,
+) -> Result<arguments::Arguments, PlanError> {
+    if runtime.major() != java_major
+        || !runtime.belongs_to(view.root())
+        || !runtime.java_executable().is_absolute()
+    {
         return Err(PlanError::IncompatibleRuntime);
     }
     let paths = view.paths();
-    let parts = arguments::build(
-        metadata,
+    arguments::build(
+        &view.plan().metadata,
         platform,
         profile,
-        reviewed.java_major,
+        java_major,
         arguments::Material {
             asset_index: paths.asset_index_id(),
             classpath: paths.class_path(),
             log: paths.logging_config(),
         },
-    )?;
+    )
+}
+
+fn summarize(
+    version: &'static str,
+    view: &PreparedInstanceView,
+    runtime: &RuntimeLease,
+    mode: LaunchMode,
+    jvm: &[JvmArgument],
+    game: &[GameArgument],
+) -> LaunchSummary {
+    LaunchSummary {
+        version,
+        platform: view.summary().platform.clone(),
+        mode,
+        main_class: arguments::MAIN_CLASS,
+        java_major: runtime.major(),
+        java_release: runtime.release(),
+        classpath_entries: view.paths().class_path().len(),
+        jvm_arguments: jvm.len(),
+        game_arguments: game.len(),
+        identity_slots: game
+            .iter()
+            .filter(|arg| matches!(arg, GameArgument::Identity(_)))
+            .count(),
+    }
+}
+
+/// Verify the managed runtime and summarize arguments for the selected installed view.
+pub fn preview_launch_inputs(
+    profile: &Profile,
+    view: &PreparedInstanceView,
+    mode: LaunchMode,
+) -> Result<LaunchSummary, PlanError> {
+    let (platform, java_major) = audited_inputs(profile, view)?;
+    let runtime = carbon_runtime::lease_verified(view.root(), java_major)
+        .map_err(|_| PlanError::RuntimeUnavailable)?;
+    let parts = build_arguments(profile, view, &runtime, platform, java_major)?;
+    Ok(summarize(
+        profile.version.id(),
+        view,
+        &runtime,
+        mode,
+        &parts.jvm,
+        &parts.game,
+    ))
+}
+
+/// Construct a plan entirely from already verified inputs. Holding the returned plan keeps
+/// both source leases borrowed. The caller supplies the trusted profile and account reference.
+pub fn plan_launch<'a>(
+    profile: &Profile,
+    view: &'a PreparedInstanceView,
+    runtime: &'a RuntimeLease,
+    mode: LaunchMode,
+    account: AccountReference,
+) -> Result<LaunchPlan<'a>, PlanError> {
+    let (platform, java_major) = audited_inputs(profile, view)?;
+    let parts = build_arguments(profile, view, runtime, platform, java_major)?;
     Ok(LaunchPlan {
         view,
         runtime,

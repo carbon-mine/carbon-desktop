@@ -103,6 +103,8 @@
   let activityHeading = $state<HTMLHeadingElement>()
   let installReviewHeading = $state<HTMLHeadingElement>()
   let requirementsFor = $state<string | null>(null)
+  let launchReview = $state<{ profileId: string; message?: string } | null>(null)
+  let launchReviewRequest = 0
   let primary = $state<HTMLButtonElement>()
   let workspace = $state<HTMLElement>()
   let theme = $state<ThemePreference>('system')
@@ -209,10 +211,24 @@
   }
 
   async function showReadiness() {
-    requirementsFor = personalId
+    const profileId = personalId
+    if (!profileId) return
+    requirementsFor = profileId
     changeTab('Overview')
     await tick()
     document.getElementById('launch-readiness')?.focus()
+    if (personalId !== profileId || (launchReview?.profileId === profileId && launchReview.message === undefined)) return
+    const request = ++launchReviewRequest
+    launchReview = { profileId }
+    let result: {message: string}
+    try {
+      result = await invoke<{ message: string }>('review_installed_launch_inputs', { profileId })
+    } catch {
+      result = { message: 'The launch input review was interrupted. Try again.' }
+    }
+    if (request === launchReviewRequest) {
+      launchReview = personalId === profileId ? { profileId, message: result.message } : null
+    }
   }
 
   function errorText(reason: unknown) {
@@ -819,6 +835,9 @@
                 {#if setupError}<p class="task-error" role="alert">{setupError}</p>{/if}
                 {#if gamePrepared || gameReceipt || requirementsFor === personal.id || packAwaitingSupport(personal)}
                   <div class="readiness"><h4 id="launch-readiness" tabindex="-1">Play requirements</h4>
+                    {#if launchReview?.profileId === personal.id}
+                      <p role="status">{launchReview.message ?? 'Checking installed launch inputs…'}</p>
+                    {/if}
                     {#if setupReport?.blockedReasons.length}
                       {#each setupReport.blockedReasons as reason}<p>{reason}</p>{/each}
                     {:else}<p>Microsoft sign-in and protected Minecraft launch are pending.</p>{/if}

@@ -918,6 +918,7 @@ impl Launcher {
             cx,
             |this, window, cx| {
                 this.tab = Tab::Overview;
+                this.review_launch_inputs(cx);
                 let focus = this.task_focus.clone();
                 window.on_next_frame(move |window, _| focus.focus(window));
                 cx.notify();

@@ -500,6 +500,10 @@ fn private_view_repairs_copied_content_and_preserves_user_state() {
 
     let view = open().unwrap();
     view.verify_for_launch().unwrap();
+    let profile = carbon_profiles::existing_profile(root, f.profile)
+        .unwrap()
+        .unwrap();
+    assert!(lease_installed_view(root, &profile).is_err());
     assert_eq!(view.summary().files, plan.paths.len() + 2);
     assert_eq!(view.summary().copied_bytes, view.summary().total_bytes);
     assert_eq!(view.summary().reused_bytes, 0);
@@ -536,6 +540,12 @@ fn private_view_repairs_copied_content_and_preserves_user_state() {
     fs::write(&save, b"player data").unwrap();
     drop(view);
 
+    let held = lease_installed_view(root, &profile).unwrap();
+    assert_eq!(held.summary().copied_bytes, 0);
+    assert_eq!(fs::read(&save).unwrap(), b"player data");
+    assert!(open().unwrap_err().contains("in use"));
+    drop(held);
+
     let reused = open().unwrap();
     assert_eq!(reused.summary().copied_bytes, 0);
     assert_eq!(reused.summary().reused_bytes, reused.summary().total_bytes);
@@ -547,6 +557,9 @@ fn private_view_repairs_copied_content_and_preserves_user_state() {
     assert_eq!(fs::read(&client).unwrap(), tampered);
     assert_eq!(fs::read(&save).unwrap(), b"player data");
     drop(reused);
+    assert!(lease_installed_view(root, &profile).is_err());
+    assert_eq!(fs::read(&client).unwrap(), tampered);
+    assert_eq!(fs::read(&save).unwrap(), b"player data");
     assert_eq!(
         fs::read(&shared).unwrap(),
         b"test client",

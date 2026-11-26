@@ -31,6 +31,20 @@ pub async fn inspect_vanilla_profile(
 }
 
 #[tauri::command]
+pub async fn review_installed_launch_inputs(
+    root: State<'_, Library>,
+    profile_id: Uuid,
+) -> Result<carbon_setup::LaunchInputReview, String> {
+    let path = root.0.clone();
+    blocking(move || {
+        Ok(carbon_setup::review_installed_launch_inputs(
+            &path, profile_id,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn select_profile_java(
     window: tauri::WebviewWindow,
     root: State<'_, Library>,

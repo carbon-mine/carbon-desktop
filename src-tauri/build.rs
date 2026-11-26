@@ -9,6 +9,7 @@ fn main() {
         "play_readiness",
         "import_pack",
         "inspect_vanilla_profile",
+        "review_installed_launch_inputs",
         "import_vanilla_client",
         "select_profile_java",
         "install_profile_java",

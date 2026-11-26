@@ -1,6 +1,6 @@
 # Vanilla launch adapter comparison
 
-This review covers planning for the pinned Minecraft 26.3 release and 24w14a snapshot on Windows and Linux x86-64. The local Rust planner is the selected development producer. Both interfaces have the same trusted Rust entry point available for future integration. Play remains gated.
+This review covers planning for the pinned Minecraft 26.3 release and 24w14a snapshot on Windows and Linux x86-64. The local Rust planner is the selected development producer. The experimental Play requirements action in both shells uses the same shared, read-only input review. Protected execution remains gated.
 
 ## Corpus
 
@@ -51,13 +51,27 @@ On Linux or WSL with `strace` and Python available, capture the process and file
 bash scripts/trace-launch-corpus.sh .artifacts/launch-adapter .artifacts/launch-adapter/strace-in-house.log
 ```
 
-The default Rust tests cover malformed or ineligible metadata, disallowed JVM flags, missing natives, same-length file tampering, unchanged saves, wrong Java, stale account revision or content activation, and argument and classpath stability. The official corpus exercises both platform rule sets against the expected classpath and asset-index selection. Both checks run against the shared Rust code. GPUI and Tauri wiring, native gameplay and Forge processor qualification remain open.
+The default Rust tests cover malformed or ineligible metadata, disallowed JVM flags, missing natives, same-length file tampering, unchanged saves, wrong Java, stale account revision or content activation, and argument and classpath stability. The official corpus exercises both platform rule sets against the expected classpath and asset-index selection. Both checks run against the shared Rust code. Native gameplay and Forge processor qualification remain open.
 
 In one native Windows x86-64 debug run, the first in-memory argument pass took 0.43–0.62 ms across the four version/platform pairs. The mean of 50 warmed passes for each pair was 0.42–0.51 ms. The same four pairs under WSL2 and `strace` on the same host took 0.53–0.62 ms first pass and 0.47–0.58 ms warmed mean. Timing covers argument generation after loading the verified manifest bytes and building the ordered artifact map. The WSL2 test process peaked at 8,800 kB RSS. Its debug test executable was 12,289,640 bytes. The Windows debug test executable was 7,240,192 bytes. These measurements cover the test harness and shared crates. Marginal launcher binary size and full verification latency remain open.
 
 The trace recorded the test executable's initial start and zero helper attempts, network calls or filesystem mutations. The control separately confirmed detection of all three effects. Windows and WSL2 passed 26 and 28 focused vanilla/runtime tests respectively, with six separately opted-in checks skipped in each default run. The pinned official corpus passed separately on both hosts.
 
 The WSL2 corpus trace runs the in-memory argument builder with synthetic paths. Separate regressions check the actual view and runtime lease boundaries using benign files. The combined public `plan_launch` entry point with a real contained runtime and private state remains open.
+
+### Review already installed inputs
+
+The experimental Play requirements action in GPUI and the named Tauri command `review_installed_launch_inputs` call `carbon_setup::review_installed_launch_inputs`. The shared operation reads an initialized profile and a previously activated, app-managed private game view under existing locks. It checks the manifest, active receipt and private bytes against the installed file map, leases the archive-verified app-managed runtime and runs the audited argument builder. A missing, changed or busy input returns a review message. The returned summary contains version, platform, Java information and argument counts. The runtime lease and private paths stay in Rust. The review leaves launch authorization, native extraction and admission to the trusted account and runner work.
+
+A native Windows x64 debug integration run used a disposable copy of the retained verified 26.3 private view and receipts. The existing managed-Java setup first prepared the pinned Temurin 25 kit. The separately timed review verified 75 classpath entries and five unresolved identity slots in 57.79 seconds. It preserved the active receipt and synthetic save canary and left the staging directory absent. The headless Svelte bridge fixture checked keyboard focus, the named request and the rendered result with mock IPC. The native shell walkthrough and a Linux x64 installed-input run remain open. The expensive rehash runs on explicit user action and needs owner review before production adoption.
+
+To repeat the installed-input test, use a disposable fixture containing an initialized 26.3 profile, its verified private view and receipt, a prepared managed Java 25 kit and a synthetic `game/saves/preview-canary.dat`. Set `CARBON_LAUNCH_INPUT_REVIEW_ROOT` to that root and `CARBON_LAUNCH_INPUT_REVIEW_PROFILE` to the fixture instance UUID. When creating the fixture, `CARBON_LAUNCH_INPUT_PREPARE_JAVA=1` opts into using the pinned managed-Java setup before the review. Leave that environment variable unset to review existing inputs alone.
+
+```sh
+bun run build
+cargo test --locked -p carbon-setup shared_launch_review_uses_the_installed_release_and_managed_java_leases -- --ignored --nocapture
+python scripts/check-tauri-launch-review.py
+```
 
 ### XMCL core probe
 

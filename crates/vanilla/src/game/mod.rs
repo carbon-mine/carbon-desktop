@@ -17,8 +17,8 @@ use std::{
 };
 use uuid::Uuid;
 pub use view::{
-    has_instance_view, prepare_instance_view, InstancePaths, InstanceViewSummary,
-    PreparedInstanceView,
+    has_instance_view, lease_installed_view, prepare_instance_view, InstancePaths,
+    InstanceViewSummary, PreparedInstanceView,
 };
 
 #[derive(Clone, Debug, Serialize)]

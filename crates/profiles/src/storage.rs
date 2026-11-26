@@ -78,6 +78,46 @@ pub(super) fn private_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn read_index(index: &Path) -> Result<Library, String> {
+    let file = File::open(index).map_err(|_| "Could not read the personal profile library.")?;
+    let mut bytes = Vec::new();
+    file.take(MAX_INDEX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Could not read the personal profile library.")?;
+    if bytes.len() as u64 > MAX_INDEX_BYTES {
+        return Err(
+            "The personal profile library exceeds the supported size. Preserve the library.".into(),
+        );
+    }
+    let library: Library = serde_json::from_slice(&bytes).map_err(|_| {
+        "Personal profile metadata is unreadable. Restore the library from a backup."
+    })?;
+    library.validate()?;
+    Ok(library)
+}
+
+pub(super) fn existing(root: &Path) -> Result<Option<Library>, String> {
+    let dir = root.join("personal");
+    if !ordinary_directory(root)? || !ordinary_directory(&dir)? {
+        return Ok(None);
+    }
+    let lock_path = dir.join(LOCK);
+    if !regular_file(&lock_path)? {
+        return Ok(None);
+    }
+    let lock = File::open(lock_path).map_err(|_| "Could not read the personal library lock.")?;
+    lock.try_lock_shared()
+        .map_err(|_| "The personal library is in use. Try again shortly.")?;
+    if !regular_file(&dir.join("initialized"))? || regular_file(&dir.join(IMPORT))? {
+        return Ok(None);
+    }
+    let index = dir.join(INDEX);
+    if !regular_file(&index)? {
+        return Ok(None);
+    }
+    read_index(&index).map(Some)
+}
+
 pub(super) fn open(root: &Path) -> Result<(File, Library), String> {
     // The native shell supplies this root. Player input never participates in path construction.
     if let Some(parent) = root.parent() {
@@ -102,23 +142,7 @@ pub(super) fn open(root: &Path) -> Result<(File, Library), String> {
     let marker = dir.join("initialized");
     let initialized = regular_file(&marker)?;
     let mut library = if regular_file(&index)? {
-        let file =
-            File::open(&index).map_err(|_| "Could not read the personal profile library.")?;
-        let mut bytes = Vec::new();
-        file.take(MAX_INDEX_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "Could not read the personal profile library.")?;
-        if bytes.len() as u64 > MAX_INDEX_BYTES {
-            return Err(
-                "The personal profile library exceeds the supported size. Preserve the library."
-                    .into(),
-            );
-        }
-        let library: Library = serde_json::from_slice(&bytes).map_err(|_| {
-            "Personal profile metadata is unreadable. Restore the library from a backup.".to_owned()
-        })?;
-        library.validate()?;
-        library
+        read_index(&index)?
     } else {
         if initialized {
             return Err("The personal profile index is missing. Restore it from a backup.".into());
