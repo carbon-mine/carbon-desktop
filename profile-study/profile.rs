@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Synthetic identities used only by the two review applications.
+// Synthetic identities for the native design review.
 #[path = "bust.rs"]
 mod bust;
 
