@@ -296,7 +296,14 @@ impl Popup {
                     .child(input("Server address", address))
                     .child(div().text_sm().text_color(p.muted)
                         .child("Use a hostname or IP address, with an optional port.")),
-                EditKind::WorldLabel(_) => col
+                EditKind::WorldLabel(directory) => col
+                    .child(self.accessibility.text(
+                        div().w_full().min_w_0().text_sm().whitespace_normal()
+                            .child(format!("Folder: {directory}")),
+                        "edit-world-folder",
+                        format!("Folder: {directory}"),
+                        Role::Label,
+                    ))
                     .child(input("World label", &form.name))
                     .child(div().text_sm().text_color(p.muted)
                         .child("Leave the label blank to show the folder name. This only changes the launcher label.")),
