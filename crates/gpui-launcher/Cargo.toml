@@ -9,6 +9,7 @@ license = "MPL-2.0"
 anyhow = "1"
 accesskit = "=0.25.2"
 async-channel = "=2.5.0"
+futures = "0.3"
 carbon-account = { path = "../account" }
 carbon-profiles = { path = "../profiles" }
 carbon-pack = { path = "../pack" }
@@ -40,8 +41,6 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsA
 accesskit_unix = "=0.24.1"
 ashpd = { version = "=0.11.1", default-features = false, features = ["async-std"] }
 
-[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-futures = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
