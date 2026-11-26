@@ -23,6 +23,14 @@ struct View {
     poster: String,
     frames: Option<String>,
     fps: Option<u8>,
+    bake: Option<Bake>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Bake {
+    source: String,
+    camera: String,
 }
 
 fn identifier(s: &str) -> bool {
@@ -67,6 +75,11 @@ pub fn generate(root: &Path, output: PathBuf, fixture: Option<&Path>) -> Result<
             .map_err(|e| e.to_string())?;
         catalog.views.push(entry);
     }
+    let sources_file = root.join("../../tools/landscapes/sources.json");
+    println!("cargo:rerun-if-changed={}", sources_file.display());
+    let sources: serde_json::Value =
+        serde_json::from_slice(&fs::read(&sources_file).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     let mut ids = BTreeSet::new();
     let mut entries = Vec::new();
     for view in &catalog.views {
@@ -78,6 +91,16 @@ pub fn generate(root: &Path, output: PathBuf, fixture: Option<&Path>) -> Result<
         {
             return Err(format!(
                 "Invalid identity, title or attribution for {}",
+                view.id
+            ));
+        }
+        if let Some(bake) = &view.bake
+            && (!identifier(&bake.source)
+                || !identifier(&bake.camera)
+                || !sources[&bake.source]["cameras"][&bake.camera].is_object())
+        {
+            return Err(format!(
+                "Unknown authoring source or camera for {}",
                 view.id
             ));
         }

@@ -1,18 +1,36 @@
 // SPDX-License-Identifier: MPL-2.0
 // Run from this directory after npm ci. Chrome is needed only to bake the native assets.
 import { build } from 'esbuild';
+import { cameraFor } from './source-config.mjs';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const manifest = JSON.parse(await readFile(new URL('../../design-system/landscapes/manifest.json', import.meta.url), 'utf8'));
+const sources = JSON.parse(await readFile(new URL('sources.json', import.meta.url), 'utf8'));
+for (const entry of manifest.views) if (entry.bake) cameraFor(sources, entry.bake);
 const framesPerView = 48;
 const output = fileURLToPath(new URL('../../design-system/landscapes/', import.meta.url));
 const assets = await build({
   entryPoints: [fileURLToPath(new URL('live.js', import.meta.url))],
   bundle: true, write: false, format: 'esm', minify: true,
   loader: { '.hdr': 'dataurl', '.png': 'dataurl' },
+  plugins: [{
+    name: 'local-landscape-geometry',
+    setup(builder) {
+      builder.onResolve({filter: /^carbon:geometry$/}, () => ({path:'geometry', namespace:'carbon'}));
+      builder.onLoad({filter: /.*/,namespace:'carbon'}, () => {
+        const imports = [], entries = [];
+        Object.entries(sources).forEach(([id, source], index) => {
+          if (!/^[a-z0-9-]+\.js$/.test(source.module) || !/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(source.factory)) throw Error('Invalid local geometry source ' + id);
+          imports.push('import {' + source.factory + ' as factory' + index + '} from ' + JSON.stringify('./'+source.module) + ';');
+          entries.push(JSON.stringify(id) + ':factory' + index);
+        });
+        return {contents: imports.join('\n')+'\nexport const geometry={'+entries.join(',')+'};', resolveDir:fileURLToPath(new URL('.',import.meta.url))};
+      });
+    }
+  }],
 });
 const base = 'http://landscape.invalid/';
 const script = assets.outputFiles[0].text.replaceAll('</script', '<\\/script');
@@ -30,18 +48,20 @@ try {
     : route.abort());
   const digest = createHash('sha256');
   for (const entry of manifest.views) {
-    if (!entry.frames) continue;
+    if (!entry.bake) continue;
     const view = entry.id;
-    await page.goto(base + (view.endsWith('-overhead') ? '?overhead' : '?scenic') + '#' + view.replace('-overhead', ''));
+    await page.goto(base + '?' + new URLSearchParams(entry.bake));
     await page.waitForFunction(() => typeof window.paintScenicFrame === 'function');
     const frames = [];
-    for (let index = 0; index < framesPerView; index++) {
+    for (let index = 0; index < (entry.frames ? framesPerView : 1); index++) {
       const jpg = await page.evaluate(fraction => {
         window.paintScenicFrame(fraction);
         return document.querySelector('canvas').toDataURL('image/jpeg', 0.81).split(',')[1];
       }, index / (framesPerView - 1));
       frames.push(Buffer.from(jpg, 'base64'));
     }
+    await writeFile(output + '/' + entry.poster, frames[0]);
+    if (!entry.frames) continue;
     const distinct = new Set(frames.map(frame => createHash('sha256').update(frame).digest('hex')));
     if (distinct.size < framesPerView * 0.9 || errors.length) throw Error(view + ' did not render: ' + errors.join('; '));
     const offsets = Buffer.alloc(4 * (frames.length + 2));
@@ -54,7 +74,6 @@ try {
     offsets.writeUInt32LE(length, offsets.length - 4);
     const packed = Buffer.concat([offsets, ...frames]);
     const dest = output + '/' + entry.frames;
-    await writeFile(output + '/' + entry.poster, frames[0]);
     await writeFile(dest + '.next', packed);
     await rename(dest + '.next', dest);
     digest.update(packed);

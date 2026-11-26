@@ -8,7 +8,11 @@
       "poster": "riverside.jpg",
       "frames": "riverside.frames",
       "fps": 12,
-      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0)."
+      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0).",
+      "bake": {
+        "source": "riverside",
+        "camera": "scenic"
+      }
     },
     {
       "id": "farmland",
@@ -17,7 +21,11 @@
       "poster": "farmland.jpg",
       "frames": "farmland.frames",
       "fps": 12,
-      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0)."
+      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0).",
+      "bake": {
+        "source": "farmland",
+        "camera": "scenic"
+      }
     },
     {
       "id": "alpine",
@@ -26,7 +34,11 @@
       "poster": "alpine.jpg",
       "frames": "alpine.frames",
       "fps": 12,
-      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0)."
+      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0).",
+      "bake": {
+        "source": "alpine",
+        "camera": "scenic"
+      }
     },
     {
       "id": "marsh",
@@ -35,7 +47,11 @@
       "poster": "marsh.jpg",
       "frames": "marsh.frames",
       "fps": 12,
-      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0)."
+      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0).",
+      "bake": {
+        "source": "marsh",
+        "camera": "scenic"
+      }
     },
     {
       "id": "orchard",
@@ -44,7 +60,11 @@
       "poster": "orchard.jpg",
       "frames": "orchard.frames",
       "fps": 12,
-      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0)."
+      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0).",
+      "bake": {
+        "source": "orchard",
+        "camera": "scenic"
+      }
     },
     {
       "id": "riverside-overhead",
@@ -53,7 +73,11 @@
       "poster": "riverside-overhead.jpg",
       "frames": "riverside-overhead.frames",
       "fps": 12,
-      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0)."
+      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0).",
+      "bake": {
+        "source": "riverside",
+        "camera": "overhead"
+      }
     },
     {
       "id": "farmland-overhead",
@@ -62,7 +86,11 @@
       "poster": "farmland-overhead.jpg",
       "frames": "farmland-overhead.frames",
       "fps": 12,
-      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0)."
+      "attribution": "Carbon original scene. Sky: Greg Zaal and Jarod Guest, Poly Haven (CC0). Wood grain: Dimitrios Savva, Poly Haven (CC0).",
+      "bake": {
+        "source": "farmland",
+        "camera": "overhead"
+      }
     }
   ]
 }
