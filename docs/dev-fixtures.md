@@ -45,8 +45,9 @@ descendant of one (including a path spelled through a symlink or junction), a re
 containing `..`, and a non-empty directory without its marker. `--fixture-root` only reopens a root
 with a completed marker; an unseeded or incomplete root is reported with the seed or reset command
 to run. Repeating the same set is a no-op. A different set or a partial seed is refused unless
-`--reset-fixtures` is explicit, and a reset refuses a path that itself or an existing parent is a
-link or reparse point. The large set reuses the established 100-profile comparison sample and its
+`--reset-fixtures` is explicit, and a reset refuses a root that is itself a
+link or reparse point while links above the root are resolved before the
+ownership comparison. The large set reuses the established 100-profile comparison sample and its
 stable IDs.
 
 ## Set map

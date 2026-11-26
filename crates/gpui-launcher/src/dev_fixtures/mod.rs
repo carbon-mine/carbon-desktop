@@ -201,25 +201,22 @@ fn resolve(path: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-fn linked_component(path: &Path) -> Result<bool> {
-    let mut cursor = PathBuf::new();
-    for component in path.components() {
-        cursor.push(component.as_os_str());
-        let Ok(metadata) = fs::symlink_metadata(&cursor) else {
-            continue;
-        };
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if metadata.file_attributes() & 0x400 != 0 {
-                return Ok(true);
-            }
-        }
-        if metadata.is_symlink() {
+/// Whether the root path itself is a link or reparse point. Links in existing
+/// parent components are resolved before the ownership comparison instead of
+/// being refused: macOS reaches ordinary temporary directories through a
+/// `/var` symlink, and the resolved path is what a reset would operate on.
+fn linked_root(path: &Path) -> Result<bool> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
             return Ok(true);
         }
     }
-    Ok(false)
+    Ok(metadata.is_symlink())
 }
 
 pub(crate) struct Guarded {
@@ -228,13 +225,12 @@ pub(crate) struct Guarded {
 }
 
 impl Guarded {
-    /// A reset deletes a tree, so refuse a path that itself or an existing
-    /// ancestor is a link or reparse point even when every component resolves
-    /// outside the ordinary library.
+    /// A reset deletes a tree, so refuse a root that is itself a link or
+    /// reparse point even when it resolves outside the ordinary library.
     pub(crate) fn allow_reset(&self) -> Result<()> {
         if self.linked {
             bail!(
-                "Refusing to reset {} because its path contains a symlink or reparse point. Choose a plain dedicated directory.",
+                "Refusing to reset {} because the root is a symlink or reparse point. Choose a plain dedicated directory.",
                 self.path.display()
             );
         }
@@ -251,7 +247,7 @@ pub(crate) fn guard(root: &Path) -> Result<Guarded> {
         bail!("--fixture-root must be an absolute path so its owner is unambiguous.");
     }
     let supplied = absolute(root)?;
-    let linked = linked_component(&supplied)?;
+    let linked = linked_root(&supplied)?;
     let root = resolve(&supplied)?;
     if root.parent().is_none() {
         bail!("--fixture-root must name a dedicated directory, not a filesystem root.");
@@ -951,6 +947,36 @@ mod tests {
             .is_err()
         );
         assert!(reopen_set(&ordinary[0].join("missing")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_above_the_root_is_resolved_and_reset_still_works() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        fs::create_dir_all(&real).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let root = alias.join("default");
+        let (resolved, _) = prepare(&root, Set::Empty, false).unwrap();
+        assert_eq!(resolved, real.join("default"));
+        assert!(resolved.exists());
+        prepare(&root, Set::Empty, true).unwrap();
+        assert!(!real.join("default").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_root_itself_is_refused_for_reset() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        fs::create_dir_all(&real).unwrap();
+        prepare(&real, Set::Empty, false).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let error = prepare(&alias, Set::Empty, true).unwrap_err().to_string();
+        assert!(error.contains("symlink"), "{error}");
+        assert!(read_marker(&real).unwrap().is_some());
     }
 
     #[test]
