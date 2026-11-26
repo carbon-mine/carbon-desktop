@@ -19,6 +19,8 @@ struct InstanceRow {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct TargetList {
+    revision: Option<Uuid>,
+    world_issue: Option<String>,
     worlds: Vec<(String, String)>,
     servers: Vec<(Uuid, String, String)>,
     selected: Option<TargetKey>,
@@ -105,6 +107,8 @@ impl InstanceRow {
 impl From<&InstanceTargets> for TargetList {
     fn from(snapshot: &InstanceTargets) -> Self {
         Self {
+            revision: snapshot.revision,
+            world_issue: snapshot.world_issue.clone(),
             worlds: snapshot
                 .worlds
                 .iter()
@@ -171,7 +175,6 @@ impl HomeTargets {
             return false;
         }
         self.snapshot = snapshot;
-        self.message = None;
         self.reconcile_focus(cx);
         true
     }
@@ -189,8 +192,10 @@ impl HomeTargets {
 
         let mut targets = HashSet::new();
         if let TargetsSnapshot::Ready(list) = &self.snapshot.targets {
-            for (folder, _) in &list.worlds {
-                targets.insert(format!("world:{folder}"));
+            if list.world_issue.is_none() {
+                for (folder, _) in &list.worlds {
+                    targets.insert(format!("world:{folder}"));
+                }
             }
             for (id, _, _) in &list.servers {
                 targets.insert(format!("server:{id}"));
@@ -233,6 +238,7 @@ impl HomeTargets {
 
 fn target_present(snapshot: &InstanceTargets, key: &TargetKey) -> bool {
     match key {
+        TargetKey::World(_) if snapshot.world_issue.is_some() => false,
         TargetKey::World(folder) => snapshot
             .worlds
             .iter()
@@ -270,45 +276,110 @@ impl Popup {
         }
     }
 
-    pub(super) fn choose_target(
+    fn choose_target(
         &mut self,
         id: Uuid,
         key: TargetKey,
+        rendered_revision: Option<Uuid>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.home.as_ref().is_some_and(|home| home.committed) {
             return;
         }
-        let result = self.owner.update(cx, |launcher, cx| {
-            let Some(profile) = launcher.profiles.iter().find(|profile| profile.id == id) else {
-                return Err("That instance is no longer available. Choose another.".to_owned());
-            };
-            if launcher.personal != Some(id) {
-                return Err("Choose that instance before its destination.".to_owned());
-            }
-            if profile.server_address.is_some() {
-                return Err("This instance uses its saved server address.".to_owned());
+        let request = Uuid::new_v4();
+        let started = self.owner.update(cx, |launcher, cx| {
+            if launcher.personal != Some(id)
+                || launcher
+                    .selected_profile()
+                    .is_none_or(|p| p.server_address.is_some())
+            {
+                return Err("The active instance changed. Choose a destination again.");
             }
             let Some(TargetsState::Ready(snapshot)) = launcher.targets.get(&id) else {
-                return Err("Destinations are still loading. Try again in a moment.".to_owned());
+                return Err("Destinations are still loading. Choose again in a moment.");
             };
-            if !target_present(snapshot, &key) {
-                return Err("That destination is no longer available. Choose again.".to_owned());
+            if snapshot.revision != rendered_revision || !target_present(snapshot, &key) {
+                return Err(
+                    "The destinations changed. Review the current choices before selecting.",
+                );
             }
-            launcher.home_select_target(id, key.clone(), cx);
+            launcher.targets.insert(id, TargetsState::Loading(request));
+            cx.notify();
             Ok(())
         });
-        match result {
-            Ok(Ok(())) => {
-                if let Some(home) = &mut self.home {
-                    home.committed = true;
-                }
-                self.dismiss(window, cx);
+        match started {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                self.home_error(error.into(), cx);
+                return;
             }
-            Ok(Err(message)) => self.home_error(message, cx),
-            Err(_) => self.home_error("Could not update the destination.".into(), cx),
+            Err(_) => {
+                self.home_error("The launcher is unavailable.".into(), cx);
+                return;
+            }
         }
+        if let Some(home) = &mut self.home {
+            home.committed = true;
+            home.message = None;
+        }
+        let path = self.root_path.clone();
+        let retry_key = key.clone();
+        let work = cx.background_executor().spawn(async move {
+            match carbon_profiles::change_instance_targets(
+                &path,
+                id,
+                rendered_revision,
+                carbon_profiles::TargetAction::Select(Some(key)),
+            ) {
+                Ok(snapshot) => (Ok(snapshot), None),
+                Err(error) => (carbon_profiles::instance_targets(&path, id), Some(error)),
+            }
+        });
+        let owner = self.owner.clone();
+        cx.spawn_in(window, async move |popup, cx| {
+            let (fresh, error) = work.await;
+            let applied = owner
+                .update(cx, |launcher, cx| {
+                    let current = launcher
+                        .targets
+                        .get_mut(&id)
+                        .is_some_and(|state| state.complete(request, fresh));
+                    if current {
+                        if launcher.personal == Some(id) {
+                            launcher.message = error
+                                .clone()
+                                .unwrap_or_else(|| "Destination selected.".into());
+                        }
+                        cx.notify();
+                    }
+                    current
+                })
+                .unwrap_or(false);
+            // A closed picker is a different entity from a later opening.
+            let _ = popup.update_in(cx, |this, window, cx| {
+                if let Some(home) = &mut this.home {
+                    home.committed = false;
+                }
+                if let Some(error) = error {
+                    if let Some(owner) = this.owner.upgrade()
+                        && let Some(home) = &mut this.home
+                    {
+                        home.refresh(HomeSnapshot::read(owner.read(cx)), cx);
+                        home.focus_for_target(&retry_key).focus(window);
+                    }
+                    this.home_error(error, cx);
+                } else if applied {
+                    this.dismiss(window, cx);
+                } else {
+                    this.home_error(
+                        "The active instance changed. Review the current choices.".into(),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
     }
 
     fn home_error(&mut self, message: String, cx: &mut Context<Self>) {
@@ -431,7 +502,20 @@ impl Popup {
             TargetsSnapshot::Ready(list) => {
                 section =
                     section.child(self.home_subheading("Local saves", "home-worlds-heading", p));
-                if list.worlds.is_empty() {
+                if let Some(issue) = &list.world_issue {
+                    section = section.child(
+                        self.accessibility.text(
+                            div()
+                                .py_1()
+                                .text_sm()
+                                .text_color(p.warning)
+                                .child(issue.clone()),
+                            "home-worlds-scan-status",
+                            issue.clone(),
+                            Role::Alert,
+                        ),
+                    );
+                } else if list.worlds.is_empty() {
                     section = section.child(
                         self.home_muted("No local saves for this instance.", "home-worlds-empty"),
                     );
@@ -447,6 +531,7 @@ impl Popup {
                             detail,
                             key,
                             active.id,
+                            list.revision,
                             selected,
                             dialog,
                             cx,
@@ -474,6 +559,7 @@ impl Popup {
                             Some(address.clone()),
                             key,
                             active.id,
+                            list.revision,
                             selected,
                             dialog,
                             cx,
@@ -562,6 +648,7 @@ impl Popup {
         detail: Option<String>,
         key: TargetKey,
         instance: Uuid,
+        revision: Option<Uuid>,
         selected: bool,
         dialog: &HomeTargets,
         cx: &Context<Self>,
@@ -615,7 +702,7 @@ impl Popup {
             selected,
             focus,
             cx,
-            move |this, window, cx| this.choose_target(instance, key.clone(), window, cx),
+            move |this, window, cx| this.choose_target(instance, key.clone(), revision, window, cx),
         )
         .within_scroller(&dialog.scroll)
     }
@@ -788,6 +875,8 @@ mod tests {
 
     fn snapshot(server: Uuid) -> InstanceTargets {
         InstanceTargets {
+            world_issue: None,
+            missing_labels: Default::default(),
             revision: None,
             worlds: vec![LocalWorld {
                 key: TargetKey::World("alpha".into()),
@@ -800,6 +889,22 @@ mod tests {
             }],
             selected: None,
         }
+    }
+
+    #[test]
+    fn an_incomplete_scan_exposes_its_error_and_keeps_servers_selectable() {
+        let id = Uuid::new_v4();
+        let mut snapshot = snapshot(id);
+        snapshot.revision = Some(Uuid::new_v4());
+        snapshot.world_issue = Some("Unable to read all saves".into());
+        let displayed = TargetList::from(&snapshot);
+        assert_eq!(displayed.world_issue, snapshot.world_issue);
+        assert_eq!(displayed.revision, snapshot.revision);
+        assert!(!target_present(
+            &snapshot,
+            &TargetKey::World("alpha".into())
+        ));
+        assert!(target_present(&snapshot, &TargetKey::Server(id)));
     }
 
     #[test]
