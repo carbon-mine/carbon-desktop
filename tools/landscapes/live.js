@@ -65,7 +65,7 @@ const world = spec.build(emitBox);
 addFantasy(emitBox,id);
 const cycleSeconds=8;
 const turn=Math.PI*2;
-const breeze=makeBreeze(scene, cam, params.get('camera')==='overhead', spec.dusk, spec.sun[0]<0 ? -1 : 1);
+const breeze=makeBreeze(scene, cam, params.get('camera')==='overhead', spec.dusk, spec.sun, id);
 const cloudBoxes=[];
 addClouds((x,y,z,w,h,d,color)=>cloudBoxes.push({x,y,z,w,h,d,color,ry:0}),id);
 // Bake a coarse sky-visibility estimate once. Only indirect light is attenuated;
@@ -368,7 +368,7 @@ window.paintScenicFrame = (fraction) => {
   const phase = fraction % 1;
   elapsed = phase * cycleSeconds;
   const eased = (1 - Math.cos(turn * phase)) * 0.5;
-  cam.position.copy(cameraOffset).applyAxisAngle(vertical, eased * 0.024).add(aim);
+  cam.position.copy(cameraOffset).applyAxisAngle(vertical, eased * 0.018).add(aim);
   cam.lookAt(aim);
   cam.updateMatrixWorld();
   lastMirror = -Infinity;
