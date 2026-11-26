@@ -399,7 +399,9 @@ impl Launcher {
                             "home-first-create",
                             "Create instance",
                             true,
-                            self.popup.is_some() || self.profile_issue.is_some(),
+                            self.popup.is_some()
+                                || self.picker_open
+                                || self.profile_issue.is_some(),
                             cx,
                             |this, window, cx| this.editor(popup::Mode::Create, window, cx),
                         ))
@@ -461,7 +463,7 @@ impl Launcher {
                 "home-pick",
                 &pick_label,
                 Role::Button,
-                self.popup.is_some(),
+                self.popup.is_some() || self.picker_open,
                 None,
                 cx,
                 |this, window, cx| this.open_home_switcher(window, cx),
@@ -495,7 +497,7 @@ impl Launcher {
                             "Pin instance"
                         },
                         false,
-                        self.popup.is_some(),
+                        self.popup.is_some() || self.picker_open,
                         cx,
                         |this, _, cx| this.toggle_selected_pin(cx),
                     )),
@@ -564,7 +566,7 @@ impl Launcher {
                         "home-open-library",
                         "Open library",
                         false,
-                        self.popup.is_some(),
+                        self.popup.is_some() || self.picker_open,
                         cx,
                         |this, window, cx| this.open_library(window, cx),
                     )),
@@ -637,7 +639,7 @@ impl Launcher {
             SharedString::from(format!("home-shelf-{id}")),
             &label,
             Role::ListBoxOption,
-            false,
+            self.popup.is_some() || self.picker_open,
             Some(selected),
             cx,
             move |this, window, cx| {
@@ -946,9 +948,11 @@ mod tests {
     #[test]
     fn a_full_order_round_trips_through_the_home_read_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let mut order = HomeOrder::default();
-        order.pinned = (0..MAX_PINNED).map(|_| Uuid::new_v4()).collect();
-        order.recent = (0..MAX_RECENT).map(|_| Uuid::new_v4()).collect();
+        let order = HomeOrder {
+            pinned: (0..MAX_PINNED).map(|_| Uuid::new_v4()).collect(),
+            recent: (0..MAX_RECENT).map(|_| Uuid::new_v4()).collect(),
+            ..HomeOrder::default()
+        };
         order.save(dir.path()).unwrap();
         let loaded = HomeOrder::load(dir.path());
         assert_eq!(loaded.pinned, order.pinned);
