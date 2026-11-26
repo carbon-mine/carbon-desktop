@@ -37,6 +37,8 @@ The active profile is restored and checked online on startup. Other saved profil
 
 The native vault smoke test uses a temporary app root and an isolated synthetic credential. Run it from an interactive desktop session with its credential store available using `cargo test --locked -p carbon-account native_vault_compare_replace_and_remove -- --ignored`.
 
+See [Play authorization](play-authorization.md) for the native admission contract and the remaining provider-policy and gameplay prerequisites.
+
 ## Svelte/Tauri account window
 
 The toolbar opens an owned Win32 dialog on Windows and a modal GTK dialog on Linux. Choose a saved account to switch to it, refresh the selected active account, or confirm sign-out for that account. The dialog also handles adding an account, copying the short user code, opening the browser and cancelling a pending operation. A failed credential deletion offers retry for that account. Closing the dialog cancels work started in it when the service can still cancel. The toolbar opens account information without advertising a sign-in action in unconfigured builds. Play requirements show active-account verification explicitly. The status updates when the native dialog closes. macOS currently reports that the Tauri native account window is unavailable.

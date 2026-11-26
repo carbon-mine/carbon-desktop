@@ -1,0 +1,19 @@
+# Play authorization
+
+Carbon's libraries and saved instances remain available without Microsoft sign-in. Live offline single-player and online multiplayer are unavailable in this checkpoint. App registration and online Java profile verification alone do not authorize an offline session. The device grant's `offline_access` scope supplies a refresh credential. Published documentation reviewed for CDESK-17 does not establish an independent launcher's offline licence evidence, validity period or revocation policy. Provider confirmation is still needed for purchases and subscriptions separately. [Minecraft EULA](https://www.minecraft.net/en-us/eula) · [Microsoft device authorization](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code) · [Microsoft scopes](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc#the-offline_access-scope)
+
+The shared account service reports a redacted `PlayBlocker` to the shell. The UI's selected profile and verification flag are presentation data. The native launch interface deals in an opaque, single-use process-local decision. It binds the player UUID, registration, account revision, mode, policy revision, instance UUID and exact activation digest. The runner must already hold the verified activation and private save lease from the native installation and supervisor. Final admission rechecks the account and content binding under the account lock before an immediate native spawn gate. A stale decision cannot run the gate. Avoid UI or IPC calls, waits, and reentrant account calls inside it.
+
+The production service issues no play decisions today. There is no production evidence issuer, offline cache, reusable bearer exposure or provider session broker. The offline evaluator's successful path currently exists only in deterministic tests. It checks exclusive wall, monotonic and subscription expiry, refuses foreign or ineligible evidence, and requires a verified native offline egress restriction. The production account service remembers a definitive negative within its current process and keeps it through temporary failures until fresh verification succeeds. Persisted evidence, device binding and trusted time across restart depend on the provider's applicable rules. Native enforcement of egress belongs to the execution boundary and requires its own fixture and platform evidence.
+
+An online authorization needs fresh Java entitlement, verified multiplayer permissions and a provider-supported session that can be consumed by the pinned client without exposing a reusable credential to game code, mods or helpers. A local one-use decision does not change a provider token's replay properties. Qualification requires inspection of the actual broker and child boundary before any supported ordinary online-mode join.
+
+| Verification | Present evidence |
+| --- | --- |
+| Unconfigured builds, missing or unverified selection, and verified account without play evidence | Deterministic denial. |
+| Stale account selection, revision, registration, mode, policy, service lifetime, or activated installation | Synthetic revalidation tests verify the admission callback is not called. |
+| Wall or monotonic expiry, known subscription end, clock movement, provider denial and family permission | Deterministic checks with injected normalized evidence or scripted account outcomes. |
+| Private installed files, save ownership and network isolation | Native integration and qualification remain open. |
+| Provider-authorized offline session, real join and OS credential boundary during gameplay | Pending external policy, registration, broker capability and separately approved native qualification. |
+
+Run `cargo test --locked -p carbon-account`. Synthetic timestamps and policy digests are test inputs. They impose no production duration or offline allowance.
