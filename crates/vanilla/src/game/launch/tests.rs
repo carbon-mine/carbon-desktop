@@ -103,8 +103,7 @@ fn rule_order_platform_and_classpath_are_deterministic() {
         assert!(classpath.contains("Synthetic Review"));
         assert!(parts.jvm.iter().any(|arg| matches!(
             arg,
-            JvmArgument::NativeDirectory {
-                property: "-Djava.library.path",
+            JvmArgument::ReadOnlyNativeSearch {
                 subdirectory: Some("java")
             }
         )));
@@ -168,6 +167,26 @@ fn argument_and_manifest_failures_preserve_their_typed_denials() {
         Some(PlanError::IncompatibleRuntime)
     );
     assert!(Platform::launch_platform("linux-aarch64").is_none());
+}
+
+#[test]
+fn native_extraction_properties_require_separate_host_qualification() {
+    for (key, suffix) in [
+        ("-Djna.tmpdir", "jna"),
+        ("-Dorg.lwjgl.system.SharedLibraryExtractPath", "lwjgl"),
+        ("-Dio.netty.native.workdir", "netty"),
+    ] {
+        let mut raw = manifest();
+        raw["arguments"]["jvm"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(format!("{key}=${{natives_directory}}/{suffix}")));
+        let plan = fixture_parts(&raw, "linux-x86_64", 25).unwrap();
+        assert!(plan.jvm.iter().any(|arg| matches!(arg,
+            JvmArgument::UnresolvedNativeExtraction { property, subdirectory: Some(dir) }
+                if *property == key && *dir == suffix
+        )));
+    }
 }
 
 #[test]

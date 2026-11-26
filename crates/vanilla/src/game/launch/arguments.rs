@@ -33,8 +33,13 @@ pub enum GameArgument {
 #[derive(Eq, PartialEq)]
 pub enum JvmArgument {
     Value(OsString),
-    /// The supervisor supplies the private writable native scratch root.
-    NativeDirectory {
+    /// Resolved only against a host-verified, immutable native-code generation.
+    ReadOnlyNativeSearch {
+        subdirectory: Option<&'static str>,
+    },
+    /// The manifest requests native materialization. No writable destination can satisfy
+    /// this requirement at admission. A host-controlled preparer must qualify it first.
+    UnresolvedNativeExtraction {
         property: &'static str,
         subdirectory: Option<&'static str>,
     },
@@ -238,10 +243,14 @@ fn native_property(token: &str) -> Option<JvmArgument> {
     } else {
         return None;
     };
-    Some(JvmArgument::NativeDirectory {
-        property,
-        subdirectory,
-    })
+    if property == "-Djava.library.path" {
+        Some(JvmArgument::ReadOnlyNativeSearch { subdirectory })
+    } else {
+        Some(JvmArgument::UnresolvedNativeExtraction {
+            property,
+            subdirectory,
+        })
+    }
 }
 
 fn jvm_args(
