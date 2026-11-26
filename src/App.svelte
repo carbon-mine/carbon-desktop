@@ -22,7 +22,7 @@
   type ThemePreference = 'system' | 'light' | 'dark'
   type MenuAction = 'new-profile' | 'import-pack' | 'focus-search' | 'show-activity' | `theme-${ThemePreference}`
   type ShortcutSource = 'native-menu' | 'keyboard'
-  type AccountStatus = {signedIn: boolean; hasAccounts: boolean}
+  type AccountStatus = 'unsupported' | 'unavailable' | 'signIn' | 'available' | 'verified'
   type JavaProgress = {profileId: string; receivedBytes: number; totalBytes: number}
   const setupCommands = {check: 'inspect_vanilla_profile', choose: 'select_profile_java', install: 'install_profile_java', client: 'import_vanilla_client'}
   const workingLabels: Record<WorkAction, string> = {
@@ -108,7 +108,20 @@
   let workspace = $state<HTMLElement>()
   let theme = $state<ThemePreference>('system')
   let dark = $state(false)
-  let accountStatus = $state<AccountStatus>({signedIn: false, hasAccounts: false})
+  let accountStatus = $state<AccountStatus | null>(null)
+  let accountStatusRequest = 0
+  let accountLabel = $derived(accountStatus === 'signIn' ? 'Sign in with Microsoft'
+    : accountStatus === 'available' || accountStatus === 'verified' ? 'Minecraft account' : 'Microsoft account')
+  let accountRequirement = $derived.by(() => {
+    switch (accountStatus) {
+      case 'unsupported': return 'Minecraft account controls are unavailable on this platform.'
+      case 'unavailable': return 'Microsoft sign-in requires Carbon’s approved application registration.'
+      case 'verified': return 'Microsoft account verified.'
+      case 'signIn':
+      case 'available': return 'Verify your Minecraft account to check Java Edition entitlement.'
+      default: return 'Minecraft account status is unavailable.'
+    }
+  })
   let accountDialogOpen = $state(false)
   let accountDialogError = $state('')
 
@@ -168,15 +181,13 @@
   }
 
   async function refreshAccountStatus() {
-    try {
-      accountStatus = await invoke<AccountStatus>('minecraft_account_status')
-    } catch {
-      accountStatus = {signedIn: false, hasAccounts: false}
-    }
+    const request = ++accountStatusRequest
+    const status = await invoke<AccountStatus>('minecraft_account_status').catch(() => null)
+    if (request === accountStatusRequest) accountStatus = status
   }
 
   async function openMinecraftAccounts(opener: HTMLButtonElement) {
-    if (accountDialogOpen || busy || nativePickerActive) return
+    if (accountStatus === 'unsupported' || accountDialogOpen || busy || nativePickerActive) return
     accountDialogOpen = true
     accountDialogError = ''
     try {
@@ -716,10 +727,11 @@
     </div>
     <div class="app-options">
       <button class="account quiet-button" type="button" aria-haspopup="dialog"
-        aria-disabled={accountDialogOpen || busy || nativePickerActive}
+        disabled={accountStatus === 'unsupported'}
+        aria-disabled={accountStatus === 'unsupported' || accountDialogOpen || busy || nativePickerActive}
         onclick={e => openMinecraftAccounts(e.currentTarget)}>
         <DesktopIcon name="account" />
-        {accountStatus.signedIn ? 'Minecraft account · Verified' : accountStatus.hasAccounts ? 'Minecraft account' : 'Sign in with Microsoft'}
+        {accountLabel}
       </button>
     </div>
   </header>
@@ -864,10 +876,8 @@
                 {#if setupError}<p class="task-error" role="alert">{setupError}</p>{/if}
                 {#if gamePrepared || gameReceipt || requirementsFor === personal.id || packAwaitingSupport(personal)}
                   <div class="readiness"><h4 id="launch-readiness" tabindex="-1">Play requirements</h4>
-                    {#if setupReport?.blockedReasons.length}
-                      {#each setupReport.blockedReasons as reason}<p>{reason}</p>{/each}
-                    {:else if accountStatus.signedIn}<p>Microsoft account verified. Protected Minecraft launch is still in development.</p>
-                    {:else}<p>Sign in with Microsoft to verify your account. Protected Minecraft launch is still in development.</p>{/if}
+                    <p>{accountRequirement}</p>
+                    <p>Protected Minecraft launch is still in development.</p>
                     {#if (gamePrepared || gameReceipt) && setupReport && !managedJdkReady}
                       <p>Java {setupReport.javaMajor} · {installJdkLabels[setupReport.managedJava.status]}</p>
                     {/if}

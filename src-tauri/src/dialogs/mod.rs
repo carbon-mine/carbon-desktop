@@ -1,4 +1,6 @@
-use crate::{account::Dialog as AccountDialog, Library};
+#[cfg(any(windows, target_os = "linux"))]
+use crate::account::Dialog as AccountDialog;
+use crate::Library;
 use carbon_profiles::Profile;
 #[cfg(any(windows, target_os = "linux"))]
 use carbon_profiles::{ProfileAction, VanillaVersion};
@@ -27,16 +29,12 @@ mod linux;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(any(windows, target_os = "linux"))]
 pub fn show_accounts(owner: &WebviewWindow, dialog: AccountDialog) -> Result<(), String> {
     #[cfg(windows)]
     return windows::show_accounts(owner, dialog, dark_theme(owner));
     #[cfg(target_os = "linux")]
     return linux::show_accounts(owner, dialog, dark_theme(owner));
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = (owner, dialog);
-        Err("Native account windows are unavailable on this platform.".into())
-    }
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq)]
