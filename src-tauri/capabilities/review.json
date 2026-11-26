@@ -16,6 +16,7 @@
     "allow-show-minecraft-accounts",
     "allow-import-pack",
     "allow-inspect-vanilla-profile",
+    "allow-review-installed-launch-inputs",
     "allow-import-vanilla-client",
     "allow-select-profile-java",
     "allow-install-profile-java",
