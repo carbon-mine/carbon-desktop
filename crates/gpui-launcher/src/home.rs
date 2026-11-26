@@ -598,17 +598,29 @@ impl Launcher {
             false,
             Some(selected),
             cx,
-            move |this, window, cx| this.open_profile_from_home(id, SharedString::from(format!("home-shelf-{id}")).into(), window, cx),
+            move |this, window, cx| {
+                this.open_profile_from_home(
+                    id,
+                    SharedString::from(format!("home-shelf-{id}")).into(),
+                    window,
+                    cx,
+                )
+            },
         )
     }
 
     fn open_home_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.popup.is_some() || self.picker_open { return; }
-        let Some(id) = self.personal else { return; };
+        if self.popup.is_some() || self.picker_open {
+            return;
+        }
+        let Some(id) = self.personal else {
+            return;
+        };
         if !self.targets.contains_key(&id) {
             self.load_targets(id, cx);
         }
-        popup::open(self, popup::Kind::HomeTargets, window, cx);
+        let kind = popup::home_picker(self);
+        popup::open(self, kind, window, cx);
     }
 
     pub(super) fn home_select_instance(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -620,7 +632,9 @@ impl Launcher {
 
     pub(super) fn home_select_target(&mut self, id: Uuid, key: TargetKey, cx: &mut Context<Self>) {
         if self.personal == Some(id)
-            && self.selected_profile().is_some_and(|p| p.server_address.is_none())
+            && self
+                .selected_profile()
+                .is_some_and(|p| p.server_address.is_none())
         {
             self.select_target(id, key, cx);
         }
@@ -630,17 +644,17 @@ impl Launcher {
     /// Selecting is deliberately separate from launch: the protected launch
     /// path is still unavailable, so Home never presents a fake Play.
     fn select_target(&mut self, id: Uuid, key: TargetKey, cx: &mut Context<Self>) {
-        if self.popup.is_some() {
+        let Some(TargetsState::Ready(snapshot)) = self.targets.get(&id) else {
             return;
-        }
+        };
+        let revision = snapshot.revision;
         self.message = "Selecting destination…".to_owned();
         let path = self.root.path.clone();
         let work = cx.background_executor().spawn(async move {
-            let current = carbon_profiles::instance_targets(&path, id)?;
             carbon_profiles::change_instance_targets(
                 &path,
                 id,
-                current.revision,
+                revision,
                 TargetAction::Select(Some(key)),
             )
         });
@@ -650,11 +664,15 @@ impl Launcher {
                 match result {
                     Ok(targets) => {
                         this.targets.insert(id, TargetsState::Ready(targets));
-                        this.message = "Destination selected.".to_owned();
+                        if this.personal == Some(id) {
+                            this.message = "Destination selected.".to_owned();
+                        }
                     }
                     Err(error) => {
                         this.targets.insert(id, TargetsState::Error(error.clone()));
-                        this.message = error;
+                        if this.personal == Some(id) {
+                            this.message = error;
+                        }
                     }
                 }
                 cx.notify();
@@ -671,7 +689,13 @@ impl Launcher {
         }
     }
 
-    fn open_profile_from_home(&mut self, id: Uuid, origin: gpui::ElementId, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_profile_from_home(
+        &mut self,
+        id: Uuid,
+        origin: gpui::ElementId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.show_surface_from(Surface::Library, Some(origin), window, cx);
         self.select_personal(id, cx);
         self.tab = Tab::Overview;
@@ -681,7 +705,12 @@ impl Launcher {
     }
 
     fn open_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_surface_from(Surface::Library, Some("home-open-library".into()), window, cx);
+        self.show_surface_from(
+            Surface::Library,
+            Some("home-open-library".into()),
+            window,
+            cx,
+        );
         self.focus_detail(window);
         cx.notify();
     }
@@ -729,7 +758,11 @@ impl Launcher {
     }
 
     fn show_surface_from(
-        &mut self, surface: Surface, origin: Option<gpui::ElementId>, window: &mut Window, cx: &mut Context<Self>,
+        &mut self,
+        surface: Surface,
+        origin: Option<gpui::ElementId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> bool {
         if self.surface == surface {
             return false;
@@ -773,7 +806,9 @@ impl Launcher {
         }
         let fallback = if entry.surface == Surface::Home {
             self.home_focus.clone()
-        } else { self.detail_focus.clone() };
+        } else {
+            self.detail_focus.clone()
+        };
         fallback.focus(window);
         if let Some(origin) = entry.origin {
             self.accessibility.focus_button_after_paint(origin);
@@ -897,10 +932,6 @@ fn home_mark(p: Palette, icon: Icon) -> gpui::Div {
         .justify_center()
         .child(icon.render(px(17.), p.ink))
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {
