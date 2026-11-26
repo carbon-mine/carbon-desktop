@@ -68,6 +68,7 @@ pub enum RuntimeError {
     Download(reqwest::Error),
     SourceRejected,
     Integrity,
+    Unavailable,
     Archive(&'static str),
 }
 
@@ -81,6 +82,7 @@ impl fmt::Display for RuntimeError {
             Self::Download(_) => "Could not reach the approved Java download. Check your connection and retry.",
             Self::SourceRejected => "The Java download destination or response is unsupported. Retry when the approved source is available.",
             Self::Integrity => "The Java archive or cached files failed verification. Retry preparation.",
+            Self::Unavailable => "Prepare an app-managed Java runtime for this version and platform.",
             Self::Archive(reason) => reason,
         })
     }
@@ -92,6 +94,69 @@ impl From<io::Error> for RuntimeError {
     fn from(error: io::Error) -> Self {
         Self::Storage(error)
     }
+}
+
+/// Holds a shared lease on an independently verified app-managed Java installation.
+/// This value and its paths stay on the trusted launcher side.
+pub struct RuntimeLease {
+    _lease: fs::File,
+    major: u16,
+    spec: &'static Artifact,
+    generation: PathBuf,
+    executable: PathBuf,
+}
+
+impl RuntimeLease {
+    pub fn major(&self) -> u16 {
+        self.major
+    }
+
+    pub fn release(&self) -> &'static str {
+        self.spec.release
+    }
+
+    pub fn archive_sha256(&self) -> &'static str {
+        self.spec.sha256
+    }
+
+    pub fn java_executable(&self) -> &Path {
+        &self.executable
+    }
+
+    pub fn belongs_to(&self, root: &Path) -> bool {
+        self.generation.parent() == Some(root)
+    }
+
+    /// Read-only integrity check for a trusted admission boundary.
+    pub fn verify_current(&self) -> Result<(), RuntimeError> {
+        verify_cache(&self.generation, self.spec, &mut |_, _| true)
+    }
+}
+
+/// Acquire existing verified Java files with a shared lease. No probing or downloading.
+pub fn lease_verified(root: &Path, major: u16) -> Result<RuntimeLease, RuntimeError> {
+    let spec = artifact(major).ok_or(RuntimeError::Unavailable)?;
+    lease_pinned(root, major, spec)
+}
+
+fn lease_pinned(
+    root: &Path,
+    major: u16,
+    spec: &'static Artifact,
+) -> Result<RuntimeLease, RuntimeError> {
+    let generation = root.join(cache_name(major, spec));
+    if !storage::check_root(root)? || !exists(&generation)? {
+        return Err(RuntimeError::Unavailable);
+    }
+    let lease = RuntimeLease {
+        _lease: storage::lock(root, major, false)?,
+        major,
+        spec,
+        executable: generation.join("home").join(spec.executable()),
+        generation,
+    };
+    lease.verify_current()?;
+    Ok(lease)
 }
 
 /// Inspect the pinned cache. This call is read-only and never accesses the network.

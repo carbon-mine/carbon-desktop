@@ -4,6 +4,7 @@ mod client;
 mod game;
 mod provider;
 pub use client::{client_status, import_client, open_client_file, ClientState, ClientStatus};
+pub use game::launch;
 pub use game::{
     game_file_plan, has_game_install, has_instance_view, prepare_game_files, prepare_instance_view,
     prepare_reviewed_game_files, prepare_reviewed_instance, GameFilePlan, GameFileProgress,

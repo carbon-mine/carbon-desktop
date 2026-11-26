@@ -253,6 +253,32 @@ fn stale_stage_is_discarded_and_a_competing_installer_is_refused() {
 }
 
 #[test]
+fn launch_lease_verifies_managed_java_without_writing_and_holds_the_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bytes = fixture_zip(&[]);
+    let spec = Box::leak(Box::new(spec(&bytes, Format::Zip)));
+    assert!(matches!(
+        lease_pinned(tmp.path(), 17, spec),
+        Err(RuntimeError::Unavailable)
+    ));
+    assert!(!tmp.path().join("java-17.lock").exists());
+    install(tmp.path(), &bytes, spec);
+    let lease = lease_pinned(tmp.path(), 17, spec).unwrap();
+    assert_eq!(lease.archive_sha256(), spec.sha256);
+    assert!(matches!(
+        storage::lock(tmp.path(), 17, true),
+        Err(RuntimeError::Busy)
+    ));
+    let reviewed = fs::read(lease.java_executable()).unwrap();
+    let changed = vec![0; reviewed.len()];
+    fs::write(lease.java_executable(), &changed).unwrap();
+    assert!(lease.verify_current().is_err());
+    assert_eq!(fs::read(lease.java_executable()).unwrap(), changed);
+    drop(lease);
+    assert!(storage::lock(tmp.path(), 17, true).is_ok());
+}
+
+#[test]
 fn transport_accepts_only_approved_https_asset_hosts() {
     for url in [
         "http://github.com/adoptium",

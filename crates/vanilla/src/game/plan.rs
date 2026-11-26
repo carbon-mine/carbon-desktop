@@ -108,6 +108,15 @@ pub(super) struct Platform {
     arch: &'static str,
 }
 impl Platform {
+    pub(super) fn launch_platform(label: &str) -> Option<Self> {
+        let os = match label {
+            "windows-x86_64" => "windows",
+            "linux-x86_64" => "linux",
+            _ => return None,
+        };
+        Some(Self { os, arch: "x86_64" })
+    }
+
     pub(super) fn current() -> Result<Self, String> {
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
@@ -127,6 +136,22 @@ impl Platform {
     pub(super) fn label(self) -> String {
         format!("{}-{}", self.os, self.arch)
     }
+    pub(super) fn windows(self) -> bool {
+        self.os == "windows"
+    }
+
+    pub(super) fn matches_os(self, name: Option<&str>, arch: Option<&str>) -> bool {
+        name.is_none_or(|name| name == self.os)
+            && arch.is_none_or(|arch| {
+                let arch = match arch {
+                    "amd64" | "x64" => "x86_64",
+                    "arm64" => "aarch64",
+                    "i386" | "i686" => "x86",
+                    value => value,
+                };
+                arch == self.arch
+            })
+    }
     fn allowed(self, rules: Option<&[Rule]>) -> Result<bool, String> {
         let Some(rules) = rules else { return Ok(true) };
         let mut allowed = false;
@@ -136,18 +161,9 @@ impl Platform {
                 "disallow" => false,
                 _ => return Err("Unsupported Mojang library rule action.".into()),
             };
-            let matches = r.os.as_ref().is_none_or(|os| {
-                os.name.as_deref().is_none_or(|n| n == self.os)
-                    && os.arch.as_deref().is_none_or(|a| {
-                        let arch = match a {
-                            "amd64" | "x64" => "x86_64",
-                            "arm64" => "aarch64",
-                            "i386" | "i686" => "x86",
-                            a => a,
-                        };
-                        arch == self.arch
-                    })
-            });
+            let matches =
+                r.os.as_ref()
+                    .is_none_or(|os| self.matches_os(os.name.as_deref(), os.arch.as_deref()));
             if matches {
                 allowed = permit;
             }
@@ -185,6 +201,7 @@ fn check(o: &Object, url: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
 pub(super) struct Plan {
     pub summary: GameFilePlan,
     pub objects: BTreeMap<String, Object>,

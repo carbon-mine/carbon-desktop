@@ -499,6 +499,7 @@ fn private_view_repairs_copied_content_and_preserves_user_state() {
     assert!(!owner.join("content").exists());
 
     let view = open().unwrap();
+    view.verify_for_launch().unwrap();
     assert_eq!(view.summary().files, plan.paths.len() + 2);
     assert_eq!(view.summary().copied_bytes, view.summary().total_bytes);
     assert_eq!(view.summary().reused_bytes, 0);
@@ -523,6 +524,10 @@ fn private_view_repairs_copied_content_and_preserves_user_state() {
         ]
     );
     assert!(paths.natives_dir().read_dir().unwrap().next().is_none());
+    fs::remove_dir(paths.natives_dir()).unwrap();
+    assert!(view.verify_for_launch().is_err());
+    assert!(!paths.natives_dir().exists());
+    fs::create_dir(paths.natives_dir()).unwrap();
     assert!(open().unwrap_err().contains("in use"));
     let settings = game.join("options.txt");
     let save = game.join("saves/Private seed/level.dat");
@@ -534,11 +539,14 @@ fn private_view_repairs_copied_content_and_preserves_user_state() {
     let reused = open().unwrap();
     assert_eq!(reused.summary().copied_bytes, 0);
     assert_eq!(reused.summary().reused_bytes, reused.summary().total_bytes);
-    drop(reused);
     let obj = &plan.objects[&plan.client_sha1];
     let shared = store.object(obj, &plan.client_sha1).unwrap();
     let tampered = vec![b'!'; obj.size as usize];
     fs::write(&client, &tampered).unwrap();
+    assert!(reused.verify_for_launch().is_err());
+    assert_eq!(fs::read(&client).unwrap(), tampered);
+    assert_eq!(fs::read(&save).unwrap(), b"player data");
+    drop(reused);
     assert_eq!(
         fs::read(&shared).unwrap(),
         b"test client",

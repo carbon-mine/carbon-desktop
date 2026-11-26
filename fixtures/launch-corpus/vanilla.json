@@ -1,0 +1,24 @@
+[
+  {
+    "version": "26.3",
+    "sha1": "8696584e8d2da5726487597e6c5777480387ec22",
+    "sha256": "e2bdba52ed09b3681040b804b8fcccd1ba2c60273428831d99c7f5e6800c1f29",
+    "url": "https://piston-meta.mojang.com/v1/packages/8696584e8d2da5726487597e6c5777480387ec22/26.3.json",
+    "javaMajor": 25,
+    "assetIndex": "34",
+    "assetIndexSha1": "7b1c46ecb5292e80d36be4ccd18118f3d7b555aa",
+    "windowsClasspath": 75,
+    "linuxClasspath": 67
+  },
+  {
+    "version": "24w14a",
+    "sha1": "a19842623bd07c282b13f4f651adc4136f7694cf",
+    "sha256": "8db93828c70b9dd243f57064b0006d3ad7f6a56937548df3486a330eefc6d9f0",
+    "url": "https://piston-meta.mojang.com/v1/packages/a19842623bd07c282b13f4f651adc4136f7694cf/24w14a.json",
+    "javaMajor": 21,
+    "assetIndex": "16",
+    "assetIndexSha1": "613cfaa34b50b4890e6c5e561de4523627976f11",
+    "windowsClasspath": 70,
+    "linuxClasspath": 56
+  }
+]
