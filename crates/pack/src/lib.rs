@@ -467,10 +467,15 @@ mod tests {
         let manifest = index.to_string();
         let plain = inspect(&archive(&manifest, None)).unwrap().review;
         assert_eq!((plain.pending_files, plain.overrides), (2, 0));
-        let bundled = inspect(&archive(&manifest, Some("overrides/mods/required.txt")))
-            .unwrap()
-            .review;
-        assert_eq!((bundled.pending_files, bundled.overrides), (1, 1));
+        for (file, pending) in [("required", 1), ("optional", 1), ("unsupported", 2)] {
+            let path = format!("overrides/mods/{file}.txt");
+            let bundled = inspect(&archive(&manifest, Some(&path))).unwrap().review;
+            assert_eq!(
+                (bundled.pending_files, bundled.overrides),
+                (pending, 1),
+                "{file}"
+            );
+        }
     }
     fn client_pack() -> Vec<u8> {
         let mut index: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
