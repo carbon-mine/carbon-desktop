@@ -117,37 +117,12 @@ function makeDeck(scene, camera, overhead, dusk, seed, id) {
   }};
 }
 
-function polygon(points,color){
-  const shape=new THREE.Shape(points.map(([x,y])=>new THREE.Vector2(x,y)));
-  return new THREE.Mesh(new THREE.ShapeGeometry(shape),new THREE.MeshBasicMaterial({
-    color,side:THREE.DoubleSide,transparent:true,depthWrite:false,
-  }));
-}
-function makeDebris(id){
-  const palettes={
-    alpine:[0x8c7757,0xb3a67c],farmland:[0xb48c45,0xd9bc73],riverside:[0x8e854d,0xb5ac69],
-    marsh:[0x9b744c,0xbba376],orchard:[0xa05c2f,0xd28a49],
-  };
-  const colors=Object.hasOwn(palettes,id) ? palettes[id] : [0x8a7850,0xc9b987];
-  const blade=new THREE.Group();
-  blade.add(polygon([[-.5,-.03],[-.23,.20],[.05,.24],[.54,.035]],colors[1]));
-  blade.add(polygon([[-.5,-.03],[.54,.035],[.21,-.17],[-.17,-.18]],colors[0]));
-  const twig=new THREE.Group();
-  twig.add(polygon([[-.55,-.02],[.48,.015],[.51,.07],[-.53,.04]],0x77553e));
-  twig.add(polygon([[-.08,.03],[.23,.28],[.25,.25],[.02,.025]],0x906d42));
-  const tip=polygon([[.20,.23],[.25,.35],[.42,.38],[.36,.27]],colors[1]);twig.add(tip);
-  const seed=polygon([[-.40,-.015],[-.18,.12],[.25,.10],[.42,.015],[.18,-.095]],colors[1]);
-  return [blade,twig,seed];
-}
-
-// Foreground debris is attached to a shallow camera plane. The cloud deck is
-// world geometry, so its edge and underside change naturally with perspective.
+// Only the cloud deck and solar illumination extend across every landscape.
 export function makeBreeze(scene,camera,overhead,dusk,sun,id) {
   const layer=new THREE.Group();
   camera.add(layer);scene.add(camera);
   const seed=[...id].reduce((s,c)=>s+c.charCodeAt(0),0)%17/17;
   const deck=makeDeck(scene,camera,overhead,dusk,seed,id);
-  const debris=makeDebris(id);layer.add(...debris);
   const glareMaterial=new THREE.ShaderMaterial({
     transparent:true,depthWrite:false,depthTest:false,
     uniforms:{amount:{value:0},lightPoint:{value:new THREE.Vector2()}},
@@ -165,23 +140,9 @@ export function makeBreeze(scene,camera,overhead,dusk,sun,id) {
   const sunDir=new THREE.Vector3(...sun).normalize(), right=new THREE.Vector3();
   return phase=>{
     deck.paint(phase);
-    const distance=8,halfH=distance*Math.tan(THREE.MathUtils.degToRad(camera.fov)/2),halfW=halfH*camera.aspect;
     right.setFromMatrixColumn(camera.matrixWorld,0);
     const solarSide=sunDir.dot(right)<0 ? -.065 : 1.065;
     glareMaterial.uniforms.lightPoint.value.set(solarSide,overhead ? 1.20 : 1.065);
     glareMaterial.uniforms.amount.value=(overhead ? .17 : dusk ? .20 : .28)*(.91+.09*Math.sin(turn*phase+seed));
-    for(const [i,particle] of debris.entries()){
-      const age=((phase+.07+seed*.17+[0,.48,.76][i])%1)/[.41,.34,.29][i];
-      particle.visible=age<1;
-      if(!particle.visible)continue;
-      const wave=turn*age;
-      const x=2.50*age-1.24;
-      const y=[.48,-.41,.75][i]-.23*age+.10*Math.sin(wave*1.2+i+seed);
-      particle.position.set(x*halfW,y*halfH,-distance);
-      particle.scale.setScalar(halfW*[.052,.047,.035][i]);
-      particle.rotation.set(.53*Math.sin(wave+i),.68*Math.sin(wave*1.5+i),-.35+2.55*age);
-      const fade=THREE.MathUtils.clamp(Math.min(age,1-age)*12,0,1);
-      particle.traverse(obj=>{if(obj.material) obj.material.opacity=.87*fade;});
-    }
   };
 }

@@ -1,25 +1,30 @@
 # Native Home landscapes
 
-Carbon's Home scenery depicts five authored voxel scenes. Riverside Mill and Dewfall Farm also have overhead camera compositions. Alpine Lake, Willow Marsh and Cider Orchard have scenic views. The checked-in images depict these demonstration landscapes. The launcher uses a separate data source for a player's world map.
+Carbon Home has five original voxel landscapes and seven views. Riverside Mill and Dewfall Farm also have overhead cameras. A player's world map uses its own data. Each camera makes a gentle 0.69-degree arc over an eight-second cycle. A drifting block cloud deck and directional sunlight connect the scenes. Their ground-level motion comes from the site itself.
 
-Each view contains 192 unique 960 × 540 frames at 24 fps. During an eight-second loop the level camera eases through a 0.024-radian (1.38°) arc and returns. Wind continues in the same direction at camera turns. Small peripheral clouds, an occasional leaf or twig, moving cloud shadows and a low-contrast sunward glow appear in all seven views. Where the scene contains them, the original models animate the mill wheel, windmill blades, crops, reeds, chimney smoke and water. The first frame is the poster. The seven frame packs together occupy 69,895,420 bytes.
+| Landscape | Motion and visual anchors |
+| --- | --- |
+| Riverside Mill | Wheel spray, expanding foam rings and water leaving the wheel |
+| Dewfall Farm | Chaff rises from the wheat bed, moving awns catch the light, windmill blades turn |
+| Alpine Lake | Intermittent gusts lift powder off four snowbanks; short glints move on the lake |
+| Willow Marsh | Fireflies drift within reed beds, with subdued rings on the water below |
+| Cider Orchard | Leaves and pale petals descend from tree crowns and dappled light moves beneath them |
 
-The baker samples phase zero through the final frame before phase one. It renders phase one separately and compares it with the opening poster to check that the scene returns to its start. It stores the opening image once. The checked-in pack uses a JPEG quality of 0.62 and retains the full native image dimensions.
+The overhead views look down on the same wheel and field effects as their scenic counterparts. Each loop samples phase zero through the last frame before phase one. The baker compares the end pose against the first. Wind continues forward through the camera's turn.
 
-![Seven native Windows landscape samples](../../docs/images/native-home-landscape-motion.jpg)
+![Native Windows scenery poses](../../docs/images/native-home-landscape-motion.jpg)
 
-## Windows motion qualification
+## Playback measurements
 
-The native 960 × 540 scene was shown through a GPUI window in the Windows x64 development build. A disposable Riverside Mill probe sampled changing window pixels for ten seconds per client size. A separate four-second interval measured the process CPU share of one logical core. The harness checked for commands every 75 ms. Sampling through Win32 PrintWindow had approximately 12–17 ms resolution, so a single observed interval includes capture timing. The following comparison used the same viewport and probe before and after the frame pacing, decoder and artwork changes.
+These samples used a standalone native Windows x64 GPUI scene and the JPEG frame-pack renderer, before the wider composition and AVC export. Each row covers ten seconds in the development profile. The probe sampled changed pixels through Win32 PrintWindow with approximately 12â€“18 ms capture resolution. CPU came from a separate four-second interval and includes the probe's command poll.
 
-| Client width | Baseline visible fps | Updated visible fps | Baseline frame interval p50 / p95 | Updated frame interval p50 / p95 |
-| --- | ---: | ---: | --- | --- |
-| 704 × 445 | 4.4 | 24.0 | 230 / 255 ms | 48 / 50 ms |
-| 960 × 540 | 4.1 | 24.0 | 243 / 279 ms | 47 / 49 ms |
-| 1368 × 720 | 4.0 | 24.0 | 243 / 291 ms | 42 / 54 ms |
+| Client pixels | Baseline fps | 30 fps pack observed fps | Baseline interval p50 / p95 | Updated interval p50 / p95 | CPU before / after, % of one core |
+| --- | ---: | ---: | --- | --- | --- |
+| 704 Ã— 445 | 4.4 | 29.9 | 230 / 255 ms | 36 / 49 ms | 64 / 32 |
+| 960 Ã— 540 | 4.1 | 30.0 | 243 / 279 ms | 36 / 48 ms | 68 / 26 |
+| 1368 Ã— 720 | 4.0 | 29.4 | 243 / 291 ms | 36 / 54 ms | 68 / 52 |
 
-The wide probe used 68% of one logical core before the update and 21% afterward. The compact probe measured 64% and 24%. All three paused views stayed pixel-stable, including after minimizing and restoring while paused. Resuming restarted the motion. These measurements cover the standalone Windows renderer in the development profile. The full Home shell and other operating systems require their own native observations.
-
+Paused captures stayed pixel-stable, including after minimizing and restoring. Resuming advanced the image again. At the widest size, 48 fps and 60 fps Riverside packs yielded 42.9 and 52.1 observed changes per second respectively. The seven JPEG packs at 30, 48 and 60 fps occupied 88.9, 142.3 and 177.8 MB. Source cadence, window capture cadence and physical display presentation are distinct measurements.
 
 ## Rebuilding the scenery
 
@@ -30,15 +35,22 @@ npm ci
 npm run bake
 ```
 
-The scene sources, original voxel models, camera definitions, sky lighting and siding material live under `tools/landscapes`. All geometry is defined in source. The baker runs offline after package installation, with all assets inlined. It rejects page errors and insufficient variation between frames. The observed Windows bake used Chrome 158.0.8127.88 and produced 192 distinct images per view. Hardware, browser and encoder versions can affect rendered bytes. [Materials, source links and reuse terms](../../tools/landscapes/assets/ASSETS.md)
+The scene sources, original voxel models, camera definitions, sky lighting and siding material live under `tools/landscapes`. All geometry is defined in source. The baker runs offline after package installation, with all assets inlined. It rejects page errors and insufficient variation between frames. The observed Windows bake used Chrome 158.0.8127.88 and qualified distinct frame content for all seven views. Hardware, browser and encoder versions can affect rendered bytes. [Materials, source links and reuse terms](../../tools/landscapes/assets/ASSETS.md)
 
-Each `.frames` file starts with a little-endian 32-bit frame count followed by `count + 1` little-endian 32-bit offsets relative to the first byte of the JPEG payload. Each successive pair defines one independent image, including the terminal offset. Playback needs only the current frame and one decoded successor. JPEGs are decoded on demand. The desktop does not need Chrome, Three.js or an online service to show these scenes.
+To render the authored scenes into a new external directory, install FFmpeg with libx264 and ffprobe. The AVC exporter streams original PNG pixels directly into the encoder. It writes a matching first-frame JPEG and a silent 1440 Ã— 810 H.264 Main clip per view, at 30 fps with a one-second keyframe interval. It verifies the closing pose and encoded frame count, timing and color metadata before publishing either output. Set `FFMPEG_PATH` and `FFPROBE_PATH` to use specific binaries.
+
+```sh
+node bake.mjs --avc-dir ./review-avc
+node bake.mjs --png-dir ./review-master --size 1440x810 --view farmland --frames 60
+```
+
+For the JPEG playback path, each `.frames` file starts with a little-endian 32-bit frame count followed by `count + 1` little-endian 32-bit offsets relative to the first byte of the JPEG payload. Each successive pair defines one independent image, including the terminal offset. Playback needs only the current frame and one decoded successor. JPEGs are decoded on demand. The desktop does not need Chrome, Three.js or an online service to show these scenes.
 
 ## Add a bundled view
 
 Add its offline JPEG poster, optional frame pack and an entry in [manifest.json](manifest.json). Each view has a stable lowercase ID, a stable family shared by the perspectives of one landscape, a human-readable name and attribution. Keep IDs stable across visual revisions so saved choices reopen. A scenic-only scene needs one entry. A second angle gets another entry in the same family. The order in the manifest is the chooser order. The generated catalog supplies lookup and the candidates for shuffle.
 
-Include both `frames` and `fps` for motion. Omit both for poster-only artwork. The build accepts 1â€“30 frames per second. Carbon ships the current seven views at 24 with `"playback":"loop"`. Forward loops continue through the last-to-first seam in sequence. Omitting the field preserves the original back-and-forth playback for existing assets. The build requires regular local assets and rejects duplicate IDs, missing attribution, unsafe filenames and unsupported manifest versions. Initial display and motion-decoding recovery use the checked-in poster. Pausing retains the current camera frame. Each frame pack is decoded off the UI thread, one image at a time. The previous atlas image is retired after painting. Hidden and reduced-motion behavior is controlled by the Home view's playback state.
+Include both `frames` and `fps` for motion. Omit both for poster-only artwork. The build accepts 1â€“60 frames per second. Carbon ships the current seven views at 30 with `"playback":"loop"`. Forward loops continue through the last-to-first seam in sequence. Omitting the field preserves the original back-and-forth playback for existing assets. The build requires regular local assets and rejects duplicate IDs, missing attribution, unsafe filenames and unsupported manifest versions. Initial display and motion-decoding recovery use the checked-in poster. Pausing retains the current camera frame. Each frame pack is decoded off the UI thread, one image at a time. The previous atlas image is retired after painting. Hidden and reduced-motion behavior is controlled by the Home view's playback state.
 
 Run `cargo test --locked -p carbon-desktop-gpui --lib`. The build also compiles a test-only catalog with an additional scenic-only perspective. The test locates it through the same catalog scan, checks its family, opens its packaged poster and motion stream, selects it with the production shuffle algorithm, and confirms it stays outside the shipped chooser. Ordinary builds use the assets directly and skip the artist's bake. Forks can provide their own compatible poster and frame pack without changing the native renderer or launcher UI.
 

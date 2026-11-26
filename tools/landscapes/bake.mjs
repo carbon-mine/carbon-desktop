@@ -2,6 +2,7 @@
 // Run from this directory after npm ci. Chrome is needed only to bake the native assets.
 import { build } from 'esbuild';
 import { cameraFor, validateOutputs } from './source-config.mjs';
+import { exportAvc } from './avc-export.mjs';
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
@@ -10,13 +11,17 @@ import { parseArgs } from 'node:util';
 import path from 'node:path';
 
 const {values:options}=parseArgs({options:{
-  'png-dir':{type:'string'}, view:{type:'string'}, size:{type:'string'}, frames:{type:'string'},
+  'png-dir':{type:'string'}, 'avc-dir':{type:'string'}, view:{type:'string'}, size:{type:'string'}, frames:{type:'string'},
 }});
-const exportDir=options['png-dir'];
+const pngDir=options['png-dir'];
+const avcDir=options['avc-dir'];
+const exportDir=pngDir??avcDir;
+if(pngDir && avcDir) throw Error('Choose one export format per run');
+if(avcDir && options.frames) throw Error('AVC clips cover the complete authored cycle');
 if(!exportDir && (options.size || options.frames || options.view)) {
-  throw Error('Use --png-dir to export a separate lossless source study');
+  throw Error('Use --png-dir or --avc-dir for a separate source export');
 }
-const resolution=/^(\d+)x(\d+)$/.exec(options.size??'960x540');
+const resolution=/^(\d+)x(\d+)$/.exec(options.size??(avcDir ? '1440x810' : '960x540'));
 if(!resolution) throw Error('Use a width and height such as 1440x810');
 const [width,height]=resolution.slice(1).map(Number);
 if(width<1 || height<1 || width*height>1600000) throw Error('Source size exceeds the native authoring pixel budget');
@@ -72,7 +77,13 @@ try {
     await page.goto(base + '?' + new URLSearchParams(entry.bake));
     await page.waitForFunction(() => typeof window.paintScenicFrame === 'function');
     const framesPerView = entry.frames ? entry.fps * cycleSeconds : 1;
-    if(exportDir){
+    if(avcDir){
+      if(!entry.frames) throw Error('AVC export needs a motion frame rate for '+view);
+      await exportAvc(page,errors,{directory:avcDir,view,width,height,fps:entry.fps,count:framesPerView});
+      console.log(view,framesPerView,'original source frames encoded as AVC');
+      continue;
+    }
+    if(pngDir){
       if(requestedFrames>framesPerView) throw Error('Requested frames exceed the source cycle of '+view);
       if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(view)) throw Error('Invalid source view ID');
       const viewDir=path.join(exportDir,view);

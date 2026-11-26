@@ -48,11 +48,13 @@ export function makeBiomeMotifs(THREE, scene, id, world) {
 
   if(id==='alpine') {
     const banks=world.snowOrigins??[];
-    if(banks.length) particles(26,drop,[0xe5edf8,0xaeccde,0xf7f5f0],false,(m,i,t)=>{
+    if(banks.length) particles(26,drop,[0xe5edf8,0xaeccde,0xf7f5f0],false,(m,i,t,phase)=>{
       const [x,y,z]=banks[i%banks.length],s=.035+.045*seed(i+26);
       m.position.set(x+(seed(i+9)-.5)*1.9+3.0*t,y+.13+.64*Math.sin(t*Math.PI)+.15*seed(i+2),z+.78*t+Math.sin(t*turn+i)*.16);
       m.scale.set(s*(1.8+seed(i)),s*.65,s);
-      return .65;
+      // Short gusts lift powder at different times along the bank.
+      const gust=Math.max(0,Math.cos(turn*phase+(i%banks.length)*.91));
+      return .80*gust*gust;
     });
     particles(7,facet,[0xd7eaf1,0xf2e6c7],true,(m,i,t,phase)=>{
       m.position.set(1+7*seed(i+21)+.11*Math.sin(phase*turn+i),.022,-5.7+11*seed(i+17));
