@@ -29,48 +29,41 @@ jobs:
             arch: x64
             target: x86_64-pc-windows-msvc
             python: python
-            bun-archive: bun-windows-x64
-            bun-sha256: ce4c17497b2f29712a99d3d53f028de28cd42e3bacb8589599e7f000e49b6405
+
           - platform: Windows ARM64
             runner: windows-11-arm
             arch: arm64
             target: aarch64-pc-windows-msvc
             python: python
-            bun-archive: bun-windows-aarch64
-            bun-sha256: a7a16b876a305fd1029c66dbd27007b4f6112ae896532f675878731a21e50cfd
+
           - platform: Linux x64
             runner: ubuntu-24.04
             arch: x64
             target: x86_64-unknown-linux-gnu
             python: python3
-            bun-archive: bun-linux-x64
-            bun-sha256: 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
+
           - platform: Linux ARM64
             runner: ubuntu-24.04-arm
             arch: arm64
             target: aarch64-unknown-linux-gnu
             python: python3
-            bun-archive: bun-linux-aarch64
-            bun-sha256: 54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7
+
           - platform: macOS Intel
             runner: macos-15-intel
             arch: x64
             target: x86_64-apple-darwin
             python: python3
-            bun-archive: bun-darwin-x64
-            bun-sha256: 80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012
+
           - platform: macOS Apple Silicon
             runner: macos-15
             arch: arm64
             target: aarch64-apple-darwin
             python: python3
-            bun-archive: bun-darwin-aarch64
-            bun-sha256: 90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f
+
     defaults:
       run:
         shell: bash
     env:
-      BUN_VERSION: '1.4.2'
       RUSTUP_TOOLCHAIN: 1.99.1-${{ matrix.target }}
       CARGO_BUILD_TARGET: ${{ matrix.target }}
       EXPECTED_ARCH: ${{ matrix.arch }}
@@ -82,13 +75,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '26.13.1'
-          architecture: ${{ matrix.arch }}
-          package-manager-cache: false
 
       - name: Set up the x64 Windows fixture JDK
         if: runner.os == 'Windows' && runner.arch == 'X64'
@@ -151,11 +137,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev \
+            build-essential pkg-config libssl-dev libgtk-3-dev \
+            librsvg2-dev libxdo-dev libdbus-1-dev \
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             libfontconfig1-dev libvulkan-dev
-          pkg-config --modversion gtk+-3.0 webkit2gtk-4.1 openssl dbus-1 \
+          pkg-config --modversion gtk+-3.0 openssl dbus-1 \
             wayland-client xkbcommon xkbcommon-x11 xcb fontconfig vulkan
 
       - name: Install the Rust toolchain
@@ -168,72 +154,20 @@ jobs:
           test "$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')" = "$EXPECTED_ARCH"
           host=$(rustc --version --verbose | tr -d '\r' | sed -n 's/^host: //p')
           test "$host" = "$CARGO_BUILD_TARGET"
-          node -e 'require("node:assert/strict").equal(process.arch, process.env.EXPECTED_ARCH)'
 
       - name: Verify the inherited design seed
         run: |
           "$PYTHON" design-system/verify_seed.py
 
-      - name: Set up Bun from the verified upstream archive
-        env:
-          BUN_ARCHIVE: ${{ matrix.bun-archive }}
-          BUN_SHA256: ${{ matrix.bun-sha256 }}
-        run: |
-          curl --fail --silent --show-error --location --retry 3 --proto '=https' \
-            --output "$RUNNER_TEMP/$BUN_ARCHIVE.zip" \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$BUN_ARCHIVE.zip"
-          "$PYTHON" - <<'PY'
-          import hashlib
-          import os
-          import pathlib
-          import shutil
-          import zipfile
-
-          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"])
-          archive_name = os.environ["BUN_ARCHIVE"]
-          archive = runner_temp / f"{archive_name}.zip"
-          with archive.open("rb") as source:
-              if hashlib.file_digest(source, "sha256").hexdigest() != os.environ["BUN_SHA256"]:
-                  raise SystemExit("Bun release archive SHA-256 mismatch")
-
-          executable = "bun.exe" if os.name == "nt" else "bun"
-          destination = runner_temp / "carbon-bun"
-          destination.mkdir(exist_ok=True)
-          binary = destination / executable
-          with zipfile.ZipFile(archive) as bundle:
-              with bundle.open(f"{archive_name}/{executable}") as source, binary.open("wb") as target:
-                  shutil.copyfileobj(source, target)
-          binary.chmod(0o755)
-          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as paths:
-              print(destination, file=paths)
-          PY
-
-      - name: Install locked frontend dependencies
-        run: |
-          test "$(bun --version | tr -d '\r')" = "$BUN_VERSION"
-          test "$(bun --print 'process.arch' | tr -d '\r')" = "$EXPECTED_ARCH"
-          bun install --frozen-lockfile
-
-      - name: Check and build the Svelte frontend
-        run: |
-          bun run check
-          bun run build
-
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
-      - name: Exercise launcher interactions in the built renderer
-        if: matrix.platform == 'Windows x64'
-        run: |
-          python -m venv "$RUNNER_TEMP/renderer-env"
-          browser_python="$RUNNER_TEMP/renderer-env/Scripts/python.exe"
-          "$browser_python" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r scripts/renderer-ci-requirements.txt
-          "$browser_python" scripts/test-profile-renderer.py --directory dist --channel msedge
-          "$browser_python" scripts/check-tauri-account-renderer.py --channel msedge
-          "$browser_python" scripts/check-tauri-launch-review.py --channel msedge
+      - name: Build the native GPUI launcher
+        run: cargo build --locked -p carbon-desktop-gpui
 
-      - name: Build both desktop editions
-        run: cargo build --locked -p carbon-desktop -p carbon-desktop-gpui
+      - name: Open a disposable native library
+        if: matrix.platform == 'Windows x64'
+        run: '"$PYTHON" scripts/check-gpui-startup.py "target/$CARGO_BUILD_TARGET/debug/carbon-desktop-gpui.exe"'
 
       - name: Test the locked Rust workspace
         run: cargo test --locked --workspace
@@ -242,7 +176,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Verify build inputs stayed unchanged
-        run: git diff --exit-code -- bun.lock Cargo.lock design-system
+        run: git diff --exit-code -- Cargo.lock design-system
 
   required:
     name: Desktop CI Gate
