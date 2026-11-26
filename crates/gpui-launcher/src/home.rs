@@ -496,7 +496,7 @@ impl Launcher {
             .w_full()
             .justify_center()
             .gap_2()
-            .px(px(if compact { 12. } else { 30. }))
+            .px(if compact { 12. } else { 30. })
             .py(px(10.))
             .bg(p.surface)
             .border_t_1()
@@ -572,11 +572,7 @@ impl Launcher {
                 .min_w_0()
                 .child(home_mark(
                     p,
-                    if profile.imported_pack.is_some() {
-                        Icon::Pack
-                    } else {
-                        Icon::Instance
-                    },
+                    Icon::Builtin(carbon_profiles::icons::displayed(profile)),
                 ))
                 .child(
                     col()
@@ -642,7 +638,10 @@ impl Launcher {
                     .w_full()
                     .gap_2()
                     .min_w_0()
-                    .child(home_mark(p, Icon::Instance))
+                    .child(home_mark(
+                        p,
+                        Icon::Builtin(carbon_profiles::icons::displayed(profile)),
+                    ))
                     .child(
                         col()
                             .min_w_0()

@@ -1303,6 +1303,21 @@ impl Launcher {
         .detach();
     }
 
+    fn open_icon_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.personal else { return };
+        match carbon_profiles::existing_profile(&self.root.path, id) {
+            Ok(Some(profile)) => {
+                if let Some(row) = self.profiles.iter_mut().find(|row| row.id == id) {
+                    row.icon_id.clone_from(&profile.icon_id);
+                }
+                popup::open(self, popup::Kind::Icon(profile), window, cx);
+            }
+            Ok(None) => self.message = "This instance is unavailable. Reload the library.".into(),
+            Err(error) => self.message = error,
+        }
+        cx.notify();
+    }
+
     fn editor(&mut self, mode: popup::Mode, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy() || self.popup.is_some() || self.profile_issue.is_some() {
             return;
