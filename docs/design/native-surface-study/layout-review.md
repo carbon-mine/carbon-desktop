@@ -24,3 +24,5 @@ The baseline images are captures of the Windows GPUI executable built from e4bab
 The two proposals passed 17 built-in checks, including filtering without changing selection, rail bounds, no-map states, pinning, keyboard focus and one-pane navigation. Open the file with `?selftest=1` and inspect `#self-test-report` for the results. A second Playwright run used real browser key events in each of the four layout and width combinations. It returned focus to the Map control on Timberline Trail, identified Alder Reach as the launch target, and reached Driftwood through keyboard search. It observed zero network requests and no page errors.
 
 CDESK-95 tracks measurement of the official launcher's fresh window. Its size remains unverified. An owner layout decision and a repeat at that measured size precede production shell changes.
+
+Cinder Post has no recorded map. Inspect the [wide library empty state](a-empty-1040.png) and the [compact Resume empty state](b-empty-735.png).
