@@ -1102,21 +1102,25 @@ impl Launcher {
         }
     }
 
-    fn server_saved(&mut self, updated: Profile, cx: &mut Context<Self>) {
+    fn refresh_server_binding(&mut self, updated: Profile) {
         if let Some(current) = self
             .profiles
             .iter_mut()
             .find(|profile| profile.id == updated.id)
         {
             current.server_address = updated.server_address;
-            self.message = if current.server_address.is_some() {
-                "Server address saved.".into()
-            } else {
-                "Server address removed.".into()
-            };
-            self.last_activity = Some(ActivityTarget::Personal(updated.id));
-            cx.notify();
         }
+    }
+
+    fn server_saved(
+        &mut self,
+        updated: carbon_profiles::ServerBindingUpdate,
+        cx: &mut Context<Self>,
+    ) {
+        self.message = updated.message().into();
+        self.last_activity = Some(ActivityTarget::Personal(updated.profile.id));
+        self.refresh_server_binding(updated.profile);
+        cx.notify();
     }
 
     fn copy_server(&mut self, cx: &mut Context<Self>) {
@@ -1132,11 +1136,15 @@ impl Launcher {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(address.to_string()));
                 self.message = "Server address copied.".into();
             }
-            _ => {
-                self.message =
-                    "The server address could not be confirmed. Reload the library and try again."
-                        .into()
+            Ok(profile) => {
+                self.message = if profile.server_address.is_some() {
+                    "The server address changed. Review the updated address before copying.".into()
+                } else {
+                    "The server address was removed in another window.".into()
+                };
+                self.refresh_server_binding(profile);
             }
+            Err(error) => self.message = error,
         }
         self.last_activity = Some(ActivityTarget::Personal(id));
         cx.notify();

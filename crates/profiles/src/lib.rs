@@ -3,7 +3,9 @@ mod folder;
 mod server;
 mod storage;
 pub use folder::open_game_folder;
-pub use server::{server_profile, set_server_address, ServerAddress, ServerJoinReadiness};
+pub use server::{
+    server_profile, set_server_address, ServerAddress, ServerBindingUpdate, ServerJoinReadiness,
+};
 #[cfg(test)]
 mod tests;
 

@@ -115,13 +115,30 @@ pub fn server_profile(root: &Path, id: Uuid) -> Result<Profile, String> {
     Ok(library.profiles[library.position(id)?].clone())
 }
 
+pub struct ServerBindingUpdate {
+    pub profile: Profile,
+    pub changed: bool,
+}
+
+impl ServerBindingUpdate {
+    pub fn message(&self) -> &'static str {
+        if !self.changed {
+            "No server address changes."
+        } else if self.profile.server_address.is_some() {
+            "Server address saved."
+        } else {
+            "Server address removed."
+        }
+    }
+}
+
 /// Transact only the binding, using the value observed when the editor opened.
 pub fn set_server_address(
     root: &Path,
     id: Uuid,
     expected: Option<&ServerAddress>,
     address: Option<ServerAddress>,
-) -> Result<Profile, String> {
+) -> Result<ServerBindingUpdate, String> {
     let (_lock, mut library) = storage::open(root)?;
     let position = library.position(id)?;
     let profile = &mut library.profiles[position];
@@ -132,12 +149,18 @@ pub fn set_server_address(
         );
     }
     if profile.server_address == address {
-        return Ok(profile.clone());
+        return Ok(ServerBindingUpdate {
+            profile: profile.clone(),
+            changed: false,
+        });
     }
     profile.server_address = address;
     let updated = profile.clone();
     storage::save(&root.join("personal"), &library)?;
-    Ok(updated)
+    Ok(ServerBindingUpdate {
+        profile: updated,
+        changed: true,
+    })
 }
 
 /// A local explanation only. It never asks the account provider, server, or network.

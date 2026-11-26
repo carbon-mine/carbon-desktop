@@ -2,9 +2,10 @@
 <script lang="ts">
   import type { PersonalProfile } from './personal'
 
-  let { profile, editable, error, onEdit, onCopy, onReload }: {
+  let { profile, editable, canCopy, error, onEdit, onCopy, onReload }: {
     profile: PersonalProfile
     editable: boolean
+    canCopy: boolean
     error: string
     onEdit: (opener: HTMLButtonElement) => void
     onCopy: () => void
@@ -37,7 +38,7 @@
   {/if}
   <div class="actions">
     {#if profile.serverAddress}
-      <button onclick={onCopy}>Copy server address</button>
+      <button aria-disabled={!canCopy} onclick={onCopy}>Copy server address</button>
     {/if}
     <button disabled={!editable} onclick={event => onEdit(event.currentTarget)}>
       {profile.serverAddress ? 'Edit server address' : 'Set server address'}
@@ -56,6 +57,7 @@
   .server-inventory dt { color: var(--desktop-muted); }
   .server-inventory dd { margin: 0; overflow-wrap: anywhere; }
   .server-address { user-select: text; font-variant-numeric: tabular-nums; }
+  .servers button[aria-disabled="true"] { opacity: 0.65; cursor: default; }
   @media (max-width: 28rem) {
     .server-inventory div { grid-template-columns: minmax(0, 1fr); gap: 0.08rem; }
   }

@@ -352,6 +352,7 @@ impl Popup {
                 });
             match result {
                 Ok(profile) => {
+                    self.server = None;
                     let _ = self.owner.update(cx, |launcher, cx| {
                         launcher.server_saved(profile, cx);
                     });
@@ -551,6 +552,13 @@ impl Render for Popup {
             if form.mode == Mode::Clone {
                 content = content
                     .child("Copy this instance’s preferences. Game data and saves stay separate.");
+                if form
+                    .original
+                    .as_ref()
+                    .is_some_and(|profile| profile.server_address.is_some())
+                {
+                    content = content.child("The copy starts without a server address.");
+                }
             } else {
                 content = content
                     .child("Minecraft version")

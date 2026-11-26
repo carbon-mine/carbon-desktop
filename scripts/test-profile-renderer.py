@@ -33,6 +33,7 @@ BRIDGE = """
     importedPack: null,
     serverEdit: undefined,
     deferServerDialog: false,
+    deferServerCopy: false,
     emit(event, payload) { handlers[listeners[event]]({event, payload}); }
   };
   const report = {
@@ -121,6 +122,7 @@ BRIDGE = """
         const profile = profiles.find(profile => profile.id === args.profileId);
         if (!profile || (profile.serverAddress ?? null) !== args.expected) throw 'The binding changed.';
         const address = state.serverEdit;
+        const previous = profile.serverAddress ?? null;
         state.serverEdit = undefined;
         if (state.deferServerDialog)
           await new Promise(resolve => { state.finishServerDialog = resolve; });
@@ -134,11 +136,15 @@ BRIDGE = """
             ? 'Join server is unavailable. This local pack still needs supported client files or a qualified loader.'
             : 'Join server is unavailable while protected Minecraft launch is in development.';
         }
-        return structuredClone(profile);
+        const message = address === previous ? 'No server address changes.'
+          : address ? 'Server address saved.' : 'Server address removed.';
+        return {profile: structuredClone(profile), message};
       }
       if (command === 'copy_server_address') {
         if (profiles.find(profile => profile.id === args.profileId)?.serverAddress !== args.expected)
           throw 'The binding changed.';
+        if (state.deferServerCopy)
+          await new Promise(resolve => { state.finishServerCopy = resolve; });
         return;
       }
       if (command === 'apply_desktop_theme') return null;
@@ -278,6 +284,9 @@ def test_server_binding(browser, address, captures):
     page.evaluate("reviewTest.deferServerDialog = false; reviewTest.finishServerDialog()")
     expect(set_address).to_be_focused()
     expect(section.get_by_role("button", name="Copy server address")).to_have_count(0)
+    page.evaluate("reviewTest.serverEdit = null")
+    set_address.press("Enter")
+    expect(page.get_by_role("status")).to_contain_text("No server address changes.")
 
     destination = "play.example.org:25565"
     page.evaluate("address => {reviewTest.serverEdit = address}", destination)
@@ -293,8 +302,15 @@ def test_server_binding(browser, address, captures):
         page.screenshot(path=str(captures / "server-bound-overview.png"))
 
     mark = page.evaluate("reviewTest.requests.length")
-    section.get_by_role("button", name="Copy server address").press("Enter")
+    copy = section.get_by_role("button", name="Copy server address")
+    page.evaluate("reviewTest.deferServerCopy = true")
+    copy.press("Enter")
+    expect(copy).to_be_disabled()
+    page.wait_for_function("typeof reviewTest.finishServerCopy === 'function'")
+    page.keyboard.press("Enter")
+    page.evaluate("reviewTest.finishServerCopy()")
     expect(page.get_by_role("status")).to_contain_text("Server address copied.")
+    expect(copy).to_be_focused()
     copied = page.evaluate("start => reviewTest.requests.slice(start)", mark)
     assert copied == [["copy_server_address", {
         "profileId": "0ddfed53-76d4-47f4-ab31-8cd392aa4a03", "expected": destination,

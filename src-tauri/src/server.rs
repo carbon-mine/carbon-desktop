@@ -27,6 +27,12 @@ impl From<Profile> for LibraryProfile {
     }
 }
 
+#[derive(Serialize)]
+pub(crate) struct ServerEdit {
+    profile: LibraryProfile,
+    message: &'static str,
+}
+
 #[cfg(any(windows, target_os = "linux"))]
 #[tauri::command]
 pub async fn edit_server_dialog(
@@ -34,7 +40,7 @@ pub async fn edit_server_dialog(
     root: State<'_, Library>,
     profile_id: Uuid,
     expected: Option<ServerAddress>,
-) -> Result<Option<LibraryProfile>, String> {
+) -> Result<Option<ServerEdit>, String> {
     let root = root.0.clone();
     let source = root.clone();
     let profile = tauri::async_runtime::spawn_blocking(move || {
@@ -49,8 +55,14 @@ pub async fn edit_server_dialog(
         return Ok(None);
     };
     tauri::async_runtime::spawn_blocking(move || {
-        carbon_profiles::set_server_address(&root, profile_id, expected.as_ref(), address)
-            .map(|profile| Some(profile.into()))
+        carbon_profiles::set_server_address(&root, profile_id, expected.as_ref(), address).map(
+            |updated| {
+                Some(ServerEdit {
+                    message: updated.message(),
+                    profile: updated.profile.into(),
+                })
+            },
+        )
     })
     .await
     .map_err(|_| "Saving the server address was interrupted. Reload this instance.")?
@@ -85,7 +97,7 @@ pub async fn edit_server_dialog(
     root: State<'_, Library>,
     profile_id: Uuid,
     expected: Option<ServerAddress>,
-) -> Result<Option<LibraryProfile>, String> {
+) -> Result<Option<ServerEdit>, String> {
     let _ = (window, root, profile_id, expected);
     Err("The native server editor is unavailable on this platform.".into())
 }

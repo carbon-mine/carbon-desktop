@@ -1,9 +1,8 @@
 #[cfg(any(windows, target_os = "linux"))]
 use crate::account::Dialog as AccountDialog;
 use crate::Library;
-use carbon_profiles::Profile;
 #[cfg(any(windows, target_os = "linux"))]
-use carbon_profiles::{ProfileAction, ServerAddress, VanillaVersion};
+use carbon_profiles::{Profile, ProfileAction, ServerAddress, VanillaVersion};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::{State, WebviewWindow};
@@ -68,13 +67,23 @@ pub async fn copy_server(window: WebviewWindow, address: ServerAddress) -> Resul
     window
         .run_on_main_thread(move || {
             #[cfg(windows)]
-            let result = windows::copy_text(&owner, address.as_str());
+            let _ = send.try_send(windows::copy_text(&owner, address.as_str()));
             #[cfg(target_os = "linux")]
-            let result = {
-                gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(address.as_str());
-                Ok(())
-            };
-            let _ = send.try_send(result);
+            {
+                let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+                clipboard.set_text(address.as_str());
+                clipboard.request_text(move |_, text| {
+                    let result = if text == Some(address.as_str()) {
+                        Ok(())
+                    } else {
+                        Err(
+                            "The clipboard could not confirm the address. Try copying it again."
+                                .into(),
+                        )
+                    };
+                    let _ = send.try_send(result);
+                });
+            }
         })
         .map_err(|_| "Could not open the system clipboard.")?;
     receive

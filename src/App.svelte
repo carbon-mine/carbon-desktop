@@ -97,7 +97,7 @@
   let personalFailure = $state('')
   let packFailure = $state('')
   let serverFailure = $state<{id: string; text: string} | null>(null)
-  let copyInProgress = false
+  let copyInProgress = $state(false)
   let selectedTargetFailure = $derived(view === 'review' && fixtureFailure?.targetVerification && fixtureFailure.instance === selected)
   let search = $state<HTMLInputElement>()
   let heading = $state<HTMLHeadingElement>()
@@ -130,6 +130,7 @@
   })
   let accountDialogOpen = $state(false)
   let accountDialogError = $state('')
+  let canCopyServer = $derived(!copyInProgress && !busy && !accountDialogOpen && !nativePickerActive)
 
   onMount(() => {
     const media = matchMedia('(prefers-color-scheme: dark)')
@@ -715,18 +716,19 @@
   }
 
   async function editServer(profile: PersonalProfile, opener: HTMLButtonElement) {
-    if (personalDisabled || nativePickerActive || accountDialogOpen) return
+    if (personalDisabled || copyInProgress || nativePickerActive || accountDialogOpen) return
     busy = true
     serverFailure = null
     try {
-      const saved = await invoke<PersonalProfile | null>('edit_server_dialog', {
+      const result = await invoke<{profile: PersonalProfile; message: string} | null>('edit_server_dialog', {
         profileId: profile.id, expected: profile.serverAddress ?? null
       })
-      if (saved?.id === profile.id) {
+      const saved = result?.profile
+      if (result && saved?.id === profile.id) {
         profiles = profiles.map(current => current.id === saved.id ? {
           ...current, serverAddress: saved.serverAddress, serverJoinMessage: saved.serverJoinMessage
         } : current)
-        message = profile.name + (saved.serverAddress ? ' · Server address saved.' : ' · Server address removed.')
+        message = profile.name + ' · ' + result.message
       }
     } catch (reason) {
       serverFailure = {id: profile.id, text: errorText(reason)}
@@ -741,7 +743,7 @@
   }
 
   async function copyServer(profile: PersonalProfile) {
-    if (!profile.serverAddress || copyInProgress || accountDialogOpen || nativePickerActive) return
+    if (!profile.serverAddress || !canCopyServer) return
     copyInProgress = true
     serverFailure = null
     try {
@@ -1030,7 +1032,8 @@
             {/if}
             {#if profileTab === 'Settings' || personal.serverAddress}
               <ServerDetails profile={personal}
-                editable={!personalDisabled && !nativePickerActive && !accountDialogOpen}
+                editable={!personalDisabled && !copyInProgress && !nativePickerActive && !accountDialogOpen}
+                canCopy={canCopyServer}
                 error={serverFailure?.id === personal.id ? serverFailure.text : ''}
                 onEdit={opener => editServer(personal!, opener)}
                 onCopy={() => copyServer(personal!)}

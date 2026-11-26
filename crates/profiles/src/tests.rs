@@ -64,6 +64,11 @@ fn server_binding_updates_only_one_instance_and_preserves_old_profiles_and_impor
             .server_join_readiness(),
         ServerJoinReadiness::NoServer
     );
+    let index = root.join("personal/profiles.json");
+    let before = fs::read(&index).unwrap();
+    let no_change = set_server_address(root, first.id, None, None).unwrap();
+    assert_eq!(no_change.message(), "No server address changes.");
+    assert_eq!(fs::read(&index).unwrap(), before);
     let second = apply(root, create("Other profile")).unwrap().remove(1);
     let address = ServerAddress::parse("test.example:25565").unwrap();
     let other_address = ServerAddress::parse("[2001:db8::1]").unwrap();
@@ -105,7 +110,9 @@ fn server_binding_updates_only_one_instance_and_preserves_old_profiles_and_impor
     )
     .unwrap();
     assert!(imported.server_address.is_none());
-    let bound = set_server_address(root, imported.id, None, Some(address.clone())).unwrap();
+    let updated = set_server_address(root, imported.id, None, Some(address.clone())).unwrap();
+    assert_eq!(updated.message(), "Server address saved.");
+    let bound = updated.profile;
     assert_eq!(
         bound.server_join_readiness(),
         ServerJoinReadiness::UnqualifiedPack
@@ -135,7 +142,9 @@ fn server_binding_updates_only_one_instance_and_preserves_old_profiles_and_impor
         b"pack canary"
     );
 
-    let cleared = set_server_address(root, first.id, Some(&address), None).unwrap();
+    let updated = set_server_address(root, first.id, Some(&address), None).unwrap();
+    assert_eq!(updated.message(), "Server address removed.");
+    let cleared = updated.profile;
     assert!(cleared.server_address.is_none());
     assert_eq!(cleared.memory_mib, 4096);
     assert_eq!(
