@@ -20,6 +20,7 @@ The Windows x64 job also runs the built Svelte interface in headless Microsoft E
 ```powershell
 python -m pip install --only-binary=:all: --require-hashes -r scripts/renderer-ci-requirements.txt
 python scripts/test-profile-renderer.py --directory dist --channel msedge
+python scripts/check-tauri-account-renderer.py --channel msedge
 ```
 
 Use the native Rust, Node and Bun versions in the workflow. Python 3 runs the design seed verifier. CI verifies the SHA-256 for each architecture’s Bun archive. [Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
