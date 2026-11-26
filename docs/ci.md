@@ -1,12 +1,25 @@
 # Desktop CI
 
-The [Desktop CI workflow](../.github/workflows/desktop-ci.yml) builds Svelte/Tauri and GPUI on Windows x64 and Ubuntu 24.04 x64 for pull requests targeting `main` and pushes to `main`. The branch protection check is **Desktop CI Gate**. It runs after the platform jobs and requires both to succeed.
+The [Desktop CI workflow](../.github/workflows/desktop-ci.yml) builds and tests Svelte/Tauri and GPUI for pull requests targeting `main` and pushes to `main`. **Desktop CI Gate** is the single branch protection check. It requires every native platform job to succeed. [Standard GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 
-Each job verifies the inherited design seed, installs from `bun.lock`, checks and builds the renderer, builds both native executables with `Cargo.lock`, and runs the workspace tests. The Tauri executable embeds the freshly built `dist/`. CI runs without a Microsoft application registration and leaves opt-in provider and vault tests out of the default suite. Keep graphical walkthroughs, signed packaging and native play qualification in the relevant platform runbook.
+| Platform | Native runner | Rust target |
+| --- | --- | --- |
+| Windows x64 | `windows-2025` | `x86_64-pc-windows-msvc` |
+| Windows ARM64 | `windows-11-arm` | `aarch64-pc-windows-msvc` |
+| Linux x64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` |
+| Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` |
+| macOS Intel | `macos-15-intel` | `x86_64-apple-darwin` |
+| macOS Apple Silicon | `macos-15` | `aarch64-apple-darwin` |
+
+Each job verifies the runner, Rust host, Node and Bun architectures. It checks the inherited design seed, installs from `bun.lock`, checks and builds the renderer, builds both native executables with `Cargo.lock` and runs the workspace tests, formatting and strict Clippy. Tauri embeds the freshly built `dist/`. CI runs both editions without a Microsoft application registration. Opt-in provider and vault tests, graphical walkthroughs, signed packaging and native play have separate verification.
 
 ## Reproduce locally
 
-Use the Rust, Node and Bun versions in the workflow. CI checks each platform archive against a SHA-256 from the [official Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2). On Windows use the x64 MSVC toolchain, the Windows SDK and a JDK with `javac` capable of compiling Java 17. On Ubuntu install the native development packages listed in the workflow. Python 3 runs the design seed verifier. [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+Use the native Rust, Node and Bun versions in the workflow. Python 3 runs the design seed verifier. CI verifies the SHA-256 for each architecture’s Bun archive. [Bun release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
+
+- **Windows** requires the MSVC build tools for the host architecture and the Windows SDK. The Windows fixture compiler requires a native JDK capable of `javac --release 17`. CI uses Temurin for x64 and a checksum-pinned Microsoft Build of OpenJDK for ARM64. Tauri also uses WebView2. [Microsoft OpenJDK](https://learn.microsoft.com/en-us/java/openjdk/download) · [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+- **Ubuntu** requires the development packages in the workflow, including GTK, WebKitGTK, OpenSSL, D-Bus, Wayland, XKB, XCB and Vulkan. Running GPUI interactively also requires a suitable graphical session.
+- **macOS** requires full Xcode, the selected macOS SDK, Clang and Metal command-line tools, and CMake. CI uses Xcode 16.4 on both architectures. For local Xcode versions that ship Metal separately, install the Metal toolchain before building GPUI. [Apple Metal toolchain setup](https://developer.apple.com/documentation/xcode/downloading-and-installing-additional-xcode-components)
 
 ```text
 python design-system/verify_seed.py

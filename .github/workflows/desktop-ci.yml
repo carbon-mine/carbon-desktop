@@ -24,18 +24,55 @@ jobs:
         include:
           - platform: Windows x64
             runner: windows-2025
+            arch: x64
+            target: x86_64-pc-windows-msvc
+            python: python
             bun-archive: bun-windows-x64
             bun-sha256: ce4c17497b2f29712a99d3d53f028de28cd42e3bacb8589599e7f000e49b6405
+          - platform: Windows ARM64
+            runner: windows-11-arm
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+            python: python
+            bun-archive: bun-windows-aarch64
+            bun-sha256: a7a16b876a305fd1029c66dbd27007b4f6112ae896532f675878731a21e50cfd
           - platform: Linux x64
             runner: ubuntu-24.04
+            arch: x64
+            target: x86_64-unknown-linux-gnu
+            python: python3
             bun-archive: bun-linux-x64
             bun-sha256: 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
+          - platform: Linux ARM64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+            python: python3
+            bun-archive: bun-linux-aarch64
+            bun-sha256: 54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7
+          - platform: macOS Intel
+            runner: macos-15-intel
+            arch: x64
+            target: x86_64-apple-darwin
+            python: python3
+            bun-archive: bun-darwin-x64
+            bun-sha256: 80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012
+          - platform: macOS Apple Silicon
+            runner: macos-15
+            arch: arm64
+            target: aarch64-apple-darwin
+            python: python3
+            bun-archive: bun-darwin-aarch64
+            bun-sha256: 90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f
     defaults:
       run:
         shell: bash
     env:
       BUN_VERSION: '1.4.2'
-      RUSTUP_TOOLCHAIN: '1.99.1'
+      RUSTUP_TOOLCHAIN: 1.99.1-${{ matrix.target }}
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      PYTHON: ${{ matrix.python }}
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: always
     steps:
@@ -48,19 +85,64 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26.13.1'
+          architecture: ${{ matrix.arch }}
           package-manager-cache: false
 
-      - name: Set up JDK for the Windows sandbox fixture
-        if: runner.os == 'Windows'
+      - name: Set up the x64 Windows fixture JDK
+        if: runner.os == 'Windows' && runner.arch == 'X64'
         uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: '21.0.13.1+2'
+          architecture: x64
           overwrite-settings: false
 
-      - name: Check Windows fixture compiler
+      - name: Set up the native ARM64 Windows fixture JDK
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'microsoft-jdk-arm64.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'carbon-jdk-arm64'
+          $url = 'https://aka.ms/download-jdk/microsoft-jdk-21.0.13.1-windows-aarch64.zip'
+          $sha256 = 'f2b0a3b3f684131c209b3d0f886d985bc6f5a1861cb4c3a4ea1450dd00218e7d'
+          curl.exe --fail --silent --show-error --location --retry 3 --proto '=https' --output $archive $url
+          if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $sha256) {
+            throw 'The Windows ARM64 JDK download failed verification.'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $homes = @(Get-ChildItem -LiteralPath $destination -Directory | Where-Object {
+            Test-Path -LiteralPath (Join-Path $_.FullName 'bin/javac.exe') -PathType Leaf
+          })
+          if ($homes.Count -ne 1) {
+            throw 'Could not determine the Windows ARM64 JDK home.'
+          }
+          "JAVA_HOME=$($homes[0].FullName)" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          Join-Path $homes[0].FullName 'bin' | Add-Content -LiteralPath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Verify the Windows fixture compiler architecture
         if: runner.os == 'Windows'
-        run: javac -version
+        run: |
+          javac -version
+          case "$EXPECTED_ARCH" in
+            x64) java_arch=amd64 ;;
+            arm64) java_arch=aarch64 ;;
+            *) exit 1 ;;
+          esac
+          java -XshowSettings:properties -version 2>&1 | tr -d '\r' |
+            grep -E "^[[:space:]]*os\.arch = $java_arch$"
+
+      - name: Select Xcode and verify the macOS Metal toolchain
+        if: runner.os == 'macOS'
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx --find clang
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+          cmake --version
+          printf 'DEVELOPER_DIR=%s\n' "$DEVELOPER_DIR" >> "$GITHUB_ENV"
 
       - name: Install Linux native development dependencies
         if: runner.os == 'Linux'
@@ -79,9 +161,16 @@ jobs:
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
           rustc --version --verbose
           cargo --version
+          echo "GitHub runner architecture: $RUNNER_ARCH"
+          echo "Native Cargo target: $CARGO_BUILD_TARGET"
+          test "$(printf '%s' "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')" = "$EXPECTED_ARCH"
+          host=$(rustc --version --verbose | tr -d '\r' | sed -n 's/^host: //p')
+          test "$host" = "$CARGO_BUILD_TARGET"
+          node -e 'require("node:assert/strict").equal(process.arch, process.env.EXPECTED_ARCH)'
 
       - name: Verify the inherited design seed
-        run: python design-system/verify_seed.py
+        run: |
+          "$PYTHON" design-system/verify_seed.py
 
       - name: Set up Bun from the verified upstream archive
         env:
@@ -91,7 +180,7 @@ jobs:
           curl --fail --silent --show-error --location --retry 3 --proto '=https' \
             --output "$RUNNER_TEMP/$BUN_ARCHIVE.zip" \
             "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$BUN_ARCHIVE.zip"
-          python - <<'PY'
+          "$PYTHON" - <<'PY'
           import hashlib
           import os
           import pathlib
@@ -119,7 +208,8 @@ jobs:
 
       - name: Install locked frontend dependencies
         run: |
-          test "$(bun --version)" = "$BUN_VERSION"
+          test "$(bun --version | tr -d '\r')" = "$BUN_VERSION"
+          test "$(bun --print 'process.arch' | tr -d '\r')" = "$EXPECTED_ARCH"
           bun install --frozen-lockfile
 
       - name: Check and build the Svelte frontend
@@ -150,7 +240,7 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Require both platform jobs to pass
+      - name: Require all six platform jobs to pass
         env:
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
