@@ -69,13 +69,12 @@ pub fn keep_main_windowed(
                         window.zoom_window();
                     }
                 }
-                Correction::Resize(_) => {
-                    if let WindowBounds::Windowed(bounds) = window.window_bounds() {
-                        if bounds.size != target {
-                            window.resize(target);
-                        }
+                Correction::Resize(_) => match window.window_bounds() {
+                    WindowBounds::Windowed(bounds) if bounds.size != target => {
+                        window.resize(target);
                     }
-                }
+                    _ => {}
+                },
             });
         }
     })
