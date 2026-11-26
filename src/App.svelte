@@ -22,6 +22,7 @@
   type ThemePreference = 'system' | 'light' | 'dark'
   type MenuAction = 'new-profile' | 'import-pack' | 'focus-search' | 'show-activity' | `theme-${ThemePreference}`
   type ShortcutSource = 'native-menu' | 'keyboard'
+  type AccountStatus = {signedIn: boolean; hasAccounts: boolean}
   type JavaProgress = {profileId: string; receivedBytes: number; totalBytes: number}
   const setupCommands = {check: 'inspect_vanilla_profile', choose: 'select_profile_java', install: 'install_profile_java', client: 'import_vanilla_client'}
   const workingLabels: Record<WorkAction, string> = {
@@ -107,6 +108,9 @@
   let workspace = $state<HTMLElement>()
   let theme = $state<ThemePreference>('system')
   let dark = $state(false)
+  let accountStatus = $state<AccountStatus>({signedIn: false, hasAccounts: false})
+  let accountDialogOpen = $state(false)
+  let accountDialogError = $state('')
 
   onMount(() => {
     const media = matchMedia('(prefers-color-scheme: dark)')
@@ -122,6 +126,11 @@
     }
     media.addEventListener('change', update)
     window.addEventListener('keydown', keyboardShortcut, true)
+    window.addEventListener('focus', refreshAccountStatus)
+    void refreshAccountStatus()
+    const accountTimer = window.setInterval(() => {
+      if (!document.hidden && !accountDialogOpen) void refreshAccountStatus()
+    }, 5000)
     void refreshPersonal()
     const listeners = [
       listen<MenuAction>('desktop-menu', ({payload}) => menuAction(payload, 'native-menu')),
@@ -136,6 +145,8 @@
     return () => {
       media.removeEventListener('change', update)
       window.removeEventListener('keydown', keyboardShortcut, true)
+      window.removeEventListener('focus', refreshAccountStatus)
+      window.clearInterval(accountTimer)
       for (const listener of listeners) void listener.then(remove => remove?.())
     }
   })
@@ -156,6 +167,29 @@
     void invoke('apply_desktop_theme', {preference: theme}).catch(() => {})
   }
 
+  async function refreshAccountStatus() {
+    try {
+      accountStatus = await invoke<AccountStatus>('minecraft_account_status')
+    } catch {
+      accountStatus = {signedIn: false, hasAccounts: false}
+    }
+  }
+
+  async function openMinecraftAccounts(opener: HTMLButtonElement) {
+    if (accountDialogOpen || busy || nativePickerActive) return
+    accountDialogOpen = true
+    accountDialogError = ''
+    try {
+      await invoke('show_minecraft_accounts')
+    } catch (error) {
+      accountDialogError = errorText(error)
+    } finally {
+      accountDialogOpen = false
+      void refreshAccountStatus()
+      opener.focus()
+    }
+  }
+
   async function focusSearch() {
     if (matchMedia(narrowViewport).matches) detailOpen = false
     await tick()
@@ -173,7 +207,7 @@
   }
 
   function menuAction(action: MenuAction, source: ShortcutSource) {
-    if (busy || nativePickerActive) return
+    if (busy || nativePickerActive || accountDialogOpen) return
     const previous = recentShortcuts.get(action)
     const time = performance.now()
     // A native accelerator can reach the renderer both as a key and as a menu event.
@@ -681,11 +715,22 @@
       <button class="toolbar-button" id="new-profile" disabled={personalDisabled} onclick={createProfile}><DesktopIcon name="add" /> New instance</button>
     </div>
     <div class="app-options">
-      <span class="account"><DesktopIcon name="account" /> Signed out</span>
+      <button class="account quiet-button" type="button" aria-haspopup="dialog"
+        aria-disabled={accountDialogOpen || busy || nativePickerActive}
+        onclick={e => openMinecraftAccounts(e.currentTarget)}>
+        <DesktopIcon name="account" />
+        {accountStatus.signedIn ? 'Minecraft account · Verified' : accountStatus.hasAccounts ? 'Minecraft account' : 'Sign in with Microsoft'}
+      </button>
     </div>
   </header>
 
   <div class="notices">
+      {#if accountDialogError}
+        <div class="error" role="alert">
+          <h2>Could not open Minecraft accounts</h2>
+          <p>{accountDialogError}</p>
+        </div>
+      {/if}
       {#if view === 'review' && fixtureFailure && (!fixtureFailure.instance || fixtureFailure.instance === selected)}
         <div class="error" role="alert">
           <h2 tabindex="-1" bind:this={fixtureAlertHeading}>Fixture library needs attention</h2>
@@ -821,7 +866,8 @@
                   <div class="readiness"><h4 id="launch-readiness" tabindex="-1">Play requirements</h4>
                     {#if setupReport?.blockedReasons.length}
                       {#each setupReport.blockedReasons as reason}<p>{reason}</p>{/each}
-                    {:else}<p>Microsoft sign-in and protected Minecraft launch are pending.</p>{/if}
+                    {:else if accountStatus.signedIn}<p>Microsoft account verified. Protected Minecraft launch is still in development.</p>
+                    {:else}<p>Sign in with Microsoft to verify your account. Protected Minecraft launch is still in development.</p>{/if}
                     {#if (gamePrepared || gameReceipt) && setupReport && !managedJdkReady}
                       <p>Java {setupReport.javaMajor} · {installJdkLabels[setupReport.managedJava.status]}</p>
                     {/if}

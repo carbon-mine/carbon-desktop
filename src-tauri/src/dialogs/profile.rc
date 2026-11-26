@@ -50,3 +50,21 @@ BEGIN
     LTEXT        "", 1200, 13, 12, 258, 44, SS_NOPREFIX | SS_EDITCONTROL
     DEFPUSHBUTTON "Close", IDOK, 0, 61, 284, 30
 END
+
+2104 DIALOGEX 0, 0, 306, 190
+STYLE CARBON_DIALOG
+CAPTION "Minecraft accounts"
+FONT 10, "Segoe UI"
+BEGIN
+    LTEXT          "", 1300, 13, 10, 280, 14, SS_NOPREFIX
+    LTEXT          "", 1301, 13, 29, 280, 33, SS_NOPREFIX | SS_EDITCONTROL
+    LTEXT          "", 1302, 13, 68, 170, 12, SS_NOPREFIX
+    LTEXT          "Saved &accounts", 1303, 13, 92, 280, 12
+    COMBOBOX       1304, 13, 107, 280, 100, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON     "Refresh account", 1305, 13, 132, 112, 20
+    PUSHBUTTON     "Sign out", 1306, 131, 132, 112, 20
+    PUSHBUTTON     "Copy code", 1307, 188, 63, 105, 20
+    PUSHBUTTON     "Cancel operation", 1308, 13, 132, 112, 20
+    PUSHBUTTON     "Sign in with Microsoft", IDOK, 0, 160, 153, 30
+    DEFPUSHBUTTON  "Close", IDCANCEL, 153, 160, 153, 30
+END
