@@ -39,3 +39,6 @@ accesskit_unix = "=0.24.1"
 
 [build-dependencies]
 embed-resource = "3"
+
+[dev-dependencies]
+image = { version = '=0.25.10', default-features = false }
