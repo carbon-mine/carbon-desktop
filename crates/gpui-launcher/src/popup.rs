@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 mod account;
-mod targets;
 
 use super::theme::{Partition, compact_action, label};
 use super::{Launcher, account_panel::AccountPanel};
@@ -19,6 +18,8 @@ use gpui_component::{
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 use targets::TargetDialog;
 use uuid::Uuid;
+
+mod targets;
 
 actions!(popup, [Close, Save]);
 
