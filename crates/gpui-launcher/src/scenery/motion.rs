@@ -47,22 +47,61 @@ mod mf {
     use super::super::package::Movie;
     use gpui::RenderImage;
     use std::{
+        ffi::c_void,
         path::{Path, PathBuf},
         sync::{Arc, OnceLock},
     };
-    use windows::Win32::Foundation::E_POINTER;
+    use windows::Win32::Foundation::HMODULE;
     use windows::Win32::Media::MediaFoundation::{
-        IMFMediaType, IMFSample, IMFSourceReader, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE,
-        MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ALL_STREAMS,
+        IMFAttributes, IMFMediaType, IMFSample, IMFSourceReader, MF_MT_DEFAULT_STRIDE,
+        MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ALL_STREAMS,
         MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-        MF_SOURCE_READERF_ERROR, MF_VERSION, MFCreateAttributes, MFCreateMediaType,
-        MFCreateSourceReaderFromURL, MFMediaType_Video, MFSTARTUP_LITE, MFStartup,
-        MFVideoFormat_RGB32,
+        MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_ERROR, MF_VERSION, MFMediaType_Video,
+        MFSTARTUP_LITE, MFVideoFormat_RGB32,
     };
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-    use windows::core::{HSTRING, Result as WinResult};
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::core::{HRESULT, HSTRING, Interface, PCSTR, PCWSTR, w};
 
     const MAX_EDGE: u32 = 4096;
+
+    /// Media Foundation is resolved at runtime instead of through static
+    /// imports so a Windows N image without the Media Feature Pack still
+    /// starts the launcher and falls back to bundled artwork.
+    struct Api {
+        startup: unsafe extern "system" fn(u32, u32) -> HRESULT,
+        create_attributes: unsafe extern "system" fn(*mut Option<IMFAttributes>, u32) -> HRESULT,
+        create_media_type: unsafe extern "system" fn(*mut Option<IMFMediaType>) -> HRESULT,
+        create_reader_from_url: unsafe extern "system" fn(
+            PCWSTR,
+            *const c_void,
+            *mut Option<IMFSourceReader>,
+        ) -> HRESULT,
+    }
+
+    fn api() -> Result<&'static Api, String> {
+        static API: OnceLock<Result<Api, String>> = OnceLock::new();
+        API.get_or_init(|| unsafe {
+            let platform = LoadLibraryW(w!("mfplat.dll"))
+                .map_err(|error| format!("Media Foundation is unavailable ({error})"))?;
+            let reader = LoadLibraryW(w!("mfreadwrite.dll"))
+                .map_err(|error| format!("Media Foundation reading is unavailable ({error})"))?;
+            Ok(Api {
+                startup: symbol(platform, b"MFStartup\0")?,
+                create_attributes: symbol(platform, b"MFCreateAttributes\0")?,
+                create_media_type: symbol(platform, b"MFCreateMediaType\0")?,
+                create_reader_from_url: symbol(reader, b"MFCreateSourceReaderFromURL\0")?,
+            })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+    }
+
+    unsafe fn symbol<T: Copy>(module: HMODULE, name: &'static [u8]) -> Result<T, String> {
+        let address = unsafe { GetProcAddress(module, PCSTR(name.as_ptr())) }
+            .ok_or_else(|| format!("Media Foundation entry point {:?} is missing", name))?;
+        Ok(unsafe { std::mem::transmute_copy(&address) })
+    }
 
     pub(super) struct Reader {
         path: PathBuf,
@@ -119,27 +158,33 @@ mod mf {
         }
 
         fn sample(&mut self) -> Result<Option<Arc<RenderImage>>, String> {
-            let mut flags = 0u32;
-            let mut sample: Option<IMFSample> = None;
-            unsafe {
-                self.reader
-                    .ReadSample(
-                        MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                        0,
-                        None,
-                        Some(&mut flags),
-                        None,
-                        Some(&mut sample),
-                    )
-                    .map_err(|error| format!("Media Foundation read failed: {error}"))?;
+            // A stream tick carries no sample and is not the end of the movie.
+            for _ in 0..8 {
+                let mut flags = 0u32;
+                let mut sample: Option<IMFSample> = None;
+                unsafe {
+                    self.reader
+                        .ReadSample(
+                            MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                            0,
+                            None,
+                            Some(&mut flags),
+                            None,
+                            Some(&mut sample),
+                        )
+                        .map_err(|error| format!("Media Foundation read failed: {error}"))?;
+                }
+                if flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0 {
+                    return Err("Media Foundation reported a decode error".into());
+                }
+                if let Some(sample) = sample.as_ref() {
+                    return self.present(sample).map(Some);
+                }
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    return Ok(None);
+                }
             }
-            if flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0 {
-                return Err("Media Foundation reported a decode error".into());
-            }
-            sample
-                .as_ref()
-                .map(|sample| self.present(sample))
-                .transpose()
+            Err("Media Foundation produced no frame".into())
         }
 
         fn restart(&mut self) -> Result<(), String> {
@@ -174,31 +219,40 @@ mod mf {
         }
     }
 
-    fn source(path: &Path) -> WinResult<(IMFSourceReader, u32, u32, i32)> {
+    fn source(path: &Path) -> Result<(IMFSourceReader, u32, u32, i32), String> {
+        let api = api()?;
+        let wide = HSTRING::from(path.to_string_lossy().as_ref());
         unsafe {
-            let mut attributes = None;
-            MFCreateAttributes(&mut attributes, 1)?;
-            let attributes = attributes.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-            attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)?;
-            let reader = MFCreateSourceReaderFromURL(
-                &HSTRING::from(path.to_string_lossy().as_ref()),
-                &attributes,
-            )?;
-            reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
-            reader.SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)?;
-            let media: IMFMediaType = MFCreateMediaType()?;
-            media.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            media.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
-            reader.SetCurrentMediaType(
+            let mut attributes: Option<IMFAttributes> = None;
+            created((api.create_attributes)(&mut attributes, 1))?;
+            let attributes =
+                attributes.ok_or_else(|| "Media Foundation returned no attributes".to_string())?;
+            setup(attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1))?;
+            let mut reader: Option<IMFSourceReader> = None;
+            created((api.create_reader_from_url)(
+                PCWSTR(wide.as_ptr()),
+                attributes.as_raw(),
+                &mut reader,
+            ))?;
+            let reader = reader.ok_or_else(|| "Media Foundation returned no reader".to_string())?;
+            setup(reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false))?;
+            setup(reader.SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true))?;
+            let mut media: Option<IMFMediaType> = None;
+            created((api.create_media_type)(&mut media))?;
+            let media =
+                media.ok_or_else(|| "Media Foundation returned no media type".to_string())?;
+            setup(media.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video))?;
+            setup(media.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32))?;
+            setup(reader.SetCurrentMediaType(
                 MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
                 None,
                 &media,
-            )?;
+            ))?;
             // The video processor converts to RGB32 at the encoded size; it does
             // not scale, so the package's movie declares the presented size.
             let current =
-                reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?;
-            let size = current.GetUINT64(&MF_MT_FRAME_SIZE)?;
+                setup(reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32))?;
+            let size = setup(current.GetUINT64(&MF_MT_FRAME_SIZE))?;
             let (width, height) = ((size >> 32) as u32, size as u32);
             if width < 64
                 || height < 64
@@ -207,13 +261,25 @@ mod mf {
                 || width % 2 != 0
                 || height % 2 != 0
             {
-                return Err(windows::core::Error::from(E_POINTER));
+                return Err(format!(
+                    "Media Foundation reported an unsupported {width}x{height} frame"
+                ));
             }
             let stride = current
                 .GetUINT32(&MF_MT_DEFAULT_STRIDE)
                 .map_or((width * 4) as i32, |stride| stride as i32);
             Ok((reader, width, height, stride))
         }
+    }
+
+    fn created(result: HRESULT) -> Result<(), String> {
+        result
+            .ok()
+            .map_err(|error| format!("Media Foundation cannot create the decoder: {error}"))
+    }
+
+    fn setup<T>(result: windows::core::Result<T>) -> Result<T, String> {
+        result.map_err(|error| format!("Media Foundation rejected the setup: {error}"))
     }
 
     /// Media Foundation RGB32 buffers keep the pixel order GPUI uploads. A
@@ -269,15 +335,18 @@ mod mf {
         // The platform is deliberately kept for the process lifetime instead of
         // being shut down while another executor task may still hold a reader.
         PLATFORM
-            .get_or_init(|| unsafe {
-                MFStartup(MF_VERSION, MFSTARTUP_LITE).map_err(|error| error.to_string())
+            .get_or_init(|| {
+                let api = api()?;
+                unsafe { (api.startup)(MF_VERSION, MFSTARTUP_LITE) }
+                    .ok()
+                    .map_err(|error| format!("Media Foundation cannot start: {error}"))
             })
             .clone()
     }
 
     #[cfg(test)]
     mod tests {
-        use super::copy;
+        use super::*;
 
         #[test]
         fn bottom_up_buffers_are_flipped_into_top_down_rows() {
@@ -366,7 +435,16 @@ mod tests {
         assert!(bytes.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255));
 
         let (reader, later) = frame(Some(reader), &movie, 15).unwrap();
-        assert_ne!(first.as_bytes(0), later.as_bytes(0));
+        let moved = first
+            .as_bytes(0)
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(later.as_bytes(0).unwrap().as_chunks::<4>().0)
+            .filter(|(before, after)| before != after)
+            .count();
+        assert!(moved > 500, "the clip must move between frames: {moved}");
         drop(reader);
 
         // Reopening mid-loop and wrapping both land on the requested frame.

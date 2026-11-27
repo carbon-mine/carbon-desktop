@@ -10,7 +10,8 @@ with FFmpeg 7:
 
 ```sh
 ffmpeg -f lavfi -i "color=c=black:s=320x180:d=1:r=30" \
-  -vf "drawbox=x=0:y=0:w=320:h=90:color=red:t=fill,drawbox=x=0:y=90:w=320:h=90:color=blue:t=fill,drawbox=x='mod(t*140,260)':y=80:w=60:h=20:color=white:t=fill" \
+  -f lavfi -i "color=c=white:s=60x20:d=1:r=30" \
+  -filter_complex "[0:v]drawbox=x=0:y=0:w=320:h=90:color=red:t=fill,drawbox=x=0:y=90:w=320:h=90:color=blue:t=fill[bg];[bg][1:v]overlay=x='mod(t*140,260)':y=80:shortest=1" \
   -c:v libx264 -profile:v high -pix_fmt yuv420p -crf 18 -g 30 -bf 0 -frames:v 30 movie.mp4
 ffmpeg -i movie.mp4 -frames:v 1 -q:v 2 movie.jpg
 ```
