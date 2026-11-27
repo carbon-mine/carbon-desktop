@@ -111,3 +111,36 @@ carbon-desktop-gpui --temporary-review --seed-review --scenery-review-dir <absol
 ```
 
 Open **Scenery** to select a view. Check moving terrain details against the poster, then try **Pause**, **Resume** and **Library**. Active Home uses a software decoder and uploads frames through the GPUI image path. Switching away retires the decoder. A missing or unreadable clip falls back to bundled motion. Run without the two scenery flags to compare bundled playback at the same window size.
+
+## Package Home scenery beside the launcher
+
+The compiled catalog and its 960x540 frame packs remain the portable fallback. A `scenery` directory beside the executable can replace a view's poster and add a compressed motion loop that the operating system decodes in-process:
+
+```text
+<launcher directory>/
+  CarbonDesktop...(.exe)
+  scenery/
+    manifest.json
+    <id>.jpg
+    <id>.mp4
+```
+
+`manifest.json` is version 1 and lists only views that already exist in the compiled catalog:
+
+```json
+{"version":1,"views":[{"id":"riverside","poster":"riverside.jpg","motion":"riverside.mp4","fps":30,"frames":240}]}
+```
+
+Each entry needs a local JPEG poster, a local MP4 movie, 1-60 fps and 1-3600 frames per loop. The movie's encoded size is the presented size; the decoder does not scale. A package with an unknown ID, a duplicate, a missing file, a path or an unsafe name is ignored as a whole with one message on standard error, and bundled playback continues. A packaged view replaces both the bundled poster and its frame pack, so no animated artwork is duplicated for it. A failed or unsupported movie falls back to the poster.
+
+Stage an existing render set without re-encoding it:
+
+```sh
+python scripts/stage-scenery-package.py --source <artwork-directory> --output <launcher-directory>
+```
+
+The script copies `<id>.mp4` and `<id>.jpg` for every catalog view, writes the manifest, prints each file's SHA-256 and reports the total payload. A review build can also read an absolute `--scenery-package <directory>` instead.
+
+Windows loads Media Foundation at runtime and decodes with the source reader in a multi-threaded apartment, so an installer ships no codec library of its own; a Windows N image without the Media Feature Pack keeps bundled playback. Linux and macOS keep bundled playback until an in-process decoder is qualified there. Motion reuses the bundled deadline, one-frame-ahead pacing, cancellation and poster fallback, and keeps a warm decoder across pause and resume. A decode that blocks for more than three seconds is abandoned and the view falls back to its poster, and a packaged view never falls through to the local FFmpeg experiment. The [H.264 review path](#review-h264-playback-in-home) remains a separate local experiment with an external FFmpeg and is never used for a package.
+
+Measured on Windows x64 in a debug build with the seven 2560x1440 CRF 16 loops staged beside the probe: 232,095,289 bytes of artwork (226,751,847 bytes of video, 5,343,442 bytes of posters), 18-29 presented frames per second per view, 167% CPU while playing and 1.5% on a still poster. Software 2K decode alone costs about 34 ms per frame, so 30 fps has no headroom in a debug build; release builds and hardware-accelerated decode remain separate qualifications.
