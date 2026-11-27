@@ -323,21 +323,17 @@ impl Launcher {
             return false;
         }
         if self.task.as_ref().is_some_and(|t| t.protects_session) {
+            self.main_window = Some(window.window_handle());
             let launcher = cx.weak_entity();
             window.defer(cx, move |window, cx| {
                 let _ = launcher.update(cx, |launcher, cx| {
                     if launcher.popup.is_none()
-                        && launcher.task.as_ref().is_some_and(|task| task.protects_session)
+                        && launcher
+                            .task
+                            .as_ref()
+                            .is_some_and(|task| task.protects_session)
                     {
-                        popup::open(
-                            launcher,
-                            popup::Kind::Notice {
-                                title: "Protected test window is open",
-                                message: "Use Save and close in the protected Java test window before closing Carbon Desktop.",
-                            },
-                            window,
-                            cx,
-                        );
+                        popup::open(launcher, popup::Kind::CloseGuard, window, cx);
                     }
                 });
             });

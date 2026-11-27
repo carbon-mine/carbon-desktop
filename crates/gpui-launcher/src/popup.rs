@@ -48,10 +48,7 @@ pub enum Kind {
     Scenery(ScenePicker),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
-    Notice {
-        title: &'static str,
-        message: &'static str,
-    },
+    CloseGuard,
 }
 
 struct Form {
@@ -84,6 +81,8 @@ struct Popup {
     scene: Option<ScenePicker>,
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
+    close_guard: bool,
+    stop_requested: bool,
     account: Option<AccountDialog>,
     importing: bool,
     error: Option<String>,
@@ -102,7 +101,7 @@ fn title(kind: &Kind) -> &'static str {
         Kind::ImportPack(..) => "Import modpack",
         Kind::Icon(_) => "Choose instance icon",
         Kind::Account(_) => "Minecraft account",
-        Kind::Notice { title, .. } => title,
+        Kind::CloseGuard => "Protected sample is running",
     }
 }
 
@@ -127,7 +126,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
         Kind::Account(_) => (430., 280.),
-        Kind::Notice { .. } => (190., 156.),
+        Kind::CloseGuard => (360., 186.),
     };
     let bounds = Bounds::centered_at(window.bounds().center(), size(width, px(height)));
     let outcome = cx.open_window(
@@ -213,6 +212,7 @@ impl Popup {
         let mut targets = None;
         let mut home = None;
         let mut scene = None;
+        let mut close_guard = false;
         let (form, pack, notice, account) = match kind {
             Kind::Icon(profile) => {
                 icon = Some(icon::Picker::new(&profile, window, cx));
@@ -315,9 +315,17 @@ impl Popup {
                 focus.focus(window);
                 (None, None, None, Some(AccountDialog::new(panel, cx)))
             }
-            Kind::Notice { message, .. } => {
+            Kind::CloseGuard => {
                 focus.focus(window);
-                (None, None, Some(message), None)
+                close_guard = true;
+                (
+                    None,
+                    None,
+                    Some(
+                        "Carbon Desktop stays open while the protected sample runs. Stopping the sample closes it after its processes have drained.",
+                    ),
+                    None,
+                )
             }
         };
         cx.on_release(move |this, cx| {
@@ -326,6 +334,9 @@ impl Popup {
                 account.panel.update(cx, AccountPanel::dialog_closed);
             }
             let _ = this.owner.update(cx, |launcher, cx| {
+                if this.close_guard && !this.stop_requested {
+                    launcher.keep_sample_open();
+                }
                 launcher.popup = None;
                 if had_targets {
                     launcher.refresh_targets(cx);
@@ -358,6 +369,8 @@ impl Popup {
             scene,
             pack,
             notice,
+            close_guard,
+            stop_requested: false,
             account,
             importing: false,
             error: None,
@@ -817,7 +830,46 @@ impl Render for Popup {
             .bg(p.layer)
             .border_t_1()
             .border_color(self.palette.stroke);
-        bar = if let Some(home) = &self.home {
+        bar = if self.close_guard {
+            bar.child(self.control(
+                label(
+                    compact_action("keep-open", p, Partition::Neutral, false, cx),
+                    "Keep Carbon open",
+                    p,
+                    Partition::Neutral,
+                    false,
+                ),
+                "keep-open",
+                "Keep Carbon open",
+                Role::Button,
+                false,
+                None,
+                cx,
+                Self::dismiss,
+            ))
+            .child(self.control(
+                label(
+                    compact_action("stop-sample-exit", p, Partition::Primary, false, cx),
+                    "Stop sample and exit",
+                    p,
+                    Partition::Primary,
+                    false,
+                ),
+                "stop-sample-exit",
+                "Stop sample and exit",
+                Role::Button,
+                false,
+                None,
+                cx,
+                |this, window, cx| {
+                    this.stop_requested = true;
+                    window.remove_window();
+                    let _ = this
+                        .owner
+                        .update(cx, |launcher, cx| launcher.stop_sample_and_exit(cx));
+                },
+            ))
+        } else if let Some(home) = &self.home {
             bar.child(self.home_close_control(home, cx))
         } else {
             bar.child(self.control(
