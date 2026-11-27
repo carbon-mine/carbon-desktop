@@ -49,7 +49,7 @@ impl RunReservation {
 
     pub(crate) fn record_admission(&self) -> io::Result<()> {
         let mut record = tempfile::NamedTempFile::new_in(&self.directory)?;
-        record.write_all(&self.record_bytes())?;
+        record.write_all(&self.record_bytes()?)?;
         record.as_file().sync_all()?;
         record
             .persist_noclobber(self.directory.join(PENDING))
@@ -64,7 +64,7 @@ impl RunReservation {
         open_marker: impl FnOnce(&Path) -> io::Result<File>,
     ) -> Result<(), SessionError> {
         let path = self.directory.join(PENDING);
-        let expected = self.record_bytes();
+        let expected = self.record_bytes().map_err(SessionError::Data)?;
         let mut actual = Vec::new();
         open_marker(&path)
             .and_then(|file| {
@@ -78,8 +78,9 @@ impl RunReservation {
         fs::remove_file(path).map_err(SessionError::Data)
     }
 
-    fn record_bytes(&self) -> Vec<u8> {
-        format!("{HEADER}\n{}\n{}\n", self.id, session_id()).into_bytes()
+    fn record_bytes(&self) -> io::Result<Vec<u8>> {
+        let session = session_id()?;
+        Ok(format!("{HEADER}\n{}\n{session}\n", self.id).into_bytes())
     }
 }
 
@@ -97,7 +98,14 @@ fn recover_previous(directory: &Path) -> io::Result<()> {
     let Some(pending) = read_record(directory)? else {
         return Ok(());
     };
-    if pending.session != session_id() {
+    if pending.session
+        != session_id().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("The current Windows session could not be verified: {error}"),
+            )
+        })?
+    {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
             "The previous sample belongs to another Windows session",
@@ -182,13 +190,13 @@ fn boundary_empty(_run: Uuid) -> io::Result<bool> {
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
-fn session_id() -> u32 {
+fn session_id() -> io::Result<u32> {
     crate::windows::current_session_id()
 }
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
-fn session_id() -> u32 {
-    0
+fn session_id() -> io::Result<u32> {
+    Ok(0)
 }
 
 /// Every present object fences admission, including an invalid or damaged record.
@@ -338,7 +346,7 @@ mod tests {
     fn record_from_another_session_stays_fenced() {
         let owned = tempfile::tempdir().unwrap();
         let run = Uuid::new_v4();
-        let other_session = session_id().wrapping_add(1);
+        let other_session = session_id().unwrap().wrapping_add(1);
         fs::write(
             owned.path().join(PENDING),
             format!("{HEADER}\n{run}\n{other_session}\n").as_bytes(),
@@ -359,7 +367,7 @@ mod tests {
         let job = crate::windows::test_boundary(run, owned.path()).unwrap();
         fs::write(
             owned.path().join(PENDING),
-            format!("{HEADER}\n{run}\n{}\n", session_id()).as_bytes(),
+            format!("{HEADER}\n{run}\n{}\n", session_id().unwrap()).as_bytes(),
         )
         .unwrap();
         assert!(matches!(
@@ -402,7 +410,7 @@ mod tests {
         let alias = owned.path().join("alias");
         fs::hard_link(&path, &alias).unwrap();
         assert!(matches!(confirm(&first), Err(SessionError::Data(_))));
-        assert_eq!(fs::read(&alias).unwrap(), first.record_bytes());
-        assert_eq!(fs::read(&path).unwrap(), first.record_bytes());
+        assert_eq!(fs::read(&alias).unwrap(), first.record_bytes().unwrap());
+        assert_eq!(fs::read(&path).unwrap(), first.record_bytes().unwrap());
     }
 }

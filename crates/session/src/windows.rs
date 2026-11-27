@@ -159,12 +159,12 @@ pub(super) fn sample_boundary_empty(run: Uuid) -> io::Result<bool> {
 
 /// A job name is scoped to the Windows session that created it, so a recovery
 /// witness is only valid for the session recorded in the pending run.
-pub(super) fn current_session_id() -> u32 {
+pub(super) fn current_session_id() -> io::Result<u32> {
     let mut session = 0;
-    unsafe {
-        ProcessIdToSessionId(GetCurrentProcessId(), &mut session);
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) } == 0 {
+        return Err(io::Error::last_os_error());
     }
-    session
+    Ok(session)
 }
 
 #[cfg(test)]
