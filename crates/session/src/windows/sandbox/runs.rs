@@ -208,7 +208,10 @@ impl Drop for RunGuard {
         let mut directory = entries();
         let mut status = lock_status(&self.entry);
         status.retired = true;
-        let end = if status.unsettled {
+        let drained = job::is_empty(&self.entry.job).ok();
+        let end = if status.unsettled || drained != Some(true) {
+            // A failed observation or a boundary that still held members means
+            // the owner never confirmed drain, so no stop or sample is claimed.
             RunEnd::Unsettled
         } else if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
             RunEnd::StopRequested
@@ -222,7 +225,7 @@ impl Drop for RunGuard {
             run: self.run,
             instance: self.entry.instance,
             end,
-            drained: job::is_empty(&self.entry.job).ok(),
+            drained,
         };
         // Retain and notify while the entry is still in the directory and the
         // status lock proves it is live, so a subscriber that races removal
@@ -643,6 +646,30 @@ mod tests {
         let record = outcome(run).unwrap();
         assert_eq!(record.end, RunEnd::StopRequested);
         assert_eq!(record.drained, Some(true));
+    }
+
+    #[test]
+    fn retiring_without_a_confirmed_drain_reports_unsettled() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        // A bound that has not expired leaves the fixture tree alive, so the
+        // owner retires with members still inside the boundary and no confirmed
+        // drain. The record must not claim the stop settled.
+        assert_eq!(
+            stop_after(run, Duration::from_secs(2)).unwrap().phase,
+            RunPhase::Draining
+        );
+        drop(guard);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::Unsettled);
+        assert_eq!(record.drained, Some(false));
+        wait_drained(run);
     }
 
     #[test]

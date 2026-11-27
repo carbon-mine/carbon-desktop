@@ -426,7 +426,12 @@ pub(super) fn launch(
         if run.stopped() {
             // A stop accepted before process creation must not let the payload
             // run: the suspended root is now a member of that stopped job.
-            stop_suspended(process.0, &job)?;
+            if let Err(error) = stop_suspended(process.0, &job) {
+                // Without a confirmed drain the record must not claim the stop
+                // settled, even though the run never reached the caller.
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = true;
             return Err(stopped_error());
@@ -458,21 +463,30 @@ pub(super) fn launch(
                 }
                 _ => return Err(Error::last_os_error()),
             }
-            drained?;
+            if let Err(error) = drained {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = run.stopped();
             return Err(error);
         }
         if run.stopped() {
             // A stop accepted after validation must still prevent the resume.
-            stop_suspended(process.0, &job)?;
+            if let Err(error) = stop_suspended(process.0, &job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = true;
             return Err(stopped_error());
         }
         if ResumeThread(thread.0) == u32::MAX {
             let error = Error::last_os_error();
-            job::stop_and_drain(&job)?;
+            if let Err(error) = job::stop_and_drain(&job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = run.stopped();
             return Err(error);
@@ -489,6 +503,8 @@ pub(super) fn launch(
                 // The stop request terminated the root; drain what remains of its tree.
                 if job::wait_empty(&job, job::DRAIN_TIMEOUT).is_ok() {
                     observation.boundary_empty = true;
+                } else {
+                    run.unsettle();
                 }
                 observation.stopped = true;
                 return Err(stopped_error());
@@ -501,19 +517,28 @@ pub(super) fn launch(
             } else {
                 Error::last_os_error()
             };
-            job::stop_and_drain(&job)?;
+            if let Err(error) = job::stop_and_drain(&job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             return Err(error);
         }
         let drain = job::wait_empty(&job, job::DRAIN_TIMEOUT);
         if let Err(error) = drain {
             if run.stopped() {
-                job::stop_and_drain(&job)?;
+                if let Err(error) = job::stop_and_drain(&job) {
+                    run.unsettle();
+                    return Err(error);
+                }
                 observation.boundary_empty = true;
                 observation.stopped = true;
                 return Err(stopped_error());
             }
-            job::stop_and_drain(&job)?;
+            if let Err(error) = job::stop_and_drain(&job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             return Err(error);
         }
