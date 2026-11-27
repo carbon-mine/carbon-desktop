@@ -336,14 +336,21 @@ impl SampleRun {
     }
 
     /// A requested stop-and-exit may close only when the run's own record
-    /// confirms its OS boundary was empty. A lost observation keeps Carbon open,
-    /// so the recovery fence and the reported state stay visible instead of the
-    /// launcher implying the sample stopped cleanly.
-    fn exit_blocked(&self) -> bool {
-        self.run.is_some()
+    /// confirms its OS boundary was empty. A lost observation, or a run still
+    /// live for this instance, keeps Carbon open so the recovery fence and the
+    /// reported state stay visible instead of the launcher implying the sample
+    /// stopped cleanly.
+    fn exit_blocked(&self, instance: Option<Uuid>) -> bool {
+        let unconfirmed = self.run.is_some()
             && !self
                 .terminal()
-                .is_some_and(|record| record.drained == Some(true))
+                .is_some_and(|record| record.drained == Some(true));
+        unconfirmed
+            || instance.is_some_and(|instance| {
+                carbon_session::active_runs()
+                    .iter()
+                    .any(|live| live.instance == instance)
+            })
     }
 }
 
@@ -1130,19 +1137,25 @@ impl Launcher {
         result: Result<Outcome, String>,
         cx: &mut Context<Self>,
     ) {
-        let task = if fixture_work {
+        let mut task = if fixture_work {
             self.fixture_task.take()
         } else {
             self.task.take()
         };
         if self.exit_after_sample && !fixture_work {
             self.pending_sample_stop = false;
+            // Drain admission and terminal evidence published before this
+            // completion, so a run that retired inside one tick is still seen.
+            if let Some(task) = task.as_mut() {
+                task.sample_run.observe();
+            }
+            let instance = task.as_ref().and_then(|task| task.profile);
             // Closing must not imply a clean stop the run never confirmed. A
             // lost or still-populated boundary keeps the launcher open with the
             // recovery state instead of exiting silently.
             if task
                 .as_ref()
-                .is_some_and(|task| task.protects_session && task.sample_run.exit_blocked())
+                .is_some_and(|task| task.protects_session && task.sample_run.exit_blocked(instance))
             {
                 self.exit_after_sample = false;
                 self.last_activity = task.as_ref().and_then(Task::target);
@@ -2315,21 +2328,22 @@ mod tests {
         };
 
         // A start that never admitted a run has nothing to drain.
-        assert!(!SampleRun::default().exit_blocked());
-        assert!(!settled(record(RunEnd::Completed, Some(true))).exit_blocked());
-        assert!(!settled(record(RunEnd::StopRequested, Some(true))).exit_blocked());
+        assert!(!SampleRun::default().exit_blocked(None));
+        assert!(!SampleRun::default().exit_blocked(Some(instance)));
+        assert!(!settled(record(RunEnd::Completed, Some(true))).exit_blocked(None));
+        assert!(!settled(record(RunEnd::StopRequested, Some(true))).exit_blocked(None));
         // A failed post-launch check still observed an empty boundary.
-        assert!(!settled(record(RunEnd::Unsettled, Some(true))).exit_blocked());
-        assert!(settled(record(RunEnd::StopRequested, Some(false))).exit_blocked());
-        assert!(settled(record(RunEnd::Completed, None)).exit_blocked());
-        assert!(settled(record(RunEnd::Unsettled, None)).exit_blocked());
+        assert!(!settled(record(RunEnd::Unsettled, Some(true))).exit_blocked(None));
+        assert!(settled(record(RunEnd::StopRequested, Some(false))).exit_blocked(None));
+        assert!(settled(record(RunEnd::Completed, None)).exit_blocked(None));
+        assert!(settled(record(RunEnd::Unsettled, None)).exit_blocked(None));
         // A bound run whose record was never retained cannot confirm anything.
         assert!(
             SampleRun {
                 run: Some(run),
                 ..SampleRun::default()
             }
-            .exit_blocked()
+            .exit_blocked(None)
         );
     }
 }
