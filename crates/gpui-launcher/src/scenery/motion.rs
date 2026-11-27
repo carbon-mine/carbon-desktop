@@ -1,0 +1,349 @@
+// SPDX-License-Identifier: MPL-2.0
+//! In-process decode of packaged Home scenery motion.
+//!
+//! Windows uses the operating system Media Foundation decoder, so an installer
+//! ships no codec library of its own. Platforms without a qualified native
+//! decoder keep the bundled frame packs until one is verified there.
+use super::package::Movie;
+use gpui::RenderImage;
+use std::sync::Arc;
+
+pub(super) struct Reader(mf::Reader);
+
+// Media Foundation readers are created and used inside a multi-threaded
+// apartment, so the source reader may move between executor threads.
+unsafe impl Send for Reader {}
+
+/// Returns the frame at `step` on the packaged movie's continuous timeline.
+/// Consecutive steps reuse one decoder; a rewind or a different view reopens it.
+pub(super) fn frame(
+    previous: Option<Reader>,
+    movie: &Movie,
+    step: usize,
+) -> Result<(Reader, Arc<RenderImage>), String> {
+    let mut reader = match previous {
+        Some(Reader(reader)) if reader.matches(movie) => reader,
+        _ => mf::Reader::open(movie, step)?,
+    };
+    // A stale in-flight decode can leave the reader up to three frames ahead of
+    // the resumed step; present the next frame rather than rewinding.
+    if reader.next() > step + 3 {
+        reader = mf::Reader::open(movie, step)?;
+    }
+    let mut image = None;
+    // Present the newest frame and skip at most two stale slots, matching the
+    // bundled frame-pacing budget after a stall.
+    for _ in 0..(step + 1).saturating_sub(reader.next()).clamp(1, 3) {
+        image = Some(reader.read()?);
+    }
+    Ok((
+        Reader(reader),
+        image.ok_or("Packaged scenery produced no frame")?,
+    ))
+}
+
+#[cfg(windows)]
+mod mf {
+    use super::super::package::Movie;
+    use gpui::RenderImage;
+    use std::{
+        path::{Path, PathBuf},
+        sync::{Arc, OnceLock},
+    };
+    use windows::Win32::Foundation::E_POINTER;
+    use windows::Win32::Media::MediaFoundation::{
+        IMFMediaType, IMFSample, IMFSourceReader, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE,
+        MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ALL_STREAMS,
+        MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+        MF_SOURCE_READERF_ERROR, MF_VERSION, MFCreateAttributes, MFCreateMediaType,
+        MFCreateSourceReaderFromURL, MFMediaType_Video, MFSTARTUP_LITE, MFStartup,
+        MFVideoFormat_RGB32,
+    };
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+    use windows::core::{HSTRING, Result as WinResult};
+
+    const MAX_EDGE: u32 = 4096;
+
+    pub(super) struct Reader {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        stride: i32,
+        frames: usize,
+        next: usize,
+        reader: IMFSourceReader,
+    }
+
+    impl Reader {
+        pub(super) fn open(movie: &Movie, step: usize) -> Result<Self, String> {
+            let path = movie.motion().to_owned();
+            start()?;
+            let (reader, width, height, stride) = source(&path).map_err(|error| {
+                format!("Media Foundation cannot open {}: {error}", path.display())
+            })?;
+            let mut open = Self {
+                path,
+                width,
+                height,
+                stride,
+                frames: movie.frames as usize,
+                next: 0,
+                reader,
+            };
+            for _ in 0..step % open.frames {
+                open.read()?;
+            }
+            open.next = step;
+            Ok(open)
+        }
+
+        pub(super) fn matches(&self, movie: &Movie) -> bool {
+            movie.motion() == self.path
+        }
+
+        pub(super) fn next(&self) -> usize {
+            self.next
+        }
+
+        pub(super) fn read(&mut self) -> Result<Arc<RenderImage>, String> {
+            let image = match self.sample()? {
+                Some(image) => image,
+                None => {
+                    self.restart()?;
+                    self.sample()?
+                        .ok_or("Packaged scenery ended without a frame")?
+                }
+            };
+            self.next += 1;
+            Ok(image)
+        }
+
+        fn sample(&mut self) -> Result<Option<Arc<RenderImage>>, String> {
+            let mut flags = 0u32;
+            let mut sample: Option<IMFSample> = None;
+            unsafe {
+                self.reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                        0,
+                        None,
+                        Some(&mut flags),
+                        None,
+                        Some(&mut sample),
+                    )
+                    .map_err(|error| format!("Media Foundation read failed: {error}"))?;
+            }
+            if flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0 {
+                return Err("Media Foundation reported a decode error".into());
+            }
+            sample
+                .as_ref()
+                .map(|sample| self.present(sample))
+                .transpose()
+        }
+
+        fn restart(&mut self) -> Result<(), String> {
+            let (reader, width, height, stride) = source(&self.path).map_err(|error| {
+                format!(
+                    "Media Foundation cannot reopen {}: {error}",
+                    self.path.display()
+                )
+            })?;
+            self.reader = reader;
+            self.width = width;
+            self.height = height;
+            self.stride = stride;
+            Ok(())
+        }
+
+        fn present(&self, sample: &IMFSample) -> Result<Arc<RenderImage>, String> {
+            let buffer = unsafe { sample.ConvertToContiguousBuffer() }
+                .map_err(|error| format!("Media Foundation buffer failed: {error}"))?;
+            let mut data = std::ptr::null_mut();
+            let mut length = 0;
+            unsafe {
+                buffer
+                    .Lock(&mut data, None, Some(&mut length))
+                    .map_err(|error| format!("Media Foundation lock failed: {error}"))?;
+            }
+            let copied = copy(data, length, self.width, self.height, self.stride);
+            unsafe {
+                let _ = buffer.Unlock();
+            }
+            copied.map(|image| Arc::new(RenderImage::new([image::Frame::new(image)])))
+        }
+    }
+
+    fn source(path: &Path) -> WinResult<(IMFSourceReader, u32, u32, i32)> {
+        unsafe {
+            let mut attributes = None;
+            MFCreateAttributes(&mut attributes, 1)?;
+            let attributes = attributes.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+            attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)?;
+            let reader = MFCreateSourceReaderFromURL(
+                &HSTRING::from(path.to_string_lossy().as_ref()),
+                &attributes,
+            )?;
+            reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
+            reader.SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)?;
+            let media: IMFMediaType = MFCreateMediaType()?;
+            media.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            media.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
+            reader.SetCurrentMediaType(
+                MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                None,
+                &media,
+            )?;
+            // The video processor converts to RGB32 at the encoded size; it does
+            // not scale, so the package's movie declares the presented size.
+            let current =
+                reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?;
+            let size = current.GetUINT64(&MF_MT_FRAME_SIZE)?;
+            let (width, height) = ((size >> 32) as u32, size as u32);
+            if width < 64
+                || height < 64
+                || width > MAX_EDGE
+                || height > MAX_EDGE
+                || width % 2 != 0
+                || height % 2 != 0
+            {
+                return Err(windows::core::Error::from(E_POINTER));
+            }
+            let stride = current
+                .GetUINT32(&MF_MT_DEFAULT_STRIDE)
+                .map_or((width * 4) as i32, |stride| stride as i32);
+            Ok((reader, width, height, stride))
+        }
+    }
+
+    /// Media Foundation RGB32 buffers keep the pixel order GPUI uploads. A
+    /// negative stride is bottom-up; the fourth byte is unused.
+    fn copy(
+        data: *const u8,
+        length: u32,
+        width: u32,
+        height: u32,
+        stride: i32,
+    ) -> Result<image::RgbaImage, String> {
+        let row = width as usize * 4;
+        let pitch = stride.unsigned_abs() as usize;
+        let height = height as usize;
+        let needed = (height - 1) * pitch + row;
+        if (length as usize) < needed || pitch < row {
+            return Err(format!(
+                "Unexpected Media Foundation buffer of {length} bytes for {width}x{height} at stride {stride}"
+            ));
+        }
+        let source = unsafe { std::slice::from_raw_parts(data, length as usize) };
+        let mut image = image::RgbaImage::new(width, height as u32);
+        let raw: &mut [u8] = image.as_mut();
+        if stride > 0 && pitch == row {
+            raw[..row * height].copy_from_slice(&source[..row * height]);
+        } else {
+            for y in 0..height {
+                let source_row = if stride < 0 { height - 1 - y } else { y };
+                let start = source_row * pitch;
+                let target: &mut [u8] = &mut raw[y * row..][..row];
+                target.copy_from_slice(&source[start..start + row]);
+            }
+        }
+        // RGB32 leaves the fourth byte unused; GPUI uploads all four.
+        let words = unsafe {
+            std::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u64>(), raw.len() / 8)
+        };
+        for word in words.iter_mut() {
+            *word |= 0xFF00_0000_FF00_0000;
+        }
+        Ok(image)
+    }
+
+    fn start() -> Result<(), String> {
+        static PLATFORM: OnceLock<Result<(), String>> = OnceLock::new();
+        // Decoding runs on the shared background executor, so every call joins
+        // the same multi-threaded apartment before using a reader.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        PLATFORM
+            .get_or_init(|| unsafe {
+                MFStartup(MF_VERSION, MFSTARTUP_LITE).map_err(|error| error.to_string())
+            })
+            .clone()
+    }
+}
+
+#[cfg(not(windows))]
+mod mf {
+    use super::super::package::Movie;
+    use gpui::RenderImage;
+    use std::sync::Arc;
+
+    pub(super) struct Reader;
+
+    impl Reader {
+        pub(super) fn open(_: &Movie, _: usize) -> Result<Self, String> {
+            Err("No in-process scenery decoder is qualified on this platform".into())
+        }
+        pub(super) fn matches(&self, _: &Movie) -> bool {
+            false
+        }
+        pub(super) fn next(&self) -> usize {
+            0
+        }
+        pub(super) fn read(&mut self) -> Result<Arc<RenderImage>, String> {
+            Err("No in-process scenery decoder is qualified on this platform".into())
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn movie() -> Movie {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scenery");
+        Movie::test(root.join("movie.jpg"), root.join("movie.mp4"), 30)
+    }
+
+    #[test]
+    fn decodes_packaged_movies_in_process_at_the_encoded_size() {
+        let movie = movie();
+        let (reader, first) = frame(None, &movie, 0).unwrap();
+        let size = first.size(0);
+        assert_eq!((size.width.0, size.height.0), (320, 180));
+        let bytes = first.as_bytes(0).unwrap();
+        assert_eq!(bytes.len(), 320 * 180 * 4);
+        // The authored clip is red on top and blue below.
+        let pixel = |x: usize, y: usize| &bytes[(y * 320 + x) * 4..][..4];
+        assert!(
+            pixel(10, 10)[2] > 180 && pixel(10, 10)[0] < 80,
+            "top band {:?}",
+            pixel(10, 10)
+        );
+        assert!(
+            pixel(10, 170)[0] > 180 && pixel(10, 170)[2] < 80,
+            "bottom band {:?}",
+            pixel(10, 170)
+        );
+        assert!(bytes.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255));
+
+        let (reader, later) = frame(Some(reader), &movie, 15).unwrap();
+        assert_ne!(first.as_bytes(0), later.as_bytes(0));
+        drop(reader);
+
+        // Reopening mid-loop and wrapping both land on the requested frame.
+        let (_, direct) = frame(None, &movie, 10).unwrap();
+        let (mut reader, _) = frame(None, &movie, 0).unwrap();
+        let mut last = None;
+        for step in 1..=30 {
+            let (next, image) = frame(Some(reader), &movie, step).unwrap();
+            reader = next;
+            if step == 10 {
+                assert_eq!(image.as_bytes(0), direct.as_bytes(0));
+            }
+            last = Some(image);
+        }
+        assert_eq!(last.unwrap().as_bytes(0), first.as_bytes(0));
+    }
+}

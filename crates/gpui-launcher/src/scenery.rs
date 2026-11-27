@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
+mod motion;
+mod package;
 mod review_video;
 use gpui::{App, Context, ObjectFit, RenderImage, Window, div, img, prelude::*, rgb};
 use std::{
@@ -166,11 +168,22 @@ fn after_present(step: usize, due: Instant, now: Instant, period: Duration) -> (
     )
 }
 
+#[derive(Default)]
+struct Decoded {
+    image: Option<Arc<RenderImage>>,
+    video: Option<review_video::Reader>,
+    video_failed: bool,
+    movie: Option<motion::Reader>,
+    movie_failed: bool,
+}
+
 pub struct SceneView {
     landscape: Landscape,
     video: Option<review_video::Reader>,
     decoder_cancel: review_video::Cancellation,
     video_failed: bool,
+    movie: Option<motion::Reader>,
+    movie_failed: bool,
     image: Option<Arc<RenderImage>>,
     step: usize,
     poster_pending: bool,
@@ -195,6 +208,8 @@ impl SceneView {
             video: None,
             decoder_cancel: Default::default(),
             video_failed: false,
+            movie: None,
+            movie_failed: false,
             image: None,
             step: 0,
             poster_pending: true,
@@ -218,6 +233,8 @@ impl SceneView {
         std::mem::take(&mut self.decoder_cancel).cancel();
         self.video.take();
         self.video_failed = false;
+        self.movie.take();
+        self.movie_failed = false;
         self.landscape = landscape;
         self.motion_failed = false;
         self.poster_failed = false;
@@ -246,12 +263,26 @@ impl SceneView {
         let scene = self.landscape.0;
         let poster = self.poster_pending;
         let now = Instant::now();
-        let video_source = review_video::Source::configured().filter(|_| !self.video_failed);
-        let fps = if video_source.is_some() {
-            30
+        let movie = package::discover()
+            .and_then(|package| package.view(scene.id))
+            .filter(|_| !self.movie_failed);
+        // A packaged view replaces the review trial and the bundled frames; any
+        // failure below marks it failed so later frames use bundled playback.
+        let video_source = if movie.is_some() {
+            None
         } else {
-            scene.fps
+            review_video::Source::configured().filter(|_| !self.video_failed)
         };
+        let fps = movie.map_or_else(
+            || {
+                if video_source.is_some() {
+                    30
+                } else {
+                    scene.fps
+                }
+            },
+            |movie| movie.fps,
+        );
         let (bytes, due, step) = if poster {
             (scene.poster, now, 0)
         } else {
@@ -270,6 +301,7 @@ impl SceneView {
             (bytes, due, step)
         };
         let previous_reader = self.video.take();
+        let previous_movie = self.movie.take();
         let decoder_cancel = self.decoder_cancel.clone();
         let generation = self.generation;
         let (interrupt, interrupted) = async_channel::bounded::<()>(1);
@@ -278,13 +310,32 @@ impl SceneView {
         cx.spawn(async move |this, cx| {
             let timeout_cancel = decoder_cancel.clone();
             let decode_job = cx.background_executor().spawn(async move {
+                let mut decoded = Decoded::default();
+                if let Some(movie) = movie {
+                    if poster {
+                        decoded.image = movie.poster().or_else(|| decode(bytes));
+                        return decoded;
+                    }
+                    match motion::frame(previous_movie, movie, step) {
+                        Ok((reader, image)) => {
+                            decoded.image = Some(image);
+                            decoded.movie = Some(reader);
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "Packaged scenery {}: {}; using bundled playback",
+                                scene.id, error
+                            );
+                            decoded.image = decode(bytes);
+                            decoded.movie_failed = true;
+                        }
+                    }
+                    return decoded;
+                }
                 if let Some(source) = video_source {
                     if poster {
-                        return (
-                            source.poster(scene.id).or_else(|| decode(bytes)),
-                            None,
-                            false,
-                        );
+                        decoded.image = source.poster(scene.id).or_else(|| decode(bytes));
+                        return decoded;
                     }
                     match review_video::Reader::frame(
                         previous_reader,
@@ -293,19 +344,25 @@ impl SceneView {
                         scene.id,
                         step,
                     ) {
-                        Ok((reader, image)) => return (Some(image), Some(reader), false),
+                        Ok((reader, image)) => {
+                            decoded.image = Some(image);
+                            decoded.video = Some(reader);
+                        }
                         Err(err) => {
                             eprintln!(
                                 "H.264 scenery {}: {}; using bundled playback",
                                 scene.id, err
                             );
-                            return (decode(bytes), None, true);
+                            decoded.image = decode(bytes);
+                            decoded.video_failed = true;
                         }
                     }
+                    return decoded;
                 }
-                (decode(bytes), None, false)
+                decoded.image = decode(bytes);
+                decoded
             });
-            let (decoded, reader, video_failed) = if video_source.is_some() && !poster {
+            let decoded = if video_source.is_some() && !poster {
                 let timeout = cx.background_executor().timer(Duration::from_secs(3));
                 match futures::future::select(decode_job, Box::pin(timeout)).await {
                     futures::future::Either::Left((result, _)) => result,
@@ -317,6 +374,13 @@ impl SceneView {
             } else {
                 decode_job.await
             };
+            let Decoded {
+                image: decoded,
+                video: reader,
+                video_failed,
+                movie: movie_reader,
+                movie_failed,
+            } = decoded;
             let remaining = due.saturating_duration_since(Instant::now());
             if !remaining.is_zero() {
                 futures::future::select(
@@ -328,9 +392,14 @@ impl SceneView {
             let _ = this.update(cx, |view, cx| {
                 view.busy = false;
                 view.interrupt.take();
+                // Keep the warm decoder across pause and resume. A packaged
+                // movie has one keyframe per loop, so reopening mid-cycle would
+                // decode from the start again.
+                view.movie = movie_reader;
                 if view.generation == generation {
                     view.video = reader;
                     view.video_failed |= video_failed;
+                    view.movie_failed |= movie_failed;
                     if let Some(image) = decoded {
                         retire(view.image.replace(image), cx);
                         view.poster_pending = false;
