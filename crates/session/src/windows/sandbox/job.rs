@@ -256,6 +256,26 @@ mod tests {
     }
 
     #[test]
+    fn a_suspended_root_is_terminated_before_it_runs() {
+        use std::os::windows::process::CommandExt;
+        let root = tempfile::tempdir().unwrap();
+        let job = create(2, Uuid::new_v4()).unwrap();
+        let mut command = fixture(root.path(), "child");
+        command.creation_flags(0x0000_0004); // CREATE_SUSPENDED
+        let mut child = command.spawn().unwrap();
+        if let Err(error) = unsafe { win(AssignProcessToJobObject(job.0, child.as_raw_handle())) } {
+            child.kill().ok();
+            child.wait().ok();
+            panic!("Could not admit the suspended fixture: {error}");
+        }
+        super::super::stop_suspended(child.as_raw_handle(), &job).unwrap();
+        assert_eq!(active_processes(&job).unwrap(), 0);
+        assert_eq!(child.wait().unwrap().code(), Some(1));
+        // The fixture's first action would have been to write this marker.
+        assert!(!root.path().join("ready").exists());
+    }
+
+    #[test]
     fn named_boundary_distinguishes_unknown_live_and_drained() {
         let root = tempfile::tempdir().unwrap();
         let run = Uuid::new_v4();

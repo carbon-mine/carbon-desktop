@@ -323,6 +323,33 @@ fn stopped_error() -> Error {
     )
 }
 
+/// Terminates a suspended root that must not be resumed, drains its job and
+/// waits for the process handle. Every step is attempted so a failure still
+/// reports the observed boundary rather than assuming it is empty.
+pub(super) fn stop_suspended(process: HANDLE, job: &Handle) -> io::Result<()> {
+    let terminated = unsafe { win(TerminateProcess(process, 1)) };
+    let drained = job::stop_and_drain(job);
+    match unsafe { WaitForSingleObject(process, job::DRAIN_TIMEOUT.as_millis() as u32) } {
+        WAIT_OBJECT_0 => (),
+        WAIT_TIMEOUT => {
+            terminated?;
+            drained?;
+            return Err(Error::new(
+                io::ErrorKind::TimedOut,
+                "The stopped session did not exit",
+            ));
+        }
+        _ => {
+            terminated?;
+            drained?;
+            return Err(Error::last_os_error());
+        }
+    }
+    terminated?;
+    drained?;
+    Ok(())
+}
+
 pub(super) fn launch(
     profile: &Profile,
     java: &Path,
@@ -397,18 +424,7 @@ pub(super) fn launch(
         if run.stopped() {
             // A stop accepted before process creation must not let the payload
             // run: the suspended root is now a member of that stopped job.
-            win(TerminateProcess(process.0, 1))?;
-            job::stop_and_drain(&job)?;
-            match WaitForSingleObject(process.0, job::DRAIN_TIMEOUT.as_millis() as u32) {
-                WAIT_OBJECT_0 => (),
-                WAIT_TIMEOUT => {
-                    return Err(Error::new(
-                        io::ErrorKind::TimedOut,
-                        "The stopped session did not exit",
-                    ));
-                }
-                _ => return Err(Error::last_os_error()),
-            }
+            stop_suspended(process.0, &job)?;
             observation.boundary_empty = true;
             observation.stopped = true;
             return Err(stopped_error());
@@ -444,6 +460,13 @@ pub(super) fn launch(
             observation.boundary_empty = true;
             observation.stopped = run.stopped();
             return Err(error);
+        }
+        if run.stopped() {
+            // A stop accepted after validation must still prevent the resume.
+            stop_suspended(process.0, &job)?;
+            observation.boundary_empty = true;
+            observation.stopped = true;
+            return Err(stopped_error());
         }
         if ResumeThread(thread.0) == u32::MAX {
             let error = Error::last_os_error();
