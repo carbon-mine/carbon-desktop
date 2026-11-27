@@ -31,7 +31,7 @@ use std::{
     collections::HashMap,
     io::Write,
     path::PathBuf,
-    sync::atomic::Ordering,
+    sync::{atomic::Ordering, mpsc::RecvTimeoutError},
     time::{Duration, Instant},
 };
 use theme::Preference;
@@ -187,6 +187,113 @@ struct Task {
     meter: Entity<progress::Meter>,
     can_cancel: bool,
     protects_session: bool,
+    sample_run: SampleRun,
+}
+
+/// Redacted live state for the protected sample. The view receives only the
+/// phase and terminal record from `carbon_session`; no path, process ID or
+/// account identity reaches it.
+#[derive(Default)]
+struct SampleRun {
+    run: Option<Uuid>,
+    phase: Option<carbon_session::RunPhase>,
+    outcome: Option<carbon_session::RunOutcome>,
+    subscription: Option<carbon_session::RunSubscription>,
+}
+
+impl SampleRun {
+    /// Follow the first live run for `instance` and drain its queued updates.
+    /// Returns true when the visible status changed. A run that has not been
+    /// published yet leaves the task with no status line.
+    fn observe(&mut self, instance: Uuid) -> bool {
+        let mut changed = false;
+        if self.subscription.is_none()
+            && self.outcome.is_none()
+            && let Some(live) = carbon_session::active_runs()
+                .into_iter()
+                .find(|run| run.instance == instance)
+            && let Ok(subscription) = carbon_session::subscribe(live.run)
+        {
+            self.run = Some(live.run);
+            self.subscription = Some(subscription);
+            changed = true;
+        }
+        let mut finished = false;
+        if let Some(subscription) = self.subscription.as_ref() {
+            loop {
+                match subscription.recv_timeout(Duration::ZERO) {
+                    Ok(carbon_session::RunUpdate::State(state)) => {
+                        changed |= self.phase != Some(state.phase);
+                        self.phase = Some(state.phase);
+                    }
+                    Ok(carbon_session::RunUpdate::Finished(outcome)) => {
+                        self.outcome = Some(outcome);
+                        changed = true;
+                        finished = true;
+                        break;
+                    }
+                    Err(RecvTimeoutError::Timeout) => break,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if finished {
+            self.subscription = None;
+        }
+        changed
+    }
+
+    /// The line shown while the sample task runs, or `None` until its run is
+    /// published.
+    fn status(&self) -> Option<String> {
+        if let Some(outcome) = &self.outcome {
+            return Some(end_label(outcome));
+        }
+        self.phase.map(|phase| phase_label(phase).to_owned())
+    }
+
+    /// The terminal observation for the completion message. This prefers the
+    /// update the task already drained and falls back to the process record.
+    fn summary(&self) -> Option<String> {
+        if let Some(outcome) = &self.outcome {
+            return Some(end_label(outcome));
+        }
+        let run = self.run?;
+        carbon_session::outcome(run).map(|outcome| end_label(&outcome))
+    }
+}
+
+fn phase_label(phase: carbon_session::RunPhase) -> &'static str {
+    use carbon_session::RunPhase;
+    match phase {
+        RunPhase::Starting => "Starting the protected sample in its isolated window…",
+        RunPhase::Running => "The protected sample is running in its isolated window.",
+        RunPhase::Stopping => "Stopping the protected sample…",
+        RunPhase::Draining => "Waiting for the protected sample's processes to exit…",
+        RunPhase::Finishing => "The protected sample exited. Confirming its save and boundary…",
+        RunPhase::Finished => "The protected sample finished.",
+    }
+}
+
+fn end_label(outcome: &carbon_session::RunOutcome) -> String {
+    use carbon_session::RunEnd;
+    let mut text = match outcome.end {
+        RunEnd::Completed => "The protected sample completed.",
+        RunEnd::StopRequested => "The protected sample stopped after your request.",
+        RunEnd::Unsettled => "The protected sample ended without a confirmed outcome.",
+    }
+    .to_owned();
+    match outcome.drained {
+        Some(false) => text.push_str(" Remaining processes were closed."),
+        None if outcome.end != RunEnd::Unsettled => {
+            text.push_str(" Its process boundary could not be observed.");
+        }
+        _ => {}
+    }
+    text
 }
 
 #[derive(Clone, Copy)]
@@ -854,6 +961,7 @@ impl Launcher {
             meter,
             can_cancel,
             protects_session: false,
+            sample_run: SampleRun::default(),
         };
         if fixture_work {
             self.fixture_task = Some(task);
@@ -897,18 +1005,24 @@ impl Launcher {
                 timer.timer(Duration::from_millis(150)).await;
                 if !this
                     .update(cx, |this, cx| {
+                        let reduced = this.reduced_motion();
                         let task = if fixture_work {
-                            this.fixture_task.as_ref()
+                            this.fixture_task.as_mut()
                         } else {
-                            this.task.as_ref()
+                            this.task.as_mut()
                         };
                         let Some(task) = task.filter(|task| task.meter.entity_id() == meter_id)
                         else {
                             return false;
                         };
-                        let reduced = this.reduced_motion();
+                        let mut changed = false;
+                        if task.protects_session
+                            && let Some(instance) = task.profile
+                        {
+                            changed |= task.sample_run.observe(instance);
+                        }
                         let progress = task.activity.latest();
-                        let changed = task.meter.update(cx, |meter, cx| {
+                        changed |= task.meter.update(cx, |meter, cx| {
                             let changed = meter.retarget(progress, reduced, Instant::now());
                             if changed {
                                 cx.notify();
@@ -1020,11 +1134,16 @@ impl Launcher {
                 self.message = "Opened this instance's game folder.".to_owned();
             }
             Ok(Outcome::Sandbox(report)) => {
-                self.message = if report.saved {
+                let mut message = if report.saved {
                     format!("Sandbox sample saved · Count {}.", report.sample_count)
                 } else {
                     "Sandbox test closed without saving.".into()
                 };
+                if let Some(summary) = task.as_ref().and_then(|task| task.sample_run.summary()) {
+                    message.push(' ');
+                    message.push_str(&summary);
+                }
+                self.message = message;
             }
             Ok(Outcome::Fixtures(snapshot)) => {
                 self.message = snapshot.message.clone();
@@ -1958,5 +2077,54 @@ mod tests {
         assert!(!back_returns_to_detail(true, false, false));
         assert!(!back_returns_to_detail(true, true, true));
         assert!(!back_returns_to_detail(false, false, true));
+    }
+
+    #[test]
+    fn every_live_phase_has_a_player_facing_status() {
+        use carbon_session::RunPhase;
+        let phases = [
+            RunPhase::Starting,
+            RunPhase::Running,
+            RunPhase::Stopping,
+            RunPhase::Draining,
+            RunPhase::Finishing,
+            RunPhase::Finished,
+        ];
+        for phase in phases {
+            let label = phase_label(phase);
+            assert!(!label.is_empty());
+            assert!(label.ends_with('…') || label.ends_with('.'));
+        }
+    }
+
+    #[test]
+    fn terminal_outcome_never_claims_more_than_the_record_holds() {
+        use carbon_session::{RunEnd, RunOutcome};
+        let outcome = |end, drained| RunOutcome {
+            run: Uuid::new_v4(),
+            instance: Uuid::new_v4(),
+            end,
+            drained,
+        };
+        assert_eq!(
+            end_label(&outcome(RunEnd::Completed, Some(true))),
+            "The protected sample completed."
+        );
+        assert_eq!(
+            end_label(&outcome(RunEnd::StopRequested, Some(true))),
+            "The protected sample stopped after your request."
+        );
+        assert_eq!(
+            end_label(&outcome(RunEnd::StopRequested, Some(false))),
+            "The protected sample stopped after your request. Remaining processes were closed."
+        );
+        assert_eq!(
+            end_label(&outcome(RunEnd::Completed, None)),
+            "The protected sample completed. Its process boundary could not be observed."
+        );
+        assert_eq!(
+            end_label(&outcome(RunEnd::Unsettled, None)),
+            "The protected sample ended without a confirmed outcome."
+        );
     }
 }
