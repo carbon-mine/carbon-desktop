@@ -262,8 +262,9 @@ mod mf {
         // Decoding runs on the shared background executor, so every call joins
         // the same multi-threaded apartment before using a reader. A thread
         // that is already initialised reports S_FALSE and stays usable.
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if initialized.is_err() {
+            return Err(format!("COM initialization failed: {initialized:?}"));
         }
         // The platform is deliberately kept for the process lifetime instead of
         // being shut down while another executor task may still hold a reader.
@@ -272,6 +273,25 @@ mod mf {
                 MFStartup(MF_VERSION, MFSTARTUP_LITE).map_err(|error| error.to_string())
             })
             .clone()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::copy;
+
+        #[test]
+        fn bottom_up_buffers_are_flipped_into_top_down_rows() {
+            // With a negative stride the buffer starts with the bottom row.
+            let mut data = Vec::new();
+            data.extend_from_slice(&[1, 2, 3, 0, 4, 5, 6, 0]);
+            data.extend_from_slice(&[7, 8, 9, 0, 10, 11, 12, 0]);
+            let image = copy(data.as_ptr(), data.len() as u32, 2, 2, -8).unwrap();
+            let raw = image.as_raw();
+            assert_eq!(&raw[0..4], &[7, 8, 9, 255]);
+            assert_eq!(&raw[4..8], &[10, 11, 12, 255]);
+            assert_eq!(&raw[8..12], &[1, 2, 3, 255]);
+            assert_eq!(&raw[12..16], &[4, 5, 6, 255]);
+        }
     }
 }
 

@@ -132,7 +132,7 @@ fn local_file(root: &Path, name: &str, extensions: &[&str]) -> Result<PathBuf, S
         ));
     }
     let full = root.join(path);
-    if !fs::metadata(&full).is_ok_and(|meta| meta.is_file()) {
+    if !fs::symlink_metadata(&full).is_ok_and(|meta| meta.file_type().is_file()) {
         return Err(format!("Missing packaged scenery file {name}"));
     }
     Ok(full)

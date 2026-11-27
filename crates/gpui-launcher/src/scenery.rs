@@ -263,17 +263,16 @@ impl SceneView {
         let scene = self.landscape.0;
         let poster = self.poster_pending;
         let now = Instant::now();
-        let movie = package::discover()
-            .and_then(|package| package.view(scene.id))
-            .filter(|_| !self.movie_failed);
-        // A packaged view replaces the review trial and the bundled frames; any
-        // failure below marks it failed so later frames use bundled playback.
-        let video_source = if movie.is_some() {
+        // A view that has a packaged movie never falls through to the local
+        // FFmpeg experiment, even after a packaged decode failure.
+        let packaged = package::discover().and_then(|package| package.view(scene.id));
+        let movie = packaged.filter(|_| !self.movie_failed);
+        let video_source = if packaged.is_some() {
             None
         } else {
             review_video::Source::configured().filter(|_| !self.video_failed)
         };
-        let fps = movie.map_or_else(
+        let fps = packaged.map_or_else(
             || {
                 if video_source.is_some() {
                     30
@@ -362,13 +361,24 @@ impl SceneView {
                 decoded.image = decode(bytes);
                 decoded
             });
-            let decoded = if video_source.is_some() && !poster {
+            let decoded = if (movie.is_some() || video_source.is_some()) && !poster {
                 let timeout = cx.background_executor().timer(Duration::from_secs(3));
                 match futures::future::select(decode_job, Box::pin(timeout)).await {
                     futures::future::Either::Left((result, _)) => result,
                     futures::future::Either::Right((_, pending)) => {
-                        timeout_cancel.cancel();
-                        pending.await
+                        if movie.is_some() {
+                            // A blocking Media Foundation read cannot be
+                            // interrupted, so abandon the task and show the
+                            // poster instead of holding the view busy.
+                            drop(pending);
+                            Decoded {
+                                movie_failed: true,
+                                ..Decoded::default()
+                            }
+                        } else {
+                            timeout_cancel.cancel();
+                            pending.await
+                        }
                     }
                 }
             } else {
