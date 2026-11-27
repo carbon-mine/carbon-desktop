@@ -34,6 +34,7 @@ pub(super) fn run(
     id: Uuid,
     major: u16,
     smoke: bool,
+    admitted: &mut dyn FnMut(Uuid),
 ) -> Result<SessionReport, SessionError> {
     if !supported() {
         return Err(SessionError::Unsupported);
@@ -115,6 +116,7 @@ pub(super) fn run(
         &foreign,
         &witness,
         &mut observation,
+        admitted,
     );
     // A launched run keeps its guard until every post-launch check has passed.
     // Only then may the terminal record claim completion; any later failure
@@ -370,7 +372,12 @@ mod tests {
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
         for (id, expected) in [(a, 1), (a, 2), (b, 1)] {
-            let result = run(root.path(), id, 25, true).unwrap();
+            let mut admitted = None;
+            let result = run(root.path(), id, 25, true, &mut |run| admitted = Some(run)).unwrap();
+            assert_eq!(
+                admitted.and_then(|run| run.get_version()),
+                Some(uuid::Version::Random)
+            );
             assert!(result.saved);
             assert_eq!(result.sample_count, expected);
             println!("verified native peer and scoped access checks; disposable count {expected}");

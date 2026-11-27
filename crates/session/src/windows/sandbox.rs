@@ -352,6 +352,9 @@ pub(super) fn stop_suspended(process: HANDLE, job: &Handle) -> io::Result<()> {
     Ok(())
 }
 
+// The launch path keeps the profile, executable, working directory, payload,
+// witness paths and the one-shot admission report explicit at the call site.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn launch(
     profile: &Profile,
     java: &Path,
@@ -360,6 +363,7 @@ pub(super) fn launch(
     foreign: &Path,
     read_only: &Path,
     observation: &mut LaunchObservation,
+    admitted: &mut dyn FnMut(Uuid),
 ) -> io::Result<RunGuard> {
     let java_path = wide(java);
     let working = wide(own);
@@ -393,6 +397,9 @@ pub(super) fn launch(
     let env = environment(own)?;
     let job = job::create(1, observation.run)?;
     let run = runs::register(observation.run, observation.instance, Arc::clone(&job));
+    // The run is now visible to subscribe/stop/inspect, so a caller that followed
+    // this launch can name it before the blocking call returns.
+    admitted(observation.run);
     unsafe {
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid,

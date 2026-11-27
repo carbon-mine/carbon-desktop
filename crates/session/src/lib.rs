@@ -64,6 +64,20 @@ pub const fn supported() -> bool {
 /// Run the fixed local window to completion for an existing app-owned profile.
 /// This blocking call accepts no executable, user-controlled directory or command arguments.
 pub fn run(root: &Path, profile_id: Uuid, java_major: u16) -> Result<SessionReport, SessionError> {
+    run_with_admission(root, profile_id, java_major, |_| {})
+}
+
+/// Run the fixed local window and report the admitted run's redacted UUID.
+///
+/// `on_admitted` runs on the calling thread after admission has published the
+/// run, so a later [`subscribe`] or [`stop`] call can name it. It is called at
+/// most once and must not block. A failure before admission leaves it uncalled.
+pub fn run_with_admission(
+    root: &Path,
+    profile_id: Uuid,
+    java_major: u16,
+    on_admitted: impl FnMut(Uuid),
+) -> Result<SessionReport, SessionError> {
     if profile_id.get_version() != Some(uuid::Version::Random) {
         return Err(SessionError::InvalidProfile);
     }
@@ -71,10 +85,13 @@ pub fn run(root: &Path, profile_id: Uuid, java_major: u16) -> Result<SessionRepo
         return Err(SessionError::Unsupported);
     }
     #[cfg(all(windows, target_arch = "x86_64"))]
-    return windows::run(root, profile_id, java_major, false);
+    {
+        let mut on_admitted = on_admitted;
+        windows::run(root, profile_id, java_major, false, &mut on_admitted)
+    }
     #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
-        let _ = (root, java_major);
+        let _ = (root, java_major, on_admitted);
         Err(SessionError::Unsupported)
     }
 }

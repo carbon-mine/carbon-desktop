@@ -818,6 +818,17 @@ impl Launcher {
                             ),
                         )
                         .when_some(
+                            install_activity.and_then(|task| task.sample_run.status()),
+                            |body, status| {
+                                body.child(self.accessibility.text(
+                                    div().text_sm().text_color(p.muted).child(status.clone()),
+                                    "sample-run-status",
+                                    status,
+                                    Role::Status,
+                                ))
+                            },
+                        )
+                        .when_some(
                             install_activity
                                 .filter(|task| !task.activity.cancel.load(Ordering::Acquire)),
                             |body, task| body.child(self.accessibility.progress(&task.meter, cx)),
