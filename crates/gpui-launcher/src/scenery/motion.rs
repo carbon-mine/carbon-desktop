@@ -260,10 +260,13 @@ mod mf {
     fn start() -> Result<(), String> {
         static PLATFORM: OnceLock<Result<(), String>> = OnceLock::new();
         // Decoding runs on the shared background executor, so every call joins
-        // the same multi-threaded apartment before using a reader.
+        // the same multi-threaded apartment before using a reader. A thread
+        // that is already initialised reports S_FALSE and stays usable.
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }
+        // The platform is deliberately kept for the process lifetime instead of
+        // being shut down while another executor task may still hold a reader.
         PLATFORM
             .get_or_init(|| unsafe {
                 MFStartup(MF_VERSION, MFSTARTUP_LITE).map_err(|error| error.to_string())
