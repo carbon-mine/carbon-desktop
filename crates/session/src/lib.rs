@@ -102,7 +102,6 @@ pub enum RunControlError {
     /// No live run with that ID in this process. An earlier stop may already have
     /// finished, so callers treat this the same as an already stopped run.
     UnknownRun,
-    Boundary(io::Error),
 }
 
 impl fmt::Display for RunControlError {
@@ -110,10 +109,6 @@ impl fmt::Display for RunControlError {
         match self {
             Self::Unsupported => f.write_str("This build cannot control a protected run."),
             Self::UnknownRun => f.write_str("No live protected run has that run ID."),
-            Self::Boundary(error) => write!(
-                f,
-                "The protected run's process boundary could not be stopped: {error}"
-            ),
         }
     }
 }
@@ -142,7 +137,11 @@ pub fn inspect(run: Uuid) -> Option<RunState> {
 
 /// Request one run's own process tree to stop. The run UUID must already be
 /// visible through [`active_runs`], so a rejected or unknown ID changes nothing.
-/// Repeating the request while the run drains reports the same state.
+///
+/// Every visible window the tree owns is asked to close first, which lets a game
+/// save and exit normally. A tree that has not drained after the documented
+/// close bound is terminated. Repeating the request while the run drains reports
+/// the same state and starts no new bound.
 pub fn stop(run: Uuid) -> Result<RunState, RunControlError> {
     if !supported() {
         return Err(RunControlError::Unsupported);

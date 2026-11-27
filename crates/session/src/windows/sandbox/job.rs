@@ -11,14 +11,22 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
-use windows_sys::Win32::{
-    Foundation::{GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND},
-    Security::{
-        AddAccessAllowedAce, GetLengthSid, InitializeAcl, InitializeSecurityDescriptor,
-        SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, SECURITY_ATTRIBUTES,
-        SECURITY_DESCRIPTOR, TOKEN_USER,
+use windows_sys::{
+    core::BOOL,
+    Win32::{
+        Foundation::{
+            GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, HWND, LPARAM,
+        },
+        Security::{
+            AddAccessAllowedAce, GetLengthSid, InitializeAcl, InitializeSecurityDescriptor,
+            SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, SECURITY_ATTRIBUTES,
+            SECURITY_DESCRIPTOR, TOKEN_USER,
+        },
+        System::{JobObjects::*, SystemServices::JOB_OBJECT_QUERY},
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
+        },
     },
-    System::{JobObjects::*, SystemServices::JOB_OBJECT_QUERY},
 };
 
 pub(super) const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -108,6 +116,88 @@ fn active_processes(job: &Handle) -> io::Result<u32> {
     Ok(counts.ActiveProcesses)
 }
 
+/// The live process IDs the OS reports for this run's job. A closed handle is
+/// never used to name a process; membership comes from the job itself.
+fn member_pids(job: &Handle) -> io::Result<Vec<u32>> {
+    let mut capacity = 16usize;
+    loop {
+        let header = size_of::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() - size_of::<usize>();
+        let bytes = header + capacity * size_of::<usize>();
+        let mut buffer = vec![0usize; bytes.div_ceil(size_of::<usize>())];
+        let mut needed = 0u32;
+        let queried = unsafe {
+            QueryInformationJobObject(
+                job.0,
+                JobObjectBasicProcessIdList,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * size_of::<usize>()) as u32,
+                &mut needed,
+            )
+        };
+        if queried == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) {
+                capacity = (needed as usize).max(capacity * 2);
+                continue;
+            }
+            return Err(error);
+        }
+        // The layout starts with two counts followed by the variable process list.
+        let assigned = unsafe { *buffer.as_ptr().cast::<u32>() } as usize;
+        let listed = unsafe { *buffer.as_ptr().cast::<u32>().add(1) } as usize;
+        if assigned > capacity {
+            capacity = assigned;
+            continue;
+        }
+        let ids = unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr().cast::<u8>().add(header).cast::<usize>(),
+                listed.min(capacity),
+            )
+        };
+        return Ok(ids.iter().map(|id| *id as u32).collect());
+    }
+}
+
+struct CloseTargets<'a> {
+    pids: &'a [u32],
+    posted: usize,
+}
+
+unsafe extern "system" fn close_owned_window(window: HWND, parameter: LPARAM) -> BOOL {
+    let targets = &mut *(parameter as *mut CloseTargets<'_>);
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(window, &mut pid);
+    if pid != 0
+        && targets.pids.contains(&pid)
+        && IsWindowVisible(window) != 0
+        && PostMessageW(window, WM_CLOSE, 0, 0) != 0
+    {
+        targets.posted += 1;
+    }
+    1
+}
+
+/// Asks every visible top-level window owned by a member of this run to close.
+/// This is the OS-level graceful request a game can turn into its own save and
+/// exit. Windowless members simply receive no request, so the caller still
+/// bounds how long it waits before forcing the tree down.
+pub(super) fn request_close(job: &Handle) -> io::Result<usize> {
+    let pids = member_pids(job)?;
+    if pids.is_empty() {
+        return Ok(0);
+    }
+    let mut targets = CloseTargets {
+        pids: &pids,
+        posted: 0,
+    };
+    let parameter = (&mut targets as *mut CloseTargets<'_>) as LPARAM;
+    unsafe {
+        EnumWindows(Some(close_owned_window), parameter);
+    }
+    Ok(targets.posted)
+}
+
 /// True when no process from this run can still be running: either the named
 /// job no longer exists or it exists with no active members.
 pub(super) fn boundary_empty(run: Uuid) -> io::Result<bool> {
@@ -156,6 +246,10 @@ const FIXTURE: &str = "windows::sandbox::job::tests::process_tree_fixture";
 const ROOT: &str = "CARBON_JOB_TEST_TEMP";
 #[cfg(test)]
 const ROLE: &str = "CARBON_JOB_TEST_ROLE";
+#[cfg(test)]
+const NO_WINDOW: i32 = 73;
+#[cfg(test)]
+static IGNORE_CLOSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
 fn fixture(root: &Path, role: &str) -> std::process::Command {
@@ -174,6 +268,96 @@ fn wait_for(path: &Path) {
         assert!(Instant::now() < deadline, "Timed out waiting for fixture");
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// A real top-level window owned by the fixture process. The message loop ends
+/// when the window is closed, so an OS close request is observable as exit.
+#[cfg(test)]
+unsafe extern "system" fn window_proc(
+    window: HWND,
+    message: u32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: LPARAM,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, DestroyWindow, PostQuitMessage, WM_DESTROY,
+    };
+    match message {
+        WM_CLOSE => {
+            if IGNORE_CLOSE.load(Ordering::Relaxed) {
+                0
+            } else {
+                DestroyWindow(window);
+                0
+            }
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            0
+        }
+        _ => DefWindowProcW(window, message, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+fn window_fixture(root: &Path, stubborn: bool) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::{
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{
+            CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassW, TranslateMessage, MSG,
+            WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        },
+    };
+    IGNORE_CLOSE.store(stubborn, Ordering::Relaxed);
+    let class: Vec<u16> = std::ffi::OsStr::new("CarbonJobClosableFixture")
+        .encode_wide()
+        .chain([0])
+        .collect();
+    let title: Vec<u16> = std::ffi::OsStr::new("Carbon job close fixture")
+        .encode_wide()
+        .chain([0])
+        .collect();
+    let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+    let registration = WNDCLASSW {
+        lpfnWndProc: Some(window_proc),
+        hInstance: instance,
+        lpszClassName: class.as_ptr(),
+        ..Default::default()
+    };
+    if unsafe { RegisterClassW(&registration) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let window = unsafe {
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            title.as_ptr(),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            0,
+            0,
+            320,
+            200,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        )
+    };
+    if window.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    std::fs::write(root.join("ready"), [])?;
+    let mut message = MSG::default();
+    while unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } > 0 {
+        unsafe {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    Ok(())
 }
 
 /// Creates a named job that owns one live benign child for reservation tests.
@@ -213,6 +397,12 @@ mod tests {
                 fs::write(root.join("ready"), []).unwrap();
                 wait_for(&root.join("finish"));
             }
+            role @ ("windowed" | "windowed-stubborn") => {
+                if let Err(error) = window_fixture(root, role == "windowed-stubborn") {
+                    fs::write(root.join("no-window"), format!("{:?}", error.kind())).unwrap();
+                    std::process::exit(NO_WINDOW);
+                }
+            }
             _ => panic!("Unknown fixture role"),
         }
     }
@@ -237,6 +427,44 @@ mod tests {
         wait_for(&root.path().join("ready"));
         assert_eq!(active_processes(&job).unwrap(), 1);
         (root, job)
+    }
+
+    /// Admits one fixture process with a real window to a fresh job. Returns
+    /// `None` when this host cannot create an addressable window, which is a
+    /// host limitation rather than a supervision failure.
+    fn window_boundary(
+        run: Uuid,
+        root: &Path,
+        stubborn: bool,
+    ) -> Option<(Arc<Handle>, std::process::Child)> {
+        let job = create(2, run).unwrap();
+        let role = if stubborn {
+            "windowed-stubborn"
+        } else {
+            "windowed"
+        };
+        let mut child = fixture(root, role).spawn().unwrap();
+        if let Err(error) = unsafe { win(AssignProcessToJobObject(job.0, child.as_raw_handle())) } {
+            child.kill().ok();
+            child.wait().ok();
+            panic!("Could not admit the fixture window to the job: {error}");
+        }
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if root.join("ready").is_file() {
+                return Some((job, child));
+            }
+            if root.join("no-window").is_file() {
+                child.wait().ok();
+                eprintln!("This host cannot create an addressable fixture window");
+                return None;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Timed out waiting for the fixture window"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -290,6 +518,45 @@ mod tests {
             assert!(Instant::now() < deadline, "The named job did not retire");
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn a_close_request_reaches_the_run_window() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let Some((job, mut child)) = window_boundary(run, root.path(), false) else {
+            return;
+        };
+        assert_eq!(request_close(&job).unwrap(), 1);
+        wait_empty(&job, DRAIN_TIMEOUT).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(0));
+    }
+
+    #[test]
+    fn a_window_that_ignores_the_close_survives_until_the_bound() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let Some((job, mut child)) = window_boundary(run, root.path(), true) else {
+            return;
+        };
+        assert_eq!(request_close(&job).unwrap(), 1);
+        assert_eq!(
+            wait_empty(&job, Duration::from_millis(300))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(active_processes(&job).unwrap(), 1);
+        terminate(&job).unwrap();
+        wait_empty(&job, DRAIN_TIMEOUT).unwrap();
+        child.wait().ok();
+    }
+
+    #[test]
+    fn an_empty_run_receives_no_close_request() {
+        let run = Uuid::new_v4();
+        let job = create(1, run).unwrap();
+        assert_eq!(request_close(&job).unwrap(), 0);
     }
 
     #[test]

@@ -11,8 +11,18 @@ use crate::{RunControlError, RunPhase, RunState};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, MutexGuard, OnceLock},
+    thread,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
+
+/// How long a stop request lets the run's own windows close before the launcher
+/// forces the remaining process tree down.
+const CLOSE_GRACE: Duration = Duration::from_secs(5);
+/// A window may not exist yet when the stop is accepted, so the request is
+/// repeated while the tree is still alive.
+const CLOSE_INTERVAL: Duration = Duration::from_millis(500);
+const DRAIN_POLL: Duration = Duration::from_millis(250);
 
 struct Entry {
     instance: Uuid,
@@ -125,31 +135,79 @@ pub(super) fn active() -> Vec<RunState> {
 }
 
 /// Requests termination of one run's own process tree. A repeated request while
-/// the run is still draining reports the same phase and does not signal again.
+/// the run is still draining reports the same phase and starts no new bound.
+///
+/// The OS close request goes to every visible top-level window the tree owns, so
+/// a game can save and exit normally. Only a tree that has not drained when the
+/// bound expires is terminated.
 pub(super) fn stop(run: Uuid) -> Result<RunState, RunControlError> {
+    stop_after(run, CLOSE_GRACE)
+}
+
+fn stop_after(run: Uuid, grace: Duration) -> Result<RunState, RunControlError> {
     let entry = entries()
         .get(&run)
         .cloned()
         .ok_or(RunControlError::UnknownRun)?;
     let current = phase(&entry);
     if matches!(current, RunPhase::Starting | RunPhase::Running) {
+        // This phase transition is the single-owner gate: only the request that
+        // claims the run may start a close bound.
         set_phase(&entry, RunPhase::Stopping);
-        if let Err(error) = job::terminate(&entry.job) {
-            // Restore only our own request; the owner may have moved the run on
-            // to a later phase while the termination call was in flight.
-            let mut phase = lock_phase(&entry);
-            if *phase == RunPhase::Stopping {
-                *phase = current;
-            }
-            drop(phase);
-            return Err(RunControlError::Boundary(error));
-        }
+        request_close(&entry);
         let mut phase = lock_phase(&entry);
         if *phase == RunPhase::Stopping {
             *phase = RunPhase::Draining;
         }
+        drop(phase);
+        let escalation = Arc::clone(&entry);
+        thread::spawn(move || escalate(&escalation, grace));
     }
     Ok(state(run, &entry))
+}
+
+fn request_close(entry: &Entry) {
+    if let Err(error) = job::request_close(&entry.job) {
+        // A missing request is not a failed stop: the bound still forces the
+        // tree down. Only the error kind is reported; no path or identity.
+        eprintln!(
+            "Could not ask the protected run to close ({:?}).",
+            error.kind()
+        );
+    }
+}
+
+/// Waits out one close bound for a run this process already asked to stop, then
+/// terminates what remains. The owner still performs the only drain
+/// observation and record cleanup.
+fn escalate(entry: &Entry, grace: Duration) {
+    let deadline = Instant::now() + grace;
+    let mut next_request = Instant::now() + CLOSE_INTERVAL;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        if job::wait_empty(&entry.job, remaining.min(DRAIN_POLL)).is_ok() {
+            return;
+        }
+        if !matches!(phase(entry), RunPhase::Stopping | RunPhase::Draining) {
+            return;
+        }
+        if Instant::now() >= next_request {
+            request_close(entry);
+            next_request = Instant::now() + CLOSE_INTERVAL;
+        }
+    }
+    if !matches!(phase(entry), RunPhase::Stopping | RunPhase::Draining) {
+        return;
+    }
+    if let Err(error) = job::terminate(&entry.job) {
+        eprintln!(
+            "Could not force the stopped protected run to drain ({:?}).",
+            error.kind()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +230,12 @@ mod tests {
         }
     }
 
+    /// Most tests only need the escalation outcome. The production close bound
+    /// is covered separately.
+    fn stop_soon(run: Uuid) -> Result<RunState, RunControlError> {
+        stop_after(run, Duration::ZERO)
+    }
+
     #[test]
     fn stopping_one_run_leaves_another_live() {
         let root = tempfile::tempdir().unwrap();
@@ -191,13 +255,13 @@ mod tests {
         second.running();
 
         assert_eq!(inspect(first_run).unwrap().phase, RunPhase::Running);
-        assert_eq!(stop(first_run).unwrap().phase, RunPhase::Draining);
+        assert_eq!(stop_soon(first_run).unwrap().phase, RunPhase::Draining);
         wait_drained(first_run);
         assert!(!job::boundary_empty(second_run).unwrap());
         assert_eq!(inspect(second_run).unwrap().phase, RunPhase::Running);
 
         // The unrelated run stays under its owner's control.
-        assert_eq!(stop(second_run).unwrap().phase, RunPhase::Draining);
+        assert_eq!(stop_soon(second_run).unwrap().phase, RunPhase::Draining);
         wait_drained(second_run);
     }
 
@@ -211,12 +275,33 @@ mod tests {
             job::test_boundary(run, root.path()).unwrap(),
         );
         guard.running();
-        assert_eq!(stop(run).unwrap().phase, RunPhase::Draining);
-        assert_eq!(stop(run).unwrap().phase, RunPhase::Draining);
+        assert_eq!(stop_soon(run).unwrap().phase, RunPhase::Draining);
+        assert_eq!(stop_soon(run).unwrap().phase, RunPhase::Draining);
         wait_drained(run);
         assert!(guard.stopped());
         // A stop claims the outcome, so the owner cannot later report completion.
         assert!(!guard.finish());
+    }
+
+    #[test]
+    fn a_stop_leaves_time_for_the_run_to_close_itself() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        assert_eq!(stop(run).unwrap().phase, RunPhase::Draining);
+        // The fixture has no window, so only the production bound can end it.
+        thread::sleep(Duration::from_millis(200));
+        assert!(
+            !job::boundary_empty(run).unwrap(),
+            "the tree must not be forced down before the close bound"
+        );
+        wait_drained(run);
+        assert!(guard.stopped());
     }
 
     #[test]
@@ -229,7 +314,7 @@ mod tests {
             job::test_boundary(run, root.path()).unwrap(),
         );
         assert_eq!(inspect(run).unwrap().phase, RunPhase::Starting);
-        assert_eq!(stop(run).unwrap().phase, RunPhase::Draining);
+        assert_eq!(stop_soon(run).unwrap().phase, RunPhase::Draining);
         // Admission must not rewrite the accepted stop as a running run.
         guard.running();
         assert_eq!(inspect(run).unwrap().phase, RunPhase::Draining);
