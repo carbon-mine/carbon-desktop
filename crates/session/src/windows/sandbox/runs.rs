@@ -970,8 +970,12 @@ mod tests {
                 !matches!(stopped, Ok(RunPhase::Stopping | RunPhase::Draining))
             );
             // A completion claim leaves the fixture child running until it is
-            // told to finish; a stop claim terminates it through the bound.
-            fs::write(root.path().join("finish"), []).unwrap();
+            // told to finish. When the stop claim won, the escalation owns the
+            // tree, so writing the marker would let it exit naturally and make
+            // the forced label depend on thread timing.
+            if finished {
+                fs::write(root.path().join("finish"), []).unwrap();
+            }
             wait_drained(run);
             drop(guard);
             let record = outcome(run).unwrap();
