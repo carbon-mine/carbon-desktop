@@ -107,7 +107,7 @@ pub(super) fn run(
         boundary_empty: true,
         stopped: false,
     };
-    let result = sandbox::launch(
+    let launch = sandbox::launch(
         &profile,
         &java.join("bin/java.exe"),
         &own,
@@ -116,44 +116,68 @@ pub(super) fn run(
         &witness,
         &mut observation,
     );
-    if !observation.boundary_empty {
-        return Err(SessionError::RecoveryRequired);
-    }
-    reservation.confirm_empty(|path| open_regular(path, false))?;
-    if observation.stopped {
-        return Err(SessionError::Stopped);
-    }
-    result.map_err(SessionError::Isolation)?;
-    if read_small(&own.join("window-shown"), 7)
-        .map_err(SessionError::Isolation)?
-        .as_deref()
-        != Some(b"checked")
-        || read_small(&foreign, 12)
+    // A launched run keeps its guard until every post-launch check has passed.
+    // Only then may the terminal record claim completion; any later failure
+    // withdraws the claim so the record agrees with the error the caller sees.
+    let (mut run_guard, launch_error) = match launch {
+        Ok(guard) => (Some(guard), None),
+        Err(error) => (None, Some(error)),
+    };
+    let checks = (|| -> Result<SessionReport, SessionError> {
+        if !observation.boundary_empty {
+            return Err(SessionError::RecoveryRequired);
+        }
+        reservation.confirm_empty(|path| open_regular(path, false))?;
+        if observation.stopped {
+            return Err(SessionError::Stopped);
+        }
+        if let Some(error) = launch_error {
+            return Err(SessionError::Isolation(error));
+        }
+        if read_small(&own.join("window-shown"), 7)
             .map_err(SessionError::Isolation)?
             .as_deref()
-            != Some(b"peer witness")
-        || read_small(&witness, 17)
-            .map_err(SessionError::Isolation)?
-            .as_deref()
-            != Some(b"protected fixture")
-    {
-        return Err(SessionError::Isolation(Error::other(
-            "Required isolation and window witnesses were not verified",
-        )));
+            != Some(b"checked")
+            || read_small(&foreign, 12)
+                .map_err(SessionError::Isolation)?
+                .as_deref()
+                != Some(b"peer witness")
+            || read_small(&witness, 17)
+                .map_err(SessionError::Isolation)?
+                .as_deref()
+                != Some(b"protected fixture")
+        {
+            return Err(SessionError::Isolation(Error::other(
+                "Required isolation and window witnesses were not verified",
+            )));
+        }
+        let next = read_count(&own.join("next-count")).map_err(SessionError::Isolation)?;
+        if let Some(count) = next {
+            let mut file =
+                tempfile::NamedTempFile::new_in(&save_dir).map_err(SessionError::Data)?;
+            file.write_all(count.to_string().as_bytes())
+                .map_err(SessionError::Data)?;
+            file.as_file().sync_all().map_err(SessionError::Data)?;
+            file.persist(&saved_count)
+                .map_err(|e| SessionError::Data(e.error))?;
+        }
+        Ok(SessionReport {
+            sample_count: next.unwrap_or(initial),
+            saved: next.is_some(),
+        })
+    })();
+    match (run_guard.take(), checks) {
+        (Some(guard), Ok(report)) => {
+            drop(guard);
+            Ok(report)
+        }
+        (Some(guard), Err(error)) => {
+            guard.unsettle();
+            drop(guard);
+            Err(error)
+        }
+        (None, result) => result,
     }
-    let next = read_count(&own.join("next-count")).map_err(SessionError::Isolation)?;
-    if let Some(count) = next {
-        let mut file = tempfile::NamedTempFile::new_in(&save_dir).map_err(SessionError::Data)?;
-        file.write_all(count.to_string().as_bytes())
-            .map_err(SessionError::Data)?;
-        file.as_file().sync_all().map_err(SessionError::Data)?;
-        file.persist(&saved_count)
-            .map_err(|e| SessionError::Data(e.error))?;
-    }
-    Ok(SessionReport {
-        sample_count: next.unwrap_or(initial),
-        saved: next.is_some(),
-    })
 }
 
 /// A lost owner's process boundary is identified by the job name derived from
@@ -172,6 +196,14 @@ pub(super) fn inspect(run: Uuid) -> Option<crate::RunState> {
 
 pub(super) fn stop(run: Uuid) -> Result<crate::RunState, crate::RunControlError> {
     sandbox::stop_run(run)
+}
+
+pub(super) fn subscribe(run: Uuid) -> Result<crate::RunSubscription, crate::RunControlError> {
+    sandbox::subscribe(run)
+}
+
+pub(super) fn outcome(run: Uuid) -> Option<crate::RunOutcome> {
+    sandbox::outcome(run)
 }
 
 /// A job name is scoped to the Windows session that created it, so a recovery

@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 //! A labelled window for the repository-owned isolation fixture. No Minecraft launches.
 use serde::Serialize;
-use std::{fmt, io, path::Path};
+use std::{
+    fmt, io,
+    path::Path,
+    sync::mpsc::{self, RecvTimeoutError},
+    time::Duration,
+};
 use uuid::Uuid;
 
 #[cfg(any(test, all(windows, target_arch = "x86_64")))]
@@ -86,6 +91,9 @@ pub enum RunPhase {
     /// The owner observed an empty tree and is settling the run. A stop request
     /// that arrives now reports this phase and cannot replace the outcome.
     Finishing,
+    /// The owner retired the run. A stale observer can still read this phase
+    /// from its own handle; the terminal record is [`RunOutcome`].
+    Finished,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +102,61 @@ pub struct RunState {
     pub run: Uuid,
     pub instance: Uuid,
     pub phase: RunPhase,
+}
+
+/// Why a protected run ended. Every value is redacted: the record carries only
+/// the opaque run and instance IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunEnd {
+    /// The owner observed an empty tree, finished every post-launch check and
+    /// settled the completed sample.
+    Completed,
+    /// This process asked the run to stop, the owner completed its shutdown
+    /// checks and the tree drained. Whether the game itself saved is not claimed.
+    StopRequested,
+    /// The owner could not settle either outcome, including a stop whose drain
+    /// or post-launch checks did not complete. The caller already has the
+    /// concrete error; this record does not replace it.
+    Unsettled,
+}
+
+/// The terminal record for one protected run. It is retained in memory for a
+/// bounded window after [`RunPhase::Finished`] so a late observer can learn the
+/// outcome without reading a path, process ID or account identity.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunOutcome {
+    pub run: Uuid,
+    pub instance: Uuid,
+    pub end: RunEnd,
+    /// `Some(true)` when the run's OS boundary reported no active members as it
+    /// was retired, `Some(false)` when members remained and closing the boundary
+    /// destroyed them, and `None` when that observation failed.
+    pub drained: Option<bool>,
+}
+
+/// One observed change for a subscribed run. State updates arrive in phase
+/// order and exactly one `Finished` update ends the stream.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunUpdate {
+    State(RunState),
+    Finished(RunOutcome),
+}
+
+/// A framework-neutral observer of one protected run. Dropping it only removes
+/// this observer; the run continues under its owner.
+pub struct RunSubscription {
+    receiver: mpsc::Receiver<RunUpdate>,
+}
+
+impl RunSubscription {
+    /// Wait for the next update. A finished run closes the channel after its one
+    /// terminal update, so a disconnected channel means the owner retired.
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<RunUpdate, RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
 }
 
 #[derive(Debug)]
@@ -128,6 +191,34 @@ pub fn active_runs() -> Vec<RunState> {
 pub fn inspect(run: Uuid) -> Option<RunState> {
     #[cfg(all(windows, target_arch = "x86_64"))]
     return windows::inspect(run);
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
+    {
+        let _ = run;
+        None
+    }
+}
+
+/// Observe one protected run's phase changes and terminal outcome.
+///
+/// A live run starts with its current state. A run that has already finished
+/// yields its retained outcome once, and an ID this process never admitted is
+/// rejected. The subscription is one-way: it cannot start, stop or reconfigure
+/// a run.
+pub fn subscribe(run: Uuid) -> Result<RunSubscription, RunControlError> {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    return windows::subscribe(run);
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
+    {
+        let _ = run;
+        Err(RunControlError::Unsupported)
+    }
+}
+
+/// The redacted terminal record for a run that finished in this process and is
+/// still inside the bounded retention window, or `None` otherwise.
+pub fn outcome(run: Uuid) -> Option<RunOutcome> {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    return windows::outcome(run);
     #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
         let _ = run;

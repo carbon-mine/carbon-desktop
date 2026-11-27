@@ -3,6 +3,8 @@
 mod job;
 mod runs;
 
+pub(super) use runs::RunGuard;
+
 use std::{
     ffi::{OsStr, OsString},
     io::{self, Error},
@@ -358,7 +360,7 @@ pub(super) fn launch(
     foreign: &Path,
     read_only: &Path,
     observation: &mut LaunchObservation,
-) -> io::Result<()> {
+) -> io::Result<RunGuard> {
     let java_path = wide(java);
     let working = wide(own);
     let mut tmp = OsString::from("-Djava.io.tmpdir=");
@@ -389,9 +391,9 @@ pub(super) fn launch(
         }),
     ])?;
     let env = environment(own)?;
+    let job = job::create(1, observation.run)?;
+    let run = runs::register(observation.run, observation.instance, Arc::clone(&job));
     unsafe {
-        let job = job::create(1, observation.run)?;
-        let run = runs::register(observation.run, observation.instance, Arc::clone(&job));
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid,
             ..Default::default()
@@ -424,7 +426,12 @@ pub(super) fn launch(
         if run.stopped() {
             // A stop accepted before process creation must not let the payload
             // run: the suspended root is now a member of that stopped job.
-            stop_suspended(process.0, &job)?;
+            if let Err(error) = stop_suspended(process.0, &job) {
+                // Without a confirmed drain the record must not claim the stop
+                // settled, even though the run never reached the caller.
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = true;
             return Err(stopped_error());
@@ -456,21 +463,30 @@ pub(super) fn launch(
                 }
                 _ => return Err(Error::last_os_error()),
             }
-            drained?;
+            if let Err(error) = drained {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = run.stopped();
             return Err(error);
         }
         if run.stopped() {
             // A stop accepted after validation must still prevent the resume.
-            stop_suspended(process.0, &job)?;
+            if let Err(error) = stop_suspended(process.0, &job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = true;
             return Err(stopped_error());
         }
         if ResumeThread(thread.0) == u32::MAX {
             let error = Error::last_os_error();
-            job::stop_and_drain(&job)?;
+            if let Err(error) = job::stop_and_drain(&job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             observation.stopped = run.stopped();
             return Err(error);
@@ -487,6 +503,8 @@ pub(super) fn launch(
                 // The stop request terminated the root; drain what remains of its tree.
                 if job::wait_empty(&job, job::DRAIN_TIMEOUT).is_ok() {
                     observation.boundary_empty = true;
+                } else {
+                    run.unsettle();
                 }
                 observation.stopped = true;
                 return Err(stopped_error());
@@ -499,19 +517,28 @@ pub(super) fn launch(
             } else {
                 Error::last_os_error()
             };
-            job::stop_and_drain(&job)?;
+            if let Err(error) = job::stop_and_drain(&job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             return Err(error);
         }
         let drain = job::wait_empty(&job, job::DRAIN_TIMEOUT);
         if let Err(error) = drain {
             if run.stopped() {
-                job::stop_and_drain(&job)?;
+                if let Err(error) = job::stop_and_drain(&job) {
+                    run.unsettle();
+                    return Err(error);
+                }
                 observation.boundary_empty = true;
                 observation.stopped = true;
                 return Err(stopped_error());
             }
-            job::stop_and_drain(&job)?;
+            if let Err(error) = job::stop_and_drain(&job) {
+                run.unsettle();
+                return Err(error);
+            }
             observation.boundary_empty = true;
             return Err(error);
         }
@@ -524,14 +551,22 @@ pub(super) fn launch(
         }
         observation.boundary_empty = true;
         let mut exit = 0;
-        win(GetExitCodeProcess(process.0, &mut exit))?;
+        if let Err(error) = win(GetExitCodeProcess(process.0, &mut exit)) {
+            // The tree drained but the sample's own result was not verified, so
+            // the terminal record must not claim a published completion.
+            run.unsettle();
+            return Err(error);
+        }
         if exit != 0 {
+            run.unsettle();
             return Err(Error::other(format!(
                 "The fixed Java session exited {exit:#x}"
             )));
         }
     }
-    Ok(())
+    // The caller now owns finalization: it keeps the guard alive through its
+    // post-launch checks and only then lets the terminal record settle.
+    Ok(run)
 }
 
 pub(super) fn boundary_empty(run: Uuid) -> io::Result<bool> {
@@ -548,6 +583,14 @@ pub(super) fn inspect_run(run: Uuid) -> Option<crate::RunState> {
 
 pub(super) fn stop_run(run: Uuid) -> Result<crate::RunState, crate::RunControlError> {
     runs::stop(run)
+}
+
+pub(super) fn subscribe(run: Uuid) -> Result<crate::RunSubscription, crate::RunControlError> {
+    runs::subscribe(run)
+}
+
+pub(super) fn outcome(run: Uuid) -> Option<crate::RunOutcome> {
+    runs::outcome(run)
 }
 
 #[cfg(test)]
