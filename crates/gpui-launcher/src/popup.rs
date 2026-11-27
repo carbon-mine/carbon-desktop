@@ -82,6 +82,7 @@ struct Popup {
     pack: Option<(PathBuf, PackReview)>,
     notice: Option<&'static str>,
     close_guard: bool,
+    stop_requested: bool,
     account: Option<AccountDialog>,
     importing: bool,
     error: Option<String>,
@@ -333,6 +334,9 @@ impl Popup {
                 account.panel.update(cx, AccountPanel::dialog_closed);
             }
             let _ = this.owner.update(cx, |launcher, cx| {
+                if this.close_guard && !this.stop_requested {
+                    launcher.keep_sample_open();
+                }
                 launcher.popup = None;
                 if had_targets {
                     launcher.refresh_targets(cx);
@@ -366,6 +370,7 @@ impl Popup {
             pack,
             notice,
             close_guard,
+            stop_requested: false,
             account,
             importing: false,
             error: None,
@@ -857,6 +862,7 @@ impl Render for Popup {
                 None,
                 cx,
                 |this, window, cx| {
+                    this.stop_requested = true;
                     window.remove_window();
                     let _ = this
                         .owner

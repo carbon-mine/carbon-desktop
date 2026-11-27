@@ -531,20 +531,32 @@ impl Launcher {
             return false;
         }
         let mut requested = 0usize;
-        let mut failure = None;
+        let mut failure = false;
         for run in runs {
             match carbon_session::stop(run) {
                 Ok(_) => requested += 1,
-                Err(error) => failure = Some(error.to_string()),
+                Err(error) => {
+                    eprintln!("Could not stop protected sample: {error}");
+                    failure = true;
+                }
             }
         }
-        self.message = match failure {
-            Some(error) => format!("Could not stop every protected sample. {error}"),
-            None if requested == 1 => "Stopping the protected sample…".into(),
-            None => format!("Stopping {requested} protected samples…"),
+        self.message = if failure {
+            "Could not stop the protected sample. Try again, or close the sample window yourself."
+                .into()
+        } else if requested == 1 {
+            "Stopping the protected sample…".into()
+        } else {
+            format!("Stopping {requested} protected samples…")
         };
         cx.notify();
         requested > 0
+    }
+
+    /// The player chose to keep Carbon Desktop open. A previously requested
+    /// stop-and-exit must not close the window when the sample later drains.
+    fn keep_sample_open(&mut self) {
+        self.exit_after_sample = false;
     }
 
     /// Stop the sample and close Carbon Desktop only after its tree has
