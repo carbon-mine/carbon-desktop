@@ -462,23 +462,24 @@ pub(super) fn launch(
             return Err(error);
         }
         let drain = job::wait_empty(&job, job::DRAIN_TIMEOUT);
-        if run.stopped() {
-            // The root was terminated by a stop request, so this is not a failure
-            // of the protected session and its disposable save is not published.
-            if drain.is_err() {
-                job::stop_and_drain(&job)?;
-            }
-            run.draining();
-            observation.boundary_empty = true;
-            observation.stopped = true;
-            return Err(stopped_error());
-        }
         if let Err(error) = drain {
+            if run.stopped() {
+                job::stop_and_drain(&job)?;
+                observation.boundary_empty = true;
+                observation.stopped = true;
+                return Err(stopped_error());
+            }
             job::stop_and_drain(&job)?;
             observation.boundary_empty = true;
             return Err(error);
         }
-        run.draining();
+        if !run.finish() {
+            // A stop request claimed the run before the owner observed the empty
+            // tree, so the completed sample is not published.
+            observation.boundary_empty = true;
+            observation.stopped = true;
+            return Err(stopped_error());
+        }
         observation.boundary_empty = true;
         let mut exit = 0;
         win(GetExitCodeProcess(process.0, &mut exit))?;

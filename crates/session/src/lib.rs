@@ -83,6 +83,9 @@ pub enum RunPhase {
     Running,
     Stopping,
     Draining,
+    /// The owner observed an empty tree and is settling the run. A stop request
+    /// that arrives now reports this phase and cannot replace the outcome.
+    Finishing,
 }
 
 #[derive(Debug, Clone, Serialize)]

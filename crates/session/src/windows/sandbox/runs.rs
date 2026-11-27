@@ -32,17 +32,18 @@ fn entries() -> MutexGuard<'static, BTreeMap<Uuid, Arc<Entry>>> {
 }
 
 fn phase(entry: &Entry) -> RunPhase {
-    *entry
-        .phase
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    *lock_phase(entry)
 }
 
 fn set_phase(entry: &Entry, next: RunPhase) {
-    *entry
+    *lock_phase(entry) = next;
+}
+
+fn lock_phase(entry: &Entry) -> MutexGuard<'_, RunPhase> {
+    entry
         .phase
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn state(run: Uuid, entry: &Entry) -> RunState {
@@ -69,9 +70,16 @@ impl RunGuard {
         }
     }
 
-    /// The root process has exited and the tree is draining.
-    pub(super) fn draining(&self) {
-        set_phase(&self.entry, RunPhase::Draining);
+    /// The owner observed an empty tree and claims the completed outcome.
+    /// Returns false when a stop request claimed the run first, so a later
+    /// request cannot rewrite an outcome the owner already decided.
+    pub(super) fn finish(&self) -> bool {
+        let mut phase = lock_phase(&self.entry);
+        if matches!(*phase, RunPhase::Stopping | RunPhase::Draining) {
+            return false;
+        }
+        *phase = RunPhase::Finishing;
+        true
     }
 
     /// True when a stop request was observed before the run finished.
@@ -126,10 +134,19 @@ pub(super) fn stop(run: Uuid) -> Result<RunState, RunControlError> {
     if matches!(current, RunPhase::Starting | RunPhase::Running) {
         set_phase(&entry, RunPhase::Stopping);
         if let Err(error) = job::terminate(&entry.job) {
-            set_phase(&entry, current);
+            // Restore only our own request; the owner may have moved the run on
+            // to a later phase while the termination call was in flight.
+            let mut phase = lock_phase(&entry);
+            if *phase == RunPhase::Stopping {
+                *phase = current;
+            }
+            drop(phase);
             return Err(RunControlError::Boundary(error));
         }
-        set_phase(&entry, RunPhase::Draining);
+        let mut phase = lock_phase(&entry);
+        if *phase == RunPhase::Stopping {
+            *phase = RunPhase::Draining;
+        }
     }
     Ok(state(run, &entry))
 }
@@ -137,9 +154,21 @@ pub(super) fn stop(run: Uuid) -> Result<RunState, RunControlError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        fs, thread,
+        time::{Duration, Instant},
+    };
 
     fn instance() -> Uuid {
         Uuid::new_v4()
+    }
+
+    fn wait_drained(run: Uuid) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !job::boundary_empty(run).unwrap() {
+            assert!(Instant::now() < deadline, "The run did not drain");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -162,13 +191,13 @@ mod tests {
 
         assert_eq!(inspect(first_run).unwrap().phase, RunPhase::Running);
         assert_eq!(stop(first_run).unwrap().phase, RunPhase::Draining);
-        assert!(job::boundary_empty(first_run).unwrap());
+        wait_drained(first_run);
         assert!(!job::boundary_empty(second_run).unwrap());
         assert_eq!(inspect(second_run).unwrap().phase, RunPhase::Running);
 
         // The unrelated run stays under its owner's control.
         assert_eq!(stop(second_run).unwrap().phase, RunPhase::Draining);
-        assert!(job::boundary_empty(second_run).unwrap());
+        wait_drained(second_run);
     }
 
     #[test]
@@ -183,8 +212,29 @@ mod tests {
         guard.running();
         assert_eq!(stop(run).unwrap().phase, RunPhase::Draining);
         assert_eq!(stop(run).unwrap().phase, RunPhase::Draining);
-        assert!(job::boundary_empty(run).unwrap());
+        wait_drained(run);
         assert!(guard.stopped());
+        // A stop claims the outcome, so the owner cannot later report completion.
+        assert!(!guard.finish());
+    }
+
+    #[test]
+    fn a_stop_after_the_owner_finished_leaves_the_outcome_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        // The fixture child exits on its own; the owner then observes an empty tree.
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        let late = stop(run).unwrap();
+        assert_eq!(late.phase, RunPhase::Finishing);
+        assert!(!guard.stopped());
     }
 
     #[test]
@@ -210,7 +260,7 @@ mod tests {
         assert!(inspect(run).is_none());
         assert!(!active().iter().any(|state| state.run == run));
         assert!(matches!(stop(run), Err(RunControlError::UnknownRun)));
-        assert!(job::boundary_empty(run).unwrap());
+        wait_drained(run);
     }
 
     #[test]
