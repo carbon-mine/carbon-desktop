@@ -230,6 +230,12 @@ pub(super) fn request_close(job: &Handle) -> io::Result<usize> {
 
 /// True when no process from this run can still be running: either the named
 /// job no longer exists or it exists with no active members.
+/// Whether this run's own job currently reports no active members. Called only
+/// while the owning guard still holds the boundary handle.
+pub(super) fn is_empty(job: &Handle) -> io::Result<bool> {
+    Ok(active_processes(job)? == 0)
+}
+
 pub(super) fn boundary_empty(run: Uuid) -> io::Result<bool> {
     let name = job_name(run);
     let handle = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) };

@@ -3,6 +3,8 @@
 mod job;
 mod runs;
 
+pub(super) use runs::RunGuard;
+
 use std::{
     ffi::{OsStr, OsString},
     io::{self, Error},
@@ -358,7 +360,7 @@ pub(super) fn launch(
     foreign: &Path,
     read_only: &Path,
     observation: &mut LaunchObservation,
-) -> io::Result<()> {
+) -> io::Result<RunGuard> {
     let java_path = wide(java);
     let working = wide(own);
     let mut tmp = OsString::from("-Djava.io.tmpdir=");
@@ -389,9 +391,9 @@ pub(super) fn launch(
         }),
     ])?;
     let env = environment(own)?;
+    let job = job::create(1, observation.run)?;
+    let run = runs::register(observation.run, observation.instance, Arc::clone(&job));
     unsafe {
-        let job = job::create(1, observation.run)?;
-        let run = runs::register(observation.run, observation.instance, Arc::clone(&job));
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid,
             ..Default::default()
@@ -537,7 +539,9 @@ pub(super) fn launch(
             )));
         }
     }
-    Ok(())
+    // The caller now owns finalization: it keeps the guard alive through its
+    // post-launch checks and only then lets the terminal record settle.
+    Ok(run)
 }
 
 pub(super) fn boundary_empty(run: Uuid) -> io::Result<bool> {

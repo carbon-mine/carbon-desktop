@@ -34,6 +34,8 @@ struct Status {
     phase: RunPhase,
     /// The owner claimed completion after observing an empty tree.
     completed: bool,
+    /// The owner could not confirm the run settled, even if a stop claimed it.
+    unsettled: bool,
     /// The owner has retired the run; no stop may claim it any more.
     retired: bool,
 }
@@ -56,9 +58,19 @@ fn entries() -> MutexGuard<'static, BTreeMap<Uuid, Arc<Entry>>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+#[cfg(not(test))]
 fn outcomes() -> &'static Mutex<VecDeque<RunOutcome>> {
     static OUTCOMES: OnceLock<Mutex<VecDeque<RunOutcome>>> = OnceLock::new();
     OUTCOMES.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+// Tests run in parallel in one process. Each test thread gets its own bounded
+// store so a neighbouring test's retirement cannot evict the record a test is
+// about to assert. Production uses the single process-wide store.
+#[cfg(test)]
+thread_local! {
+    static OUTCOMES: std::cell::RefCell<VecDeque<RunOutcome>> =
+        const { std::cell::RefCell::new(VecDeque::new()) };
 }
 
 fn phase(entry: &Entry) -> RunPhase {
@@ -105,6 +117,7 @@ fn set_phase(run: Uuid, entry: &Entry, status: &mut Status, phase: RunPhase) {
     );
 }
 
+#[cfg(not(test))]
 fn retain(outcome: RunOutcome) {
     retain_in(
         &mut outcomes()
@@ -114,17 +127,35 @@ fn retain(outcome: RunOutcome) {
     );
 }
 
+#[cfg(test)]
+fn retain(outcome: RunOutcome) {
+    OUTCOMES.with(|outcomes| retain_in(&mut outcomes.borrow_mut(), outcome));
+}
+
 fn retain_in(outcomes: &mut VecDeque<RunOutcome>, outcome: RunOutcome) {
+    // A reused run UUID must not serve the previous record while the new run is
+    // live, so the old one is replaced rather than duplicated.
+    outcomes.retain(|existing| existing.run != outcome.run);
     if outcomes.len() >= RETAINED_OUTCOMES {
         outcomes.pop_front();
     }
     outcomes.push_back(outcome);
 }
 
+fn forget_outcome(run: Uuid) {
+    #[cfg(test)]
+    OUTCOMES.with(|outcomes| outcomes.borrow_mut().retain(|outcome| outcome.run != run));
+    #[cfg(not(test))]
+    outcomes()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|outcome| outcome.run != run);
+}
+
 /// Removes its run from the directory when the owning runner finishes,
 /// including on an error or panic path. Closing the last job handle also
 /// destroys any tree the run never drained.
-pub(super) struct RunGuard {
+pub(crate) struct RunGuard {
     run: Uuid,
     entry: Arc<Entry>,
 }
@@ -154,11 +185,13 @@ impl RunGuard {
         true
     }
 
-    /// Withdraws a completion claim when the run failed after the empty tree was
-    /// observed, so the terminal record reports an unsettled outcome instead of
-    /// a sample the caller never received.
-    pub(super) fn unsettle(&self) {
-        lock_status(&self.entry).completed = false;
+    /// Records that the owner could not settle the run, even if a stop claimed
+    /// it. The terminal record reports `Unsettled` instead of claiming a sample,
+    /// a stop or a drain the caller never confirmed.
+    pub(crate) fn unsettle(&self) {
+        let mut status = lock_status(&self.entry);
+        status.completed = false;
+        status.unsettled = true;
     }
 
     /// True when a stop request was observed before the run finished.
@@ -169,31 +202,35 @@ impl RunGuard {
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
-        {
-            let mut status = lock_status(&self.entry);
-            status.retired = true;
-            let end = if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
-                RunEnd::StopRequested
-            } else if status.completed {
-                RunEnd::Completed
-            } else {
-                RunEnd::Unsettled
-            };
-            status.phase = RunPhase::Finished;
-            let outcome = RunOutcome {
-                run: self.run,
-                instance: self.entry.instance,
-                end,
-            };
-            // Retain and notify while the status lock still proves the entry is
-            // live, so a subscriber that races registration cannot miss the
-            // terminal update.
-            retain(outcome.clone());
-            for sender in lock_subscribers(&self.entry).drain(..) {
-                let _ = sender.send(RunUpdate::Finished(outcome.clone()));
-            }
-        }
+        // The directory is taken first, matching active() and subscribe(), and
+        // held through removal. Retirement and removal are therefore atomic: no
+        // observer can read a finished entry out of the live directory.
         let mut directory = entries();
+        let mut status = lock_status(&self.entry);
+        status.retired = true;
+        let end = if status.unsettled {
+            RunEnd::Unsettled
+        } else if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
+            RunEnd::StopRequested
+        } else if status.completed {
+            RunEnd::Completed
+        } else {
+            RunEnd::Unsettled
+        };
+        status.phase = RunPhase::Finished;
+        let outcome = RunOutcome {
+            run: self.run,
+            instance: self.entry.instance,
+            end,
+            drained: job::is_empty(&self.entry.job).ok(),
+        };
+        // Retain and notify while the entry is still in the directory and the
+        // status lock proves it is live, so a subscriber that races removal
+        // cannot miss the terminal update.
+        retain(outcome.clone());
+        for sender in lock_subscribers(&self.entry).drain(..) {
+            let _ = sender.send(RunUpdate::Finished(outcome.clone()));
+        }
         if directory
             .get(&self.run)
             .is_some_and(|entry| Arc::ptr_eq(entry, &self.entry))
@@ -204,11 +241,13 @@ impl Drop for RunGuard {
 }
 
 pub(super) fn register(run: Uuid, instance: Uuid, job: Arc<Handle>) -> RunGuard {
+    forget_outcome(run);
     let entry = Arc::new(Entry {
         instance,
         status: Mutex::new(Status {
             phase: RunPhase::Starting,
             completed: false,
+            unsettled: false,
             retired: false,
         }),
         job,
@@ -232,6 +271,7 @@ pub(super) fn active() -> Vec<RunState> {
         .collect()
 }
 
+#[cfg(not(test))]
 pub(super) fn outcome(run: Uuid) -> Option<RunOutcome> {
     outcomes()
         .lock()
@@ -239,6 +279,17 @@ pub(super) fn outcome(run: Uuid) -> Option<RunOutcome> {
         .iter()
         .find(|outcome| outcome.run == run)
         .cloned()
+}
+
+#[cfg(test)]
+pub(super) fn outcome(run: Uuid) -> Option<RunOutcome> {
+    OUTCOMES.with(|outcomes| {
+        outcomes
+            .borrow()
+            .iter()
+            .find(|outcome| outcome.run == run)
+            .cloned()
+    })
 }
 
 /// Registers one observer without changing the run. A run that already retired
@@ -562,7 +613,9 @@ mod tests {
         next_phase(&subscription, RunPhase::Finishing);
         drop(guard);
         next_end(&subscription, RunEnd::Completed);
-        assert_eq!(outcome(run).unwrap().end, RunEnd::Completed);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::Completed);
+        assert_eq!(record.drained, Some(true));
         assert!(inspect(run).is_none());
         assert!(subscription
             .recv_timeout(Duration::from_millis(50))
@@ -587,7 +640,27 @@ mod tests {
         wait_drained(run);
         drop(guard);
         next_end(&subscription, RunEnd::StopRequested);
-        assert_eq!(outcome(run).unwrap().end, RunEnd::StopRequested);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::StopRequested);
+        assert_eq!(record.drained, Some(true));
+    }
+
+    #[test]
+    fn a_stop_whose_settlement_cannot_be_confirmed_reports_unsettled() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        assert_eq!(stop_soon(run).unwrap().phase, RunPhase::Draining);
+        // The owner's post-launch or drain check failed, so the record must not
+        // claim a stop the caller never confirmed.
+        guard.unsettle();
+        drop(guard);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::Unsettled);
     }
 
     #[test]
@@ -604,7 +677,13 @@ mod tests {
         assert!(inspect(run).is_none());
         let subscription = subscribe(run).unwrap();
         next_end(&subscription, RunEnd::Unsettled);
-        assert_eq!(outcome(run).unwrap().end, RunEnd::Unsettled);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::Unsettled);
+        assert_eq!(
+            record.drained,
+            Some(false),
+            "the fixture child was still alive when the owner retired"
+        );
     }
 
     #[test]
@@ -665,11 +744,26 @@ mod tests {
                     run: *run,
                     instance: Uuid::new_v4(),
                     end: RunEnd::Completed,
+                    drained: Some(true),
                 },
             );
         }
         assert_eq!(outcomes.len(), RETAINED_OUTCOMES);
         assert!(outcomes.iter().all(|outcome| outcome.run != runs[0]));
         assert_eq!(outcomes.back().unwrap().run, *runs.last().unwrap());
+
+        // A repeated run ID replaces the earlier record rather than adding one.
+        retain_in(
+            &mut outcomes,
+            RunOutcome {
+                run: *runs.last().unwrap(),
+                instance: Uuid::new_v4(),
+                end: RunEnd::StopRequested,
+                drained: Some(false),
+            },
+        );
+        assert_eq!(outcomes.len(), RETAINED_OUTCOMES);
+        assert_eq!(outcomes.back().unwrap().end, RunEnd::StopRequested);
+        assert_eq!(outcomes.back().unwrap().drained, Some(false));
     }
 }

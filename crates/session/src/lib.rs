@@ -109,12 +109,15 @@ pub struct RunState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RunEnd {
-    /// The owner observed an empty tree and settled the completed sample.
+    /// The owner observed an empty tree, finished every post-launch check and
+    /// settled the completed sample.
     Completed,
-    /// This process asked the run to stop before the owner completed it.
+    /// This process asked the run to stop, the owner completed its shutdown
+    /// checks and the tree drained. Whether the game itself saved is not claimed.
     StopRequested,
-    /// The owner retired the run without settling either outcome. The caller
-    /// already received the concrete error; this record does not replace it.
+    /// The owner could not settle either outcome, including a stop whose drain
+    /// or post-launch checks did not complete. The caller already has the
+    /// concrete error; this record does not replace it.
     Unsettled,
 }
 
@@ -127,6 +130,10 @@ pub struct RunOutcome {
     pub run: Uuid,
     pub instance: Uuid,
     pub end: RunEnd,
+    /// `Some(true)` when the run's OS boundary reported no active members as it
+    /// was retired, `Some(false)` when members remained and closing the boundary
+    /// destroyed them, and `None` when that observation failed.
+    pub drained: Option<bool>,
 }
 
 /// One observed change for a subscribed run. State updates arrive in phase
