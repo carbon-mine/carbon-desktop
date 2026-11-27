@@ -248,6 +248,8 @@ struct Launcher {
     native_menu: Option<shell::NativeMenu>,
     applied_dark: Option<bool>,
     popup: Option<AnyWindowHandle>,
+    main_window: Option<AnyWindowHandle>,
+    exit_after_sample: bool,
     picker_open: bool,
     task: Option<Task>,
     fixture_task: Option<Task>,
@@ -400,6 +402,8 @@ impl Launcher {
             native_menu: native_menu.ok(),
             applied_dark: None,
             popup: None,
+            main_window: None,
+            exit_after_sample: false,
             picker_open: false,
             task: None,
             fixture_task: None,
@@ -500,6 +504,71 @@ impl Launcher {
         if let Some(task) = &self.task {
             task.activity.cancel.store(true, Ordering::Release);
         }
+    }
+
+    /// Run IDs this launcher owns for one instance. The redacted directory is
+    /// the only source, so a stop can never target another launcher's run.
+    fn owned_sample_runs(runs: &[carbon_session::RunState], instance: Uuid) -> Vec<Uuid> {
+        runs.iter()
+            .filter(|run| run.instance == instance)
+            .map(|run| run.run)
+            .collect()
+    }
+
+    /// Ask each live run for the running sample instance to drain. The owner
+    /// still decides the final outcome; this only requests termination. Returns
+    /// whether at least one run was visible to stop.
+    fn stop_sample(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(instance) = self.task.as_ref().and_then(|task| task.profile) else {
+            return false;
+        };
+        let runs = Self::owned_sample_runs(&carbon_session::active_runs(), instance);
+        if runs.is_empty() {
+            self.message =
+                "The protected sample is still starting. Close Carbon Desktop again once it is running."
+                    .into();
+            cx.notify();
+            return false;
+        }
+        let mut requested = 0usize;
+        let mut failure = None;
+        for run in runs {
+            match carbon_session::stop(run) {
+                Ok(_) => requested += 1,
+                Err(error) => failure = Some(error.to_string()),
+            }
+        }
+        self.message = match failure {
+            Some(error) => format!("Could not stop every protected sample. {error}"),
+            None if requested == 1 => "Stopping the protected sample…".into(),
+            None => format!("Stopping {requested} protected samples…"),
+        };
+        cx.notify();
+        requested > 0
+    }
+
+    /// Stop the sample and close Carbon Desktop only after its tree has
+    /// drained. The worker completes after the boundary is empty, so the
+    /// completion path performs the actual close.
+    fn stop_sample_and_exit(&mut self, cx: &mut Context<Self>) {
+        self.exit_after_sample = true;
+        if self.task.is_some() {
+            if !self.stop_sample(cx) {
+                self.message =
+                    "Carbon Desktop will close after the protected sample finishes.".into();
+                cx.notify();
+            }
+        } else {
+            self.close_after_sample(cx);
+        }
+    }
+
+    fn close_after_sample(&mut self, cx: &mut Context<Self>) {
+        self.exit_after_sample = false;
+        if let Some(window) = self.main_window.take() {
+            let _ = window.update(cx, |_, window, _| window.remove_window());
+        }
+        cx.notify();
     }
 
     fn profile_uses_saved_server(&self, id: Uuid) -> bool {
@@ -805,6 +874,10 @@ impl Launcher {
         } else {
             self.task.take()
         };
+        if self.exit_after_sample && !fixture_work {
+            self.close_after_sample(cx);
+            return;
+        }
         self.last_activity = task.as_ref().and_then(Task::target);
         let cancelled = task
             .as_ref()
@@ -1721,6 +1794,32 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_sample_runs_keep_other_instances_untouched() {
+        let own = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let state = |run, instance| carbon_session::RunState {
+            run,
+            instance,
+            phase: carbon_session::RunPhase::Running,
+        };
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let runs = [
+            state(first, own),
+            state(second, other),
+            state(Uuid::new_v4(), own),
+        ];
+        assert_eq!(
+            Launcher::owned_sample_runs(&runs, own),
+            vec![first, runs[2].run]
+        );
+        assert_eq!(
+            Launcher::owned_sample_runs(&runs, Uuid::new_v4()),
+            Vec::<Uuid>::new()
+        );
+    }
 
     #[test]
     fn rail_width_stays_within_the_reviewed_bounds() {

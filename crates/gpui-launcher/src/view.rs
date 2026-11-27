@@ -646,17 +646,33 @@ impl Launcher {
                 } else {
                     task.meter.read(cx).target.label().to_owned()
                 },
-                task.can_cancel.then(|| {
-                    self.command(
-                        p,
-                        "cancel-install",
-                        "Cancel",
-                        false,
-                        cancelling,
-                        cx,
-                        |this, _, _| this.cancel_task(),
-                    )
-                }),
+                task.can_cancel
+                    .then(|| {
+                        self.command(
+                            p,
+                            "cancel-install",
+                            "Cancel",
+                            false,
+                            cancelling,
+                            cx,
+                            |this, _, _| this.cancel_task(),
+                        )
+                    })
+                    .or_else(|| {
+                        task.protects_session.then(|| {
+                            self.command(
+                                p,
+                                "stop-sample",
+                                "Stop sample",
+                                false,
+                                false,
+                                cx,
+                                |this, _, cx| {
+                                    this.stop_sample(cx);
+                                },
+                            )
+                        })
+                    }),
             )
         } else if let Some(plan) = plan {
             let jdk_plan = inspection
