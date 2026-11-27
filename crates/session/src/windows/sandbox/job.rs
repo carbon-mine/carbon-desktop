@@ -174,11 +174,14 @@ struct CloseTargets<'a> {
 }
 
 /// Confirms that the process that owns a matched window is still the member the
-/// job reported, so a recycled PID cannot redirect the close request.
+/// job reported, so a recycled PID cannot redirect the close request. A
+/// sandboxed member may refuse a query handle from this desktop; that is not
+/// evidence of a different process, so the request falls back to a fresh job
+/// membership query taken immediately before the post.
 fn still_member(job: &Handle, pid: u32) -> bool {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if process.is_null() {
-        return false;
+        return member_pids(job).is_ok_and(|pids| pids.contains(&pid));
     }
     let process = Handle(process);
     let mut member = 0;

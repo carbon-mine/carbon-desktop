@@ -45,10 +45,6 @@ fn phase(entry: &Entry) -> RunPhase {
     *lock_phase(entry)
 }
 
-fn set_phase(entry: &Entry, next: RunPhase) {
-    *lock_phase(entry) = next;
-}
-
 fn lock_phase(entry: &Entry) -> MutexGuard<'_, RunPhase> {
     entry
         .phase
@@ -149,11 +145,19 @@ fn stop_after(run: Uuid, grace: Duration) -> Result<RunState, RunControlError> {
         .get(&run)
         .cloned()
         .ok_or(RunControlError::UnknownRun)?;
-    let current = phase(&entry);
-    if matches!(current, RunPhase::Starting | RunPhase::Running) {
-        // This phase transition is the single-owner gate: only the request that
-        // claims the run may start a close bound.
-        set_phase(&entry, RunPhase::Stopping);
+    // Claiming the run is one atomic phase transition, so exactly one request
+    // sends the close and starts the bound. The lock is released before any
+    // window enumeration or wait.
+    let claimed = {
+        let mut phase = lock_phase(&entry);
+        if matches!(*phase, RunPhase::Starting | RunPhase::Running) {
+            *phase = RunPhase::Stopping;
+            true
+        } else {
+            false
+        }
+    };
+    if claimed {
         request_close(&entry);
         let mut phase = lock_phase(&entry);
         if *phase == RunPhase::Stopping {
