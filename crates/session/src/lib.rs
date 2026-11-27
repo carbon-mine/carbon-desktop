@@ -129,9 +129,14 @@ pub enum RunEnd {
     /// The owner observed an empty tree, finished every post-launch check and
     /// settled the completed sample.
     Completed,
-    /// This process asked the run to stop, the owner completed its shutdown
-    /// checks and the tree drained. Whether the game itself saved is not claimed.
+    /// This process asked the run to stop, every window the tree owned closed
+    /// within the close bound, the owner completed its shutdown checks and the
+    /// tree drained on its own. Whether the game itself saved is not claimed.
     StopRequested,
+    /// This process asked the run to stop, the close bound expired and this
+    /// process terminated the remaining tree. The owner then confirmed the empty
+    /// boundary. Whether the game saved is not claimed.
+    StopForced,
     /// The owner could not settle either outcome, including a stop whose drain
     /// or post-launch checks did not complete. The caller already has the
     /// concrete error; this record does not replace it.

@@ -371,6 +371,7 @@ fn end_label(outcome: &carbon_session::RunOutcome) -> String {
     let mut text = match outcome.end {
         RunEnd::Completed => "The protected sample completed.",
         RunEnd::StopRequested => "The protected sample stopped after your request.",
+        RunEnd::StopForced => "The protected sample did not close in time, so Carbon ended it.",
         RunEnd::Unsettled => "The protected sample ended without a confirmed outcome.",
     }
     .to_owned();
@@ -2300,6 +2301,10 @@ mod tests {
             "The protected sample stopped after your request. Remaining processes were closed."
         );
         assert_eq!(
+            end_label(&outcome(RunEnd::StopForced, Some(true))),
+            "The protected sample did not close in time, so Carbon ended it."
+        );
+        assert_eq!(
             end_label(&outcome(RunEnd::Completed, None)),
             "The protected sample completed. Its process boundary could not be observed."
         );
@@ -2332,6 +2337,7 @@ mod tests {
         assert!(!SampleRun::default().exit_blocked(Some(instance)));
         assert!(!settled(record(RunEnd::Completed, Some(true))).exit_blocked(None));
         assert!(!settled(record(RunEnd::StopRequested, Some(true))).exit_blocked(None));
+        assert!(!settled(record(RunEnd::StopForced, Some(true))).exit_blocked(None));
         // A failed post-launch check still observed an empty boundary.
         assert!(!settled(record(RunEnd::Unsettled, Some(true))).exit_blocked(None));
         assert!(settled(record(RunEnd::StopRequested, Some(false))).exit_blocked(None));

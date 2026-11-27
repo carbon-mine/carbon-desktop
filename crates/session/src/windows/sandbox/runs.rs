@@ -38,6 +38,9 @@ struct Status {
     completed: bool,
     /// The owner could not confirm the run settled, even if a stop claimed it.
     unsettled: bool,
+    /// The close bound expired and this process terminated the remaining tree
+    /// itself, so the terminal record must not read as a graceful close.
+    forced: bool,
     /// The owner has retired the run; no stop may claim it any more.
     retired: bool,
 }
@@ -218,6 +221,9 @@ impl Drop for RunGuard {
             // A failed observation or a boundary that still held members means
             // the owner never confirmed drain, so no stop or sample is claimed.
             RunEnd::Unsettled
+        } else if status.forced {
+            // A stop's close bound expired and this process ended the tree.
+            RunEnd::StopForced
         } else if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
             RunEnd::StopRequested
         } else if status.completed {
@@ -256,6 +262,7 @@ pub(super) fn register(run: Uuid, instance: Uuid, job: Arc<Handle>) -> RunGuard 
             phase: RunPhase::Starting,
             completed: false,
             unsettled: false,
+            forced: false,
             retired: false,
         }),
         job,
@@ -417,11 +424,25 @@ fn escalate(entry: &Entry, grace: Duration) {
     if !matches!(phase(entry), RunPhase::Stopping | RunPhase::Draining) {
         return;
     }
+    // A tree that drained exactly at the bound closed itself, so the record must
+    // stay the graceful stop. Only a failed observation falls through to the
+    // forced path, where bounding the tree matters more than the label.
+    if matches!(job::is_empty(&entry.job), Ok(true)) {
+        return;
+    }
     if let Err(error) = job::terminate(&entry.job) {
         eprintln!(
             "Could not force the stopped protected run to drain ({:?}).",
             error.kind()
         );
+        return;
+    }
+    // The escalation, not the run's own windows, ended this tree. The claim is
+    // made under the status lock only while the stop still owns the run, so an
+    // owner that already observed the empty tree is never relabelled.
+    let mut status = lock_status(entry);
+    if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
+        status.forced = true;
     }
 }
 
@@ -644,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subscriber_sees_a_requested_stop() {
+    fn a_subscriber_sees_a_forced_stop() {
         let root = tempfile::tempdir().unwrap();
         let run = Uuid::new_v4();
         let guard = register(
@@ -655,15 +676,61 @@ mod tests {
         guard.running();
         let subscription = subscribe(run).unwrap();
         next_phase(&subscription, RunPhase::Running);
+        // The bound expires immediately, so this process terminates the tree
+        // rather than the run's own windows closing it.
         assert_eq!(stop_soon(run).unwrap().phase, RunPhase::Draining);
         next_phase(&subscription, RunPhase::Stopping);
         next_phase(&subscription, RunPhase::Draining);
         wait_drained(run);
         drop(guard);
-        next_end(&subscription, RunEnd::StopRequested);
+        next_end(&subscription, RunEnd::StopForced);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::StopForced);
+        assert_eq!(record.drained, Some(true));
+    }
+
+    #[test]
+    fn a_stop_that_drains_within_the_bound_reports_the_graceful_stop() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        assert_eq!(
+            stop_after(run, Duration::from_secs(3)).unwrap().phase,
+            RunPhase::Draining
+        );
+        // The fixture tree exits on its own well inside the bound, so the
+        // terminal record must not claim this process ended it.
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        drop(guard);
         let record = outcome(run).unwrap();
         assert_eq!(record.end, RunEnd::StopRequested);
         assert_eq!(record.drained, Some(true));
+    }
+
+    #[test]
+    fn a_forced_stop_without_a_confirmed_drain_is_unsettled() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        stop_soon(run).unwrap();
+        wait_drained(run);
+        // The forced termination is never claimed as a settled stop when the
+        // owner could not complete its own checks.
+        guard.unsettle();
+        drop(guard);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::Unsettled);
     }
 
     #[test]
@@ -854,7 +921,9 @@ mod tests {
         wait_drained(run);
         drop(guard);
         let record = outcome(run).unwrap();
-        assert_eq!(record.end, RunEnd::StopRequested);
+        // The test bound is already expired, so the escalation ends the tree and
+        // the record must not read as a graceful close.
+        assert_eq!(record.end, RunEnd::StopForced);
         assert_eq!(record.drained, Some(true));
     }
 
@@ -904,7 +973,8 @@ mod tests {
                 if finished {
                     RunEnd::Completed
                 } else {
-                    RunEnd::StopRequested
+                    // The stop's zero bound expired, so the escalation ended it.
+                    RunEnd::StopForced
                 }
             );
         }
