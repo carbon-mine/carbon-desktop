@@ -430,19 +430,27 @@ fn escalate(entry: &Entry, grace: Duration) {
     if matches!(job::is_empty(&entry.job), Ok(true)) {
         return;
     }
+    // Claim the escalation before the OS call. A concurrent retirement that sees
+    // an empty boundary must not publish a graceful stop for a tree this process
+    // is about to end, so the claim is made while the stop still owns the run.
+    {
+        let mut status = lock_status(entry);
+        if !matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
+            return;
+        }
+        status.forced = true;
+    }
     if let Err(error) = job::terminate(&entry.job) {
         eprintln!(
             "Could not force the stopped protected run to drain ({:?}).",
             error.kind()
         );
-        return;
-    }
-    // The escalation, not the run's own windows, ended this tree. The claim is
-    // made under the status lock only while the stop still owns the run, so an
-    // owner that already observed the empty tree is never relabelled.
-    let mut status = lock_status(entry);
-    if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
-        status.forced = true;
+        // Withdraw the claim: this process did not end the tree, and an
+        // unconfirmed boundary already reports `Unsettled`.
+        let mut status = lock_status(entry);
+        if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
+            status.forced = false;
+        }
     }
 }
 
@@ -714,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn a_forced_stop_without_a_confirmed_drain_is_unsettled() {
+    fn a_forced_stop_the_owner_could_not_settle_stays_unsettled() {
         let root = tempfile::tempdir().unwrap();
         let run = Uuid::new_v4();
         let guard = register(
@@ -725,8 +733,8 @@ mod tests {
         guard.running();
         stop_soon(run).unwrap();
         wait_drained(run);
-        // The forced termination is never claimed as a settled stop when the
-        // owner could not complete its own checks.
+        // A confirmed empty boundary is still not a settled stop when the owner
+        // could not complete its own checks.
         guard.unsettle();
         drop(guard);
         let record = outcome(run).unwrap();

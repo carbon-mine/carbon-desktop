@@ -129,9 +129,10 @@ pub enum RunEnd {
     /// The owner observed an empty tree, finished every post-launch check and
     /// settled the completed sample.
     Completed,
-    /// This process asked the run to stop, every window the tree owned closed
-    /// within the close bound, the owner completed its shutdown checks and the
-    /// tree drained on its own. Whether the game itself saved is not claimed.
+    /// This process asked the run to stop, the tree drained inside the close
+    /// bound without this process ending it, the owner completed its shutdown
+    /// checks and the boundary reported empty. Whether the game itself saved is
+    /// not claimed.
     StopRequested,
     /// This process asked the run to stop, the close bound expired and this
     /// process terminated the remaining tree. The owner then confirmed the empty
