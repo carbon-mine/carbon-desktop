@@ -233,7 +233,14 @@ impl SampleRun {
                     changed = true;
                     match carbon_session::subscribe(run) {
                         Ok(subscription) => self.subscription = Some(subscription),
-                        Err(_) => self.closed = true,
+                        Err(_) => {
+                            self.closed = true;
+                            // The run retired before this observer attached; keep
+                            // its retained terminal record when one exists.
+                            if let Some(outcome) = carbon_session::outcome(run) {
+                                self.outcome = Some(outcome);
+                            }
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => {}
