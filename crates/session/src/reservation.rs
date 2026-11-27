@@ -10,6 +10,12 @@ use uuid::Uuid;
 const PENDING: &str = "pending-run-v2";
 const LEGACY_PENDING: &str = "pending-run-v1";
 const HEADER: &str = "carbon-desktop-sample-run-v2";
+const MAX_RECORD: usize = 96;
+
+struct Pending {
+    run: Uuid,
+    session: u32,
+}
 
 pub(crate) struct RunReservation {
     directory: PathBuf,
@@ -73,13 +79,14 @@ impl RunReservation {
     }
 
     fn record_bytes(&self) -> Vec<u8> {
-        format!("{HEADER}\n{}\n", self.id).into_bytes()
+        format!("{HEADER}\n{}\n{}\n", self.id, session_id()).into_bytes()
     }
 }
 
 /// A lost owner leaves its record behind. A record written by this version
-/// names one OS job object, so a missing or empty job proves the process tree
-/// is gone. Older records and unrecognized content stay fenced.
+/// names one OS job object and the Windows session that created it, so a
+/// missing or empty job in that same session proves the process tree is gone.
+/// Older records, other sessions and unrecognized content stay fenced.
 fn recover_previous(directory: &Path) -> io::Result<()> {
     if exists(&directory.join(LEGACY_PENDING))? {
         return Err(io::Error::new(
@@ -87,10 +94,22 @@ fn recover_previous(directory: &Path) -> io::Result<()> {
             "A previous sample has an unresolved legacy run record",
         ));
     }
-    let Some(run) = read_record(directory)? else {
+    let Some(pending) = read_record(directory)? else {
         return Ok(());
     };
-    if !boundary_empty(run)? {
+    if pending.session != session_id() {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "The previous sample belongs to another Windows session",
+        ));
+    }
+    let empty = boundary_empty(pending.run).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("The previous sample's job boundary could not be observed: {error}"),
+        )
+    })?;
+    if !empty {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
             "The previous sample's process boundary is not confirmed empty",
@@ -99,17 +118,16 @@ fn recover_previous(directory: &Path) -> io::Result<()> {
     fs::remove_file(directory.join(PENDING))
 }
 
-fn read_record(directory: &Path) -> io::Result<Option<Uuid>> {
+fn read_record(directory: &Path) -> io::Result<Option<Pending>> {
     let path = directory.join(PENDING);
     let file = match open_marker(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    let expected = format!("{HEADER}\n").len() + Uuid::nil().to_string().len() + 1;
     let mut bytes = Vec::new();
-    file.take(expected as u64 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() != expected {
+    file.take(MAX_RECORD as u64).read_to_end(&mut bytes)?;
+    if bytes.len() == MAX_RECORD {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "The sample run record has an unexpected length",
@@ -124,18 +142,21 @@ fn read_record(directory: &Path) -> io::Result<Option<Uuid>> {
     let mut lines = text.lines();
     let header = lines.next();
     let run = lines.next().and_then(|value| Uuid::parse_str(value).ok());
+    let session = lines.next().and_then(|value| value.parse::<u32>().ok());
     let trailing = lines.next();
-    let run = run.filter(|run| {
-        header == Some(HEADER)
-            && trailing.is_none()
-            && run.get_version() == Some(uuid::Version::Random)
-    });
-    run.map(Some).ok_or_else(|| {
-        io::Error::new(
+    match (header, run, session, trailing) {
+        (Some(header), Some(run), Some(session), None)
+            if header == HEADER
+                && run.get_version() == Some(uuid::Version::Random)
+                && text == format!("{HEADER}\n{run}\n{session}\n") =>
+        {
+            Ok(Some(Pending { run, session }))
+        }
+        _ => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "The sample run record is not owned by this build",
-        )
-    })
+        )),
+    }
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
@@ -158,6 +179,16 @@ fn boundary_empty(run: Uuid) -> io::Result<bool> {
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 fn boundary_empty(_run: Uuid) -> io::Result<bool> {
     Ok(false)
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn session_id() -> u32 {
+    crate::windows::current_session_id()
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+fn session_id() -> u32 {
+    0
 }
 
 /// Every present object fences admission, including an invalid or damaged record.
@@ -303,6 +334,23 @@ mod tests {
         assert!(owned.path().join(PENDING).exists());
     }
 
+    #[test]
+    fn record_from_another_session_stays_fenced() {
+        let owned = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let other_session = session_id().wrapping_add(1);
+        fs::write(
+            owned.path().join(PENDING),
+            format!("{HEADER}\n{run}\n{other_session}\n").as_bytes(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reserve(owned.path()),
+            Err(SessionError::RecoveryRequired)
+        ));
+        assert!(owned.path().join(PENDING).exists());
+    }
+
     #[cfg(all(windows, target_arch = "x86_64"))]
     #[test]
     fn live_os_boundary_keeps_the_record_fenced() {
@@ -311,7 +359,7 @@ mod tests {
         let job = crate::windows::test_boundary(run, owned.path()).unwrap();
         fs::write(
             owned.path().join(PENDING),
-            format!("{HEADER}\n{run}\n").as_bytes(),
+            format!("{HEADER}\n{run}\n{}\n", session_id()).as_bytes(),
         )
         .unwrap();
         assert!(matches!(

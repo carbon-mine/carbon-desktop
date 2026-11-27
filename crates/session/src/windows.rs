@@ -15,8 +15,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
-use windows_sys::Win32::Storage::FileSystem::{
-    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+use windows_sys::Win32::{
+    Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION},
+    System::{RemoteDesktop::ProcessIdToSessionId, Threading::GetCurrentProcessId},
 };
 
 const CLASS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/FixtureSession.class"));
@@ -154,6 +155,16 @@ pub(super) fn run(
 /// the run record. Other builds keep the previous fail-closed behavior.
 pub(super) fn sample_boundary_empty(run: Uuid) -> io::Result<bool> {
     sandbox::boundary_empty(run)
+}
+
+/// A job name is scoped to the Windows session that created it, so a recovery
+/// witness is only valid for the session recorded in the pending run.
+pub(super) fn current_session_id() -> u32 {
+    let mut session = 0;
+    unsafe {
+        ProcessIdToSessionId(GetCurrentProcessId(), &mut session);
+    }
+    session
 }
 
 #[cfg(test)]

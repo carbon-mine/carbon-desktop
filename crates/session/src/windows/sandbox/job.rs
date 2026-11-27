@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
-use super::{wide, win, Handle};
+use super::{current_user, wide, win, Handle};
 #[cfg(test)]
 use std::path::Path;
 use std::{
     io,
-    mem::size_of_val,
-    ptr::{null, null_mut},
+    mem::{size_of, size_of_val},
+    ptr::null_mut,
     thread,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
 use windows_sys::Win32::{
     Foundation::{GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND},
+    Security::{
+        AddAccessAllowedAce, GetLengthSid, InitializeAcl, InitializeSecurityDescriptor,
+        SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, SECURITY_ATTRIBUTES,
+        SECURITY_DESCRIPTOR, TOKEN_USER,
+    },
     System::{JobObjects::*, SystemServices::JOB_OBJECT_QUERY},
 };
 
@@ -26,8 +31,42 @@ fn job_name(run: Uuid) -> Vec<u16> {
 
 pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Handle> {
     let name = job_name(run);
-    // Null security attributes keep the private handle out of the child.
-    let handle = unsafe { CreateJobObjectW(null(), name.as_ptr()) };
+    // The name is the recovery witness, so only this user may query it. The
+    // creating handle keeps full control; other same-user processes cannot
+    // reconfigure or terminate the job through a fresh open.
+    let user = current_user()?;
+    let sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    let sid_length = unsafe { GetLengthSid(sid) } as usize;
+    let mut acl = vec![
+        0u8;
+        size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>()
+            + sid_length
+    ];
+    let acl_pointer = acl.as_mut_ptr().cast::<ACL>();
+    let mut descriptor = SECURITY_DESCRIPTOR::default();
+    let descriptor_pointer = std::ptr::from_mut(&mut descriptor);
+    unsafe {
+        win(InitializeAcl(acl_pointer, acl.len() as u32, ACL_REVISION))?;
+        win(AddAccessAllowedAce(
+            acl_pointer,
+            ACL_REVISION,
+            JOB_OBJECT_QUERY,
+            sid,
+        ))?;
+        win(InitializeSecurityDescriptor(descriptor_pointer.cast(), 1))?;
+        win(SetSecurityDescriptorDacl(
+            descriptor_pointer.cast(),
+            1,
+            acl_pointer,
+            0,
+        ))?;
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor_pointer.cast(),
+        bInheritHandle: 0,
+    };
+    let handle = unsafe { CreateJobObjectW(&attributes, name.as_ptr()) };
     if handle.is_null() {
         return Err(io::Error::last_os_error());
     }
@@ -231,8 +270,28 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let run = Uuid::new_v4();
         let first = test_boundary(run, root.path()).unwrap();
-        let error = create(1, run).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(create(1, run).is_err());
         drop(first);
+    }
+
+    #[test]
+    fn the_named_job_denies_control_opens() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let job = test_boundary(run, root.path()).unwrap();
+        let name = job_name(run);
+        let denied = unsafe {
+            OpenJobObjectW(
+                windows_sys::Win32::System::SystemServices::JOB_OBJECT_SET_ATTRIBUTES,
+                0,
+                name.as_ptr(),
+            )
+        };
+        assert!(denied.is_null());
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+        );
+        drop(job);
     }
 }

@@ -157,6 +157,11 @@ impl Drop for Attributes {
     }
 }
 
+/// The launcher's own user SID, used to build a query-only job DACL.
+pub(super) fn current_user() -> io::Result<Vec<usize>> {
+    token_data(unsafe { GetCurrentProcess() }, TokenUser)
+}
+
 fn token_data(process: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec<usize>> {
     unsafe {
         let mut token = null_mut();
