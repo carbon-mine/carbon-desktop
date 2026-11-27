@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_retains_admitted_tree_without_drain_proof() {
+    fn recovery_retains_the_tree_until_the_os_boundary_is_confirmed_empty() {
         let root = tempfile::tempdir().unwrap();
         let instance = Uuid::new_v4();
         let path = root.path().join(instance.to_string());
@@ -289,14 +289,19 @@ mod tests {
 
         let other = Uuid::new_v4();
         ensure_dir(&root.path().join(other.to_string())).unwrap();
-        let _next = SessionLease::begin(root.path(), other, Uuid::new_v4()).unwrap();
+        SessionLease::begin(root.path(), other, Uuid::new_v4()).unwrap();
         assert_eq!(fs::read(tree.join("witness")).unwrap(), b"pending");
-        assert!(matches!(
-            RunReservation::acquire(
-                &path,
-                open_regular(&path.join("sample.lock"), true).unwrap()
-            ),
-            Err(crate::SessionError::RecoveryRequired)
-        ));
+
+        // The new host verifies the run's named OS boundary is gone before it
+        // retires the record, then transient recovery removes the stale tree.
+        let recovered = RunReservation::acquire(
+            &path,
+            open_regular(&path.join("sample.lock"), true).unwrap(),
+        )
+        .unwrap();
+        assert!(!has_pending_run(&path).unwrap());
+        drop(recovered);
+        SessionLease::begin(root.path(), other, Uuid::new_v4()).unwrap();
+        assert!(!tree.exists());
     }
 }

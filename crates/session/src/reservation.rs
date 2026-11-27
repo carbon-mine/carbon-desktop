@@ -7,7 +7,15 @@ use std::{
 };
 use uuid::Uuid;
 
-const PENDING: &str = "pending-run-v1";
+const PENDING: &str = "pending-run-v2";
+const LEGACY_PENDING: &str = "pending-run-v1";
+const HEADER: &str = "carbon-desktop-sample-run-v2";
+const MAX_RECORD: usize = 96;
+
+struct Pending {
+    run: Uuid,
+    session: u32,
+}
 
 pub(crate) struct RunReservation {
     directory: PathBuf,
@@ -22,9 +30,12 @@ impl RunReservation {
             TryLockError::WouldBlock => SessionError::Busy,
             TryLockError::Error(error) => SessionError::Data(error),
         })?;
-        if has_pending_run(directory).map_err(SessionError::Data)? {
-            return Err(SessionError::RecoveryRequired);
-        }
+        recover_previous(directory).map_err(|error| match error.kind() {
+            io::ErrorKind::WouldBlock | io::ErrorKind::InvalidData => {
+                SessionError::RecoveryRequired
+            }
+            _ => SessionError::Data(error),
+        })?;
         Ok(Self {
             directory: directory.to_owned(),
             id: Uuid::new_v4(),
@@ -38,7 +49,7 @@ impl RunReservation {
 
     pub(crate) fn record_admission(&self) -> io::Result<()> {
         let mut record = tempfile::NamedTempFile::new_in(&self.directory)?;
-        record.write_all(&self.record_bytes())?;
+        record.write_all(&self.record_bytes()?)?;
         record.as_file().sync_all()?;
         record
             .persist_noclobber(self.directory.join(PENDING))
@@ -53,7 +64,7 @@ impl RunReservation {
         open_marker: impl FnOnce(&Path) -> io::Result<File>,
     ) -> Result<(), SessionError> {
         let path = self.directory.join(PENDING);
-        let expected = self.record_bytes();
+        let expected = self.record_bytes().map_err(SessionError::Data)?;
         let mut actual = Vec::new();
         open_marker(&path)
             .and_then(|file| {
@@ -67,14 +78,134 @@ impl RunReservation {
         fs::remove_file(path).map_err(SessionError::Data)
     }
 
-    fn record_bytes(&self) -> Vec<u8> {
-        format!("carbon-desktop-sample-run-v1\n{}\n", self.id).into_bytes()
+    fn record_bytes(&self) -> io::Result<Vec<u8>> {
+        let session = session_id()?;
+        Ok(format!("{HEADER}\n{}\n{session}\n", self.id).into_bytes())
     }
+}
+
+/// A lost owner leaves its record behind. A record written by this version
+/// names one OS job object and the Windows session that created it, so a
+/// missing or empty job in that same session proves the process tree is gone.
+/// Older records, other sessions and unrecognized content stay fenced.
+fn recover_previous(directory: &Path) -> io::Result<()> {
+    if exists(&directory.join(LEGACY_PENDING))? {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "A previous sample has an unresolved legacy run record",
+        ));
+    }
+    let Some(pending) = read_record(directory)? else {
+        return Ok(());
+    };
+    if pending.session
+        != session_id().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("The current Windows session could not be verified: {error}"),
+            )
+        })?
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "The previous sample belongs to another Windows session",
+        ));
+    }
+    let empty = boundary_empty(pending.run).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("The previous sample's job boundary could not be observed: {error}"),
+        )
+    })?;
+    if !empty {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "The previous sample's process boundary is not confirmed empty",
+        ));
+    }
+    fs::remove_file(directory.join(PENDING))
+}
+
+fn read_record(directory: &Path) -> io::Result<Option<Pending>> {
+    let path = directory.join(PENDING);
+    let file = match open_marker(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_RECORD as u64).read_to_end(&mut bytes)?;
+    if bytes.len() == MAX_RECORD {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "The sample run record has an unexpected length",
+        ));
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "The sample run record is not text",
+        )
+    })?;
+    let mut lines = text.lines();
+    let header = lines.next();
+    let run = lines.next().and_then(|value| Uuid::parse_str(value).ok());
+    let session = lines.next().and_then(|value| value.parse::<u32>().ok());
+    let trailing = lines.next();
+    match (header, run, session, trailing) {
+        (Some(header), Some(run), Some(session), None)
+            if header == HEADER
+                && run.get_version() == Some(uuid::Version::Random)
+                && text == format!("{HEADER}\n{run}\n{session}\n") =>
+        {
+            Ok(Some(Pending { run, session }))
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "The sample run record is not owned by this build",
+        )),
+    }
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn open_marker(path: &Path) -> io::Result<File> {
+    crate::windows::open_regular(path, false)
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+fn open_marker(path: &Path) -> io::Result<File> {
+    File::open(path)
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn boundary_empty(run: Uuid) -> io::Result<bool> {
+    crate::windows::sample_boundary_empty(run)
+}
+
+/// Only the Windows fixture owns an OS job boundary. Other targets keep the
+/// previous fail-closed behavior for tests and unsupported builds.
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+fn boundary_empty(_run: Uuid) -> io::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn session_id() -> io::Result<u32> {
+    crate::windows::current_session_id()
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+fn session_id() -> io::Result<u32> {
+    Ok(0)
 }
 
 /// Every present object fences admission, including an invalid or damaged record.
 pub(crate) fn has_pending_run(directory: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(directory.join(PENDING)) {
+    Ok(exists(&directory.join(PENDING))? || exists(&directory.join(LEGACY_PENDING))?)
+}
+
+fn exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
@@ -135,7 +266,7 @@ mod tests {
         };
         let run = reserve(Path::new(&owned)).unwrap();
         run.record_admission().unwrap();
-        // Simulate host loss without running destructors.
+        // Simulate host loss without running destructors or creating a boundary.
         std::process::exit(OWNER_EXITED);
     }
 
@@ -167,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn losing_the_lock_keeps_the_run_fenced_without_drain_proof() {
+    fn lost_owner_without_a_live_boundary_is_recovered() {
         let owned = tempfile::tempdir().unwrap();
         let status = Command::new(env::current_exe().unwrap())
             .args(["--exact", "reservation::tests::abandon_probe"])
@@ -175,11 +306,80 @@ mod tests {
             .status()
             .unwrap();
         assert_eq!(status.code(), Some(OWNER_EXITED));
+        assert!(has_pending_run(owned.path()).unwrap());
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        {
+            let recovered = reserve(owned.path()).unwrap();
+            assert!(!has_pending_run(owned.path()).unwrap());
+            recovered.record_admission().unwrap();
+            confirm(&recovered).unwrap();
+        }
+        #[cfg(not(all(windows, target_arch = "x86_64")))]
         assert!(matches!(
             reserve(owned.path()),
             Err(SessionError::RecoveryRequired)
         ));
-        assert!(has_pending_run(owned.path()).unwrap());
+    }
+
+    #[test]
+    fn legacy_and_damaged_records_stay_fenced() {
+        let owned = tempfile::tempdir().unwrap();
+        fs::write(
+            owned.path().join(LEGACY_PENDING),
+            format!("carbon-desktop-sample-run-v1\n{}\n", Uuid::new_v4()),
+        )
+        .unwrap();
+        assert!(matches!(
+            reserve(owned.path()),
+            Err(SessionError::RecoveryRequired)
+        ));
+        fs::remove_file(owned.path().join(LEGACY_PENDING)).unwrap();
+        fs::write(owned.path().join(PENDING), b"not owned").unwrap();
+        assert!(matches!(
+            reserve(owned.path()),
+            Err(SessionError::RecoveryRequired)
+        ));
+        assert!(owned.path().join(PENDING).exists());
+    }
+
+    #[test]
+    fn record_from_another_session_stays_fenced() {
+        let owned = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let other_session = session_id().unwrap().wrapping_add(1);
+        fs::write(
+            owned.path().join(PENDING),
+            format!("{HEADER}\n{run}\n{other_session}\n").as_bytes(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reserve(owned.path()),
+            Err(SessionError::RecoveryRequired)
+        ));
+        assert!(owned.path().join(PENDING).exists());
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn live_os_boundary_keeps_the_record_fenced() {
+        let owned = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let job = crate::windows::test_boundary(run, owned.path()).unwrap();
+        fs::write(
+            owned.path().join(PENDING),
+            format!("{HEADER}\n{run}\n{}\n", session_id().unwrap()).as_bytes(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reserve(owned.path()),
+            Err(SessionError::RecoveryRequired)
+        ));
+        assert!(owned.path().join(PENDING).exists());
+        drop(job);
+        let recovered = reserve(owned.path()).unwrap();
+        assert!(!has_pending_run(owned.path()).unwrap());
+        recovered.record_admission().unwrap();
+        confirm(&recovered).unwrap();
     }
 
     #[test]
@@ -210,7 +410,7 @@ mod tests {
         let alias = owned.path().join("alias");
         fs::hard_link(&path, &alias).unwrap();
         assert!(matches!(confirm(&first), Err(SessionError::Data(_))));
-        assert_eq!(fs::read(&alias).unwrap(), first.record_bytes());
-        assert_eq!(fs::read(&path).unwrap(), first.record_bytes());
+        assert_eq!(fs::read(&alias).unwrap(), first.record_bytes().unwrap());
+        assert_eq!(fs::read(&path).unwrap(), first.record_bytes().unwrap());
     }
 }
