@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-uuid = "1"
+uuid = { version = "1", features = ["serde"] }
 
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
 carbon-runtime = { path = "../runtime" }

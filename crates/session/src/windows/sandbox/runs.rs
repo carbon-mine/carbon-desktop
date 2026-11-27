@@ -65,8 +65,9 @@ pub(super) struct RunGuard {
 impl RunGuard {
     /// Admission has resumed the root process.
     pub(super) fn running(&self) {
-        if phase(&self.entry) == RunPhase::Starting {
-            set_phase(&self.entry, RunPhase::Running);
+        let mut phase = lock_phase(&self.entry);
+        if *phase == RunPhase::Starting {
+            *phase = RunPhase::Running;
         }
     }
 
@@ -216,6 +217,24 @@ mod tests {
         assert!(guard.stopped());
         // A stop claims the outcome, so the owner cannot later report completion.
         assert!(!guard.finish());
+    }
+
+    #[test]
+    fn a_stop_accepted_before_admission_survives_the_running_transition() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        assert_eq!(inspect(run).unwrap().phase, RunPhase::Starting);
+        assert_eq!(stop(run).unwrap().phase, RunPhase::Draining);
+        // Admission must not rewrite the accepted stop as a running run.
+        guard.running();
+        assert_eq!(inspect(run).unwrap().phase, RunPhase::Draining);
+        assert!(guard.stopped());
+        wait_drained(run);
     }
 
     #[test]

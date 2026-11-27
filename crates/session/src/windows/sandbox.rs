@@ -394,6 +394,25 @@ pub(super) fn launch(
         observation.boundary_empty = false;
         let process = Handle(info.hProcess);
         let thread = Handle(info.hThread);
+        if run.stopped() {
+            // A stop accepted before process creation must not let the payload
+            // run: the suspended root is now a member of that stopped job.
+            win(TerminateProcess(process.0, 1))?;
+            job::stop_and_drain(&job)?;
+            match WaitForSingleObject(process.0, job::DRAIN_TIMEOUT.as_millis() as u32) {
+                WAIT_OBJECT_0 => (),
+                WAIT_TIMEOUT => {
+                    return Err(Error::new(
+                        io::ErrorKind::TimedOut,
+                        "The stopped session did not exit",
+                    ));
+                }
+                _ => return Err(Error::last_os_error()),
+            }
+            observation.boundary_empty = true;
+            observation.stopped = true;
+            return Err(stopped_error());
+        }
         let verified = check_token(process.0, profile.sid).and_then(|()| {
             let mut in_job = 0;
             win(IsProcessInJob(process.0, job.0, &mut in_job))?;
