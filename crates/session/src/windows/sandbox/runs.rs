@@ -8,6 +8,8 @@
 use super::job;
 use super::Handle;
 use crate::{RunControlError, RunEnd, RunOutcome, RunPhase, RunState, RunSubscription, RunUpdate};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
@@ -45,6 +47,9 @@ struct Entry {
     status: Mutex<Status>,
     job: Arc<Handle>,
     subscribers: Mutex<Vec<Sender<RunUpdate>>>,
+    /// Test-only count of graceful close requests this entry's tree received.
+    #[cfg(test)]
+    closes: AtomicUsize,
 }
 
 fn directory() -> &'static Mutex<BTreeMap<Uuid, Arc<Entry>>> {
@@ -255,6 +260,8 @@ pub(super) fn register(run: Uuid, instance: Uuid, job: Arc<Handle>) -> RunGuard 
         }),
         job,
         subscribers: Mutex::new(Vec::new()),
+        #[cfg(test)]
+        closes: AtomicUsize::new(0),
     });
     let replaced = entries().insert(run, Arc::clone(&entry));
     debug_assert!(replaced.is_none(), "a run UUID is only registered once");
@@ -272,6 +279,15 @@ pub(super) fn active() -> Vec<RunState> {
         .iter()
         .map(|(run, entry)| state(*run, entry, &lock_status(entry)))
         .collect()
+}
+
+/// Test-only observation of how many graceful close requests one live entry
+/// received. A run that is no longer in the directory reports `None`.
+#[cfg(test)]
+fn close_requests(run: Uuid) -> Option<usize> {
+    entries()
+        .get(&run)
+        .map(|entry| entry.closes.load(Ordering::SeqCst))
 }
 
 #[cfg(not(test))]
@@ -364,6 +380,8 @@ fn stop_after(run: Uuid, grace: Duration) -> Result<RunState, RunControlError> {
 }
 
 fn request_close(entry: &Entry) {
+    #[cfg(test)]
+    entry.closes.fetch_add(1, Ordering::SeqCst);
     if let Err(error) = job::request_close(&entry.job) {
         // A missing request is not a failed stop: the bound still forces the
         // tree down. Only the error kind is reported; no path or identity.
@@ -792,5 +810,163 @@ mod tests {
         assert_eq!(outcomes.len(), RETAINED_OUTCOMES);
         assert_eq!(outcomes.back().unwrap().end, RunEnd::StopRequested);
         assert_eq!(outcomes.back().unwrap().drained, Some(false));
+    }
+
+    #[test]
+    fn concurrent_stops_claim_one_run_and_request_close_once() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        let gate = Arc::new(std::sync::Barrier::new(6));
+        let phases: Vec<RunPhase> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..6)
+                .map(|_| {
+                    let gate = Arc::clone(&gate);
+                    scope.spawn(move || {
+                        gate.wait();
+                        stop_soon(run).unwrap().phase
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect()
+        });
+        // One request claims the transition; every later request observes the
+        // same drain and starts no second bound.
+        assert!(phases
+            .iter()
+            .all(|phase| matches!(phase, RunPhase::Stopping | RunPhase::Draining)));
+        assert_eq!(
+            close_requests(run),
+            Some(1),
+            "only the claiming request may ask the tree to close"
+        );
+        // The accepted stop already decided the outcome, so the owner cannot
+        // publish a completion of the sample it never finished.
+        assert!(!guard.finish());
+        wait_drained(run);
+        drop(guard);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::StopRequested);
+        assert_eq!(record.drained, Some(true));
+    }
+
+    #[test]
+    fn a_stop_and_a_completion_claim_agree_on_one_terminal_record() {
+        // Either claim may win. The record must follow the winner and never
+        // report an unsettled or contradictory end after an empty boundary.
+        for _ in 0..8 {
+            let root = tempfile::tempdir().unwrap();
+            let run = Uuid::new_v4();
+            let guard = Arc::new(register(
+                run,
+                instance(),
+                job::test_boundary(run, root.path()).unwrap(),
+            ));
+            guard.running();
+            let gate = Arc::new(std::sync::Barrier::new(2));
+            let (finished, stopped) = std::thread::scope(|scope| {
+                let owner = Arc::clone(&guard);
+                let finish_gate = Arc::clone(&gate);
+                let finish = scope.spawn(move || {
+                    finish_gate.wait();
+                    owner.finish()
+                });
+                let stop_gate = Arc::clone(&gate);
+                let stop = scope.spawn(move || {
+                    stop_gate.wait();
+                    stop_soon(run).map(|state| state.phase)
+                });
+                (finish.join().unwrap(), stop.join().unwrap())
+            });
+            // A completion claim that won leaves the stop observing `finishing`;
+            // a stop that won withdraws the completion claim.
+            assert_eq!(
+                finished,
+                !matches!(stopped, Ok(RunPhase::Stopping | RunPhase::Draining))
+            );
+            // A completion claim leaves the fixture child running until it is
+            // told to finish; a stop claim terminates it through the bound.
+            fs::write(root.path().join("finish"), []).unwrap();
+            wait_drained(run);
+            drop(guard);
+            let record = outcome(run).unwrap();
+            assert_eq!(record.drained, Some(true));
+            assert_eq!(
+                record.end,
+                if finished {
+                    RunEnd::Completed
+                } else {
+                    RunEnd::StopRequested
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_visible_surface_serializes_only_redacted_run_state() {
+        let run = Uuid::new_v4();
+        let instance = Uuid::new_v4();
+        assert_eq!(
+            serde_json::to_value(RunState {
+                run,
+                instance,
+                phase: RunPhase::Draining,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "run": run.to_string(),
+                "instance": instance.to_string(),
+                "phase": "draining",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(RunOutcome {
+                run,
+                instance,
+                end: RunEnd::StopRequested,
+                drained: Some(true),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "run": run.to_string(),
+                "instance": instance.to_string(),
+                "end": "stopRequested",
+                "drained": true,
+            })
+        );
+    }
+
+    #[test]
+    fn an_evicted_record_is_no_longer_served() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        drop(guard);
+        assert!(outcome(run).is_some());
+        for _ in 0..RETAINED_OUTCOMES {
+            let newer = Uuid::new_v4();
+            let newer_guard = register(
+                newer,
+                instance(),
+                job::test_boundary(newer, root.path()).unwrap(),
+            );
+            newer_guard.running();
+            drop(newer_guard);
+        }
+        assert!(outcome(run).is_none(), "the oldest record was evicted");
+        assert!(matches!(subscribe(run), Err(RunControlError::UnknownRun)));
     }
 }

@@ -317,7 +317,7 @@ impl SampleRun {
         None
     }
 
-    /// The terminal observation for the completion message. This prefers the
+    /// The terminal record for the completion message. This prefers the
     /// update the task already drained and falls back to the process record.
     fn summary(&self) -> Option<String> {
         if let Some(outcome) = &self.outcome {
@@ -325,6 +325,32 @@ impl SampleRun {
         }
         let run = self.run?;
         carbon_session::outcome(run).map(|outcome| end_label(&outcome))
+    }
+
+    /// The terminal record this task already drained, or the retained record for
+    /// the exact run it bound to.
+    fn terminal(&self) -> Option<carbon_session::RunOutcome> {
+        self.outcome
+            .clone()
+            .or_else(|| self.run.and_then(carbon_session::outcome))
+    }
+
+    /// A requested stop-and-exit may close only when the run's own record
+    /// confirms its OS boundary was empty. A lost observation, or a run still
+    /// live for this instance, keeps Carbon open so the recovery fence and the
+    /// reported state stay visible instead of the launcher implying the sample
+    /// stopped cleanly.
+    fn exit_blocked(&self, instance: Option<Uuid>) -> bool {
+        let unconfirmed = self.run.is_some()
+            && !self
+                .terminal()
+                .is_some_and(|record| record.drained == Some(true));
+        unconfirmed
+            || instance.is_some_and(|instance| {
+                carbon_session::active_runs()
+                    .iter()
+                    .any(|live| live.instance == instance)
+            })
     }
 }
 
@@ -1111,13 +1137,40 @@ impl Launcher {
         result: Result<Outcome, String>,
         cx: &mut Context<Self>,
     ) {
-        let task = if fixture_work {
+        let mut task = if fixture_work {
             self.fixture_task.take()
         } else {
             self.task.take()
         };
         if self.exit_after_sample && !fixture_work {
             self.pending_sample_stop = false;
+            // Drain admission and terminal evidence published before this
+            // completion, so a run that retired inside one tick is still seen.
+            if let Some(task) = task.as_mut() {
+                task.sample_run.observe();
+            }
+            let instance = task.as_ref().and_then(|task| task.profile);
+            // Closing must not imply a clean stop the run never confirmed. A
+            // lost or still-populated boundary keeps the launcher open with the
+            // recovery state instead of exiting silently.
+            if task
+                .as_ref()
+                .is_some_and(|task| task.protects_session && task.sample_run.exit_blocked(instance))
+            {
+                self.exit_after_sample = false;
+                self.last_activity = task.as_ref().and_then(Task::target);
+                let summary = task
+                    .as_ref()
+                    .and_then(|task| task.sample_run.summary())
+                    .unwrap_or_else(|| {
+                        "The protected sample ended without a retained outcome.".to_owned()
+                    });
+                self.message = format!(
+                    "Carbon Desktop stayed open because the protected sample's process tree was not confirmed empty. {summary}"
+                );
+                cx.notify();
+                return;
+            }
             self.close_after_sample(cx);
             return;
         }
@@ -2253,6 +2306,44 @@ mod tests {
         assert_eq!(
             end_label(&outcome(RunEnd::Unsettled, None)),
             "The protected sample ended without a confirmed outcome."
+        );
+    }
+
+    #[test]
+    fn a_requested_exit_waits_for_a_confirmed_empty_boundary() {
+        use carbon_session::{RunEnd, RunOutcome};
+        let run = Uuid::new_v4();
+        let instance = Uuid::new_v4();
+        let record = |end, drained| RunOutcome {
+            run,
+            instance,
+            end,
+            drained,
+        };
+        let settled = |outcome| SampleRun {
+            run: Some(run),
+            outcome: Some(outcome),
+            closed: true,
+            ..SampleRun::default()
+        };
+
+        // A start that never admitted a run has nothing to drain.
+        assert!(!SampleRun::default().exit_blocked(None));
+        assert!(!SampleRun::default().exit_blocked(Some(instance)));
+        assert!(!settled(record(RunEnd::Completed, Some(true))).exit_blocked(None));
+        assert!(!settled(record(RunEnd::StopRequested, Some(true))).exit_blocked(None));
+        // A failed post-launch check still observed an empty boundary.
+        assert!(!settled(record(RunEnd::Unsettled, Some(true))).exit_blocked(None));
+        assert!(settled(record(RunEnd::StopRequested, Some(false))).exit_blocked(None));
+        assert!(settled(record(RunEnd::Completed, None)).exit_blocked(None));
+        assert!(settled(record(RunEnd::Unsettled, None)).exit_blocked(None));
+        // A bound run whose record was never retained cannot confirm anything.
+        assert!(
+            SampleRun {
+                run: Some(run),
+                ..SampleRun::default()
+            }
+            .exit_blocked(None)
         );
     }
 }
