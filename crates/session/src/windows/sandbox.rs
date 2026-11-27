@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Process and low-box helpers follow the repository-owned M1 isolation probe.
 mod job;
+mod runs;
 
 use std::{
     ffi::{OsStr, OsString},
@@ -9,6 +10,7 @@ use std::{
     os::windows::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     ptr::{null, null_mut},
+    sync::Arc,
 };
 use uuid::Uuid;
 use windows_sys::Win32::{
@@ -53,6 +55,11 @@ impl Drop for Handle {
         }
     }
 }
+// A Win32 handle is valid for the whole process, and the job and process calls
+// that borrow it are documented as thread-safe. The run directory shares one
+// duplicated job handle between the owning runner and a stop request.
+unsafe impl Send for Handle {}
+unsafe impl Sync for Handle {}
 pub(super) struct Profile {
     pub(super) sid: PSID,
 }
@@ -304,7 +311,43 @@ fn environment(own: &Path) -> io::Result<Vec<u16>> {
 pub(super) struct LaunchObservation {
     pub(super) smoke: bool,
     pub(super) run: Uuid,
+    pub(super) instance: Uuid,
     pub(super) boundary_empty: bool,
+    pub(super) stopped: bool,
+}
+
+fn stopped_error() -> Error {
+    Error::new(
+        io::ErrorKind::Interrupted,
+        "The protected run was stopped before it finished",
+    )
+}
+
+/// Terminates a suspended root that must not be resumed, drains its job and
+/// waits for the process handle. Every step is attempted so a failure still
+/// reports the observed boundary rather than assuming it is empty.
+pub(super) fn stop_suspended(process: HANDLE, job: &Handle) -> io::Result<()> {
+    let terminated = unsafe { win(TerminateProcess(process, 1)) };
+    let drained = job::stop_and_drain(job);
+    match unsafe { WaitForSingleObject(process, job::DRAIN_TIMEOUT.as_millis() as u32) } {
+        WAIT_OBJECT_0 => (),
+        WAIT_TIMEOUT => {
+            terminated?;
+            drained?;
+            return Err(Error::new(
+                io::ErrorKind::TimedOut,
+                "The stopped session did not exit",
+            ));
+        }
+        _ => {
+            terminated?;
+            drained?;
+            return Err(Error::last_os_error());
+        }
+    }
+    terminated?;
+    drained?;
+    Ok(())
 }
 
 pub(super) fn launch(
@@ -348,6 +391,7 @@ pub(super) fn launch(
     let env = environment(own)?;
     unsafe {
         let job = job::create(1, observation.run)?;
+        let run = runs::register(observation.run, observation.instance, Arc::clone(&job));
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid,
             ..Default::default()
@@ -377,6 +421,14 @@ pub(super) fn launch(
         observation.boundary_empty = false;
         let process = Handle(info.hProcess);
         let thread = Handle(info.hThread);
+        if run.stopped() {
+            // A stop accepted before process creation must not let the payload
+            // run: the suspended root is now a member of that stopped job.
+            stop_suspended(process.0, &job)?;
+            observation.boundary_empty = true;
+            observation.stopped = true;
+            return Err(stopped_error());
+        }
         let verified = check_token(process.0, profile.sid).and_then(|()| {
             let mut in_job = 0;
             win(IsProcessInJob(process.0, job.0, &mut in_job))?;
@@ -406,14 +458,24 @@ pub(super) fn launch(
             }
             drained?;
             observation.boundary_empty = true;
+            observation.stopped = run.stopped();
             return Err(error);
+        }
+        if run.stopped() {
+            // A stop accepted after validation must still prevent the resume.
+            stop_suspended(process.0, &job)?;
+            observation.boundary_empty = true;
+            observation.stopped = true;
+            return Err(stopped_error());
         }
         if ResumeThread(thread.0) == u32::MAX {
             let error = Error::last_os_error();
             job::stop_and_drain(&job)?;
             observation.boundary_empty = true;
+            observation.stopped = run.stopped();
             return Err(error);
         }
+        run.running();
         let deadline = if observation.smoke {
             30_000
         } else {
@@ -421,6 +483,14 @@ pub(super) fn launch(
         };
         let wait = WaitForSingleObject(process.0, deadline);
         if wait != WAIT_OBJECT_0 {
+            if run.stopped() {
+                // The stop request terminated the root; drain what remains of its tree.
+                if job::wait_empty(&job, job::DRAIN_TIMEOUT).is_ok() {
+                    observation.boundary_empty = true;
+                }
+                observation.stopped = true;
+                return Err(stopped_error());
+            }
             let error = if wait == WAIT_TIMEOUT {
                 Error::new(
                     io::ErrorKind::TimedOut,
@@ -433,10 +503,24 @@ pub(super) fn launch(
             observation.boundary_empty = true;
             return Err(error);
         }
-        if let Err(error) = job::wait_empty(&job, job::DRAIN_TIMEOUT) {
+        let drain = job::wait_empty(&job, job::DRAIN_TIMEOUT);
+        if let Err(error) = drain {
+            if run.stopped() {
+                job::stop_and_drain(&job)?;
+                observation.boundary_empty = true;
+                observation.stopped = true;
+                return Err(stopped_error());
+            }
             job::stop_and_drain(&job)?;
             observation.boundary_empty = true;
             return Err(error);
+        }
+        if !run.finish() {
+            // A stop request claimed the run before the owner observed the empty
+            // tree, so the completed sample is not published.
+            observation.boundary_empty = true;
+            observation.stopped = true;
+            return Err(stopped_error());
         }
         observation.boundary_empty = true;
         let mut exit = 0;
@@ -454,7 +538,19 @@ pub(super) fn boundary_empty(run: Uuid) -> io::Result<bool> {
     job::boundary_empty(run)
 }
 
+pub(super) fn active_runs() -> Vec<crate::RunState> {
+    runs::active()
+}
+
+pub(super) fn inspect_run(run: Uuid) -> Option<crate::RunState> {
+    runs::inspect(run)
+}
+
+pub(super) fn stop_run(run: Uuid) -> Result<crate::RunState, crate::RunControlError> {
+    runs::stop(run)
+}
+
 #[cfg(test)]
-pub(super) fn test_boundary(run: Uuid, root: &Path) -> io::Result<Handle> {
+pub(super) fn test_boundary(run: Uuid, root: &Path) -> io::Result<Arc<Handle>> {
     job::test_boundary(run, root)
 }

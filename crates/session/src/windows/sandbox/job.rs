@@ -6,6 +6,7 @@ use std::{
     io,
     mem::{size_of, size_of_val},
     ptr::null_mut,
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
@@ -29,7 +30,7 @@ fn job_name(run: Uuid) -> Vec<u16> {
     wide(format!("Local\\CarbonDesktop.Sample.Job.{}", run.simple()))
 }
 
-pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Handle> {
+pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Arc<Handle>> {
     let name = job_name(run);
     // The name is the recovery witness, so only this user may query it. The
     // creating handle keeps full control; other same-user processes cannot
@@ -70,7 +71,7 @@ pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Handle> {
     if handle.is_null() {
         return Err(io::Error::last_os_error());
     }
-    let job = Handle(handle);
+    let job = Arc::new(Handle(handle));
     // An existing name means another process owns this run's boundary. Refuse
     // rather than adopt or reconfigure a job this launcher did not create.
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
@@ -138,8 +139,14 @@ pub(super) fn wait_empty(job: &Handle, timeout: Duration) -> io::Result<()> {
     Ok(())
 }
 
+/// Terminates every member of one run's job. Repeating the call on an already
+/// empty job succeeds, so a repeated stop request has no additional effect.
+pub(super) fn terminate(job: &Handle) -> io::Result<()> {
+    unsafe { win(TerminateJobObject(job.0, 1)) }
+}
+
 pub(super) fn stop_and_drain(job: &Handle) -> io::Result<()> {
-    unsafe { win(TerminateJobObject(job.0, 1))? };
+    terminate(job)?;
     wait_empty(job, DRAIN_TIMEOUT)
 }
 
@@ -171,7 +178,7 @@ fn wait_for(path: &Path) {
 
 /// Creates a named job that owns one live benign child for reservation tests.
 #[cfg(test)]
-pub(super) fn test_boundary(run: Uuid, root: &Path) -> io::Result<Handle> {
+pub(super) fn test_boundary(run: Uuid, root: &Path) -> io::Result<Arc<Handle>> {
     use std::os::windows::io::AsRawHandle;
     let job = create(2, run)?;
     let mut child = fixture(root, "child").spawn()?;
@@ -210,7 +217,7 @@ mod tests {
         }
     }
 
-    fn surviving_child() -> (tempfile::TempDir, Handle) {
+    fn surviving_child() -> (tempfile::TempDir, Arc<Handle>) {
         let root = tempfile::tempdir().unwrap();
         let job = create(2, Uuid::new_v4()).unwrap();
         let mut parent = fixture(root.path(), "parent").spawn().unwrap();
@@ -246,6 +253,26 @@ mod tests {
         assert_eq!(active_processes(&second).unwrap(), 1);
         fs::write(second_root.path().join("finish"), []).unwrap();
         wait_empty(&second, DRAIN_TIMEOUT).unwrap();
+    }
+
+    #[test]
+    fn a_suspended_root_is_terminated_before_it_runs() {
+        use std::os::windows::process::CommandExt;
+        let root = tempfile::tempdir().unwrap();
+        let job = create(2, Uuid::new_v4()).unwrap();
+        let mut command = fixture(root.path(), "child");
+        command.creation_flags(0x0000_0004); // CREATE_SUSPENDED
+        let mut child = command.spawn().unwrap();
+        if let Err(error) = unsafe { win(AssignProcessToJobObject(job.0, child.as_raw_handle())) } {
+            child.kill().ok();
+            child.wait().ok();
+            panic!("Could not admit the suspended fixture: {error}");
+        }
+        super::super::stop_suspended(child.as_raw_handle(), &job).unwrap();
+        assert_eq!(active_processes(&job).unwrap(), 0);
+        assert_eq!(child.wait().unwrap().code(), Some(1));
+        // The fixture's first action would have been to write this marker.
+        assert!(!root.path().join("ready").exists());
     }
 
     #[test]
