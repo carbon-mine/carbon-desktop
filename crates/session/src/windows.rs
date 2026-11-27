@@ -103,7 +103,9 @@ pub(super) fn run(
     let mut observation = sandbox::LaunchObservation {
         smoke,
         run: reservation.id(),
+        instance: id,
         boundary_empty: true,
+        stopped: false,
     };
     let result = sandbox::launch(
         &profile,
@@ -118,6 +120,9 @@ pub(super) fn run(
         return Err(SessionError::RecoveryRequired);
     }
     reservation.confirm_empty(|path| open_regular(path, false))?;
+    if observation.stopped {
+        return Err(SessionError::Stopped);
+    }
     result.map_err(SessionError::Isolation)?;
     if read_small(&own.join("window-shown"), 7)
         .map_err(SessionError::Isolation)?
@@ -155,6 +160,18 @@ pub(super) fn run(
 /// the run record. Other builds keep the previous fail-closed behavior.
 pub(super) fn sample_boundary_empty(run: Uuid) -> io::Result<bool> {
     sandbox::boundary_empty(run)
+}
+
+pub(super) fn active_runs() -> Vec<crate::RunState> {
+    sandbox::active_runs()
+}
+
+pub(super) fn inspect(run: Uuid) -> Option<crate::RunState> {
+    sandbox::inspect_run(run)
+}
+
+pub(super) fn stop(run: Uuid) -> Result<crate::RunState, crate::RunControlError> {
+    sandbox::stop_run(run)
 }
 
 /// A job name is scoped to the Windows session that created it, so a recovery
