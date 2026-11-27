@@ -174,6 +174,14 @@ pub(super) fn stop(run: Uuid) -> Result<crate::RunState, crate::RunControlError>
     sandbox::stop_run(run)
 }
 
+pub(super) fn subscribe(run: Uuid) -> Result<crate::RunSubscription, crate::RunControlError> {
+    sandbox::subscribe(run)
+}
+
+pub(super) fn outcome(run: Uuid) -> Option<crate::RunOutcome> {
+    sandbox::outcome(run)
+}
+
 /// A job name is scoped to the Windows session that created it, so a recovery
 /// witness is only valid for the session recorded in the pending run.
 pub(super) fn current_session_id() -> io::Result<u32> {

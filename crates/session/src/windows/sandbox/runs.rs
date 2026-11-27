@@ -7,10 +7,13 @@
 //! cannot affect a later run B or another instance's run.
 use super::job;
 use super::Handle;
-use crate::{RunControlError, RunPhase, RunState};
+use crate::{RunControlError, RunEnd, RunOutcome, RunPhase, RunState, RunSubscription, RunUpdate};
 use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    collections::{BTreeMap, VecDeque},
+    sync::{
+        mpsc::{self, Sender},
+        Arc, Mutex, MutexGuard, OnceLock,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -23,11 +26,23 @@ const CLOSE_GRACE: Duration = Duration::from_secs(5);
 /// repeated while the tree is still alive.
 const CLOSE_INTERVAL: Duration = Duration::from_millis(500);
 const DRAIN_POLL: Duration = Duration::from_millis(250);
+/// Recent terminal records kept for a late observer. Bounded so an unattended
+/// process cannot grow one entry per run without limit.
+const RETAINED_OUTCOMES: usize = 32;
+
+struct Status {
+    phase: RunPhase,
+    /// The owner claimed completion after observing an empty tree.
+    completed: bool,
+    /// The owner has retired the run; no stop may claim it any more.
+    retired: bool,
+}
 
 struct Entry {
     instance: Uuid,
-    phase: Mutex<RunPhase>,
+    status: Mutex<Status>,
     job: Arc<Handle>,
+    subscribers: Mutex<Vec<Sender<RunUpdate>>>,
 }
 
 fn directory() -> &'static Mutex<BTreeMap<Uuid, Arc<Entry>>> {
@@ -41,23 +56,69 @@ fn entries() -> MutexGuard<'static, BTreeMap<Uuid, Arc<Entry>>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn phase(entry: &Entry) -> RunPhase {
-    *lock_phase(entry)
+fn outcomes() -> &'static Mutex<VecDeque<RunOutcome>> {
+    static OUTCOMES: OnceLock<Mutex<VecDeque<RunOutcome>>> = OnceLock::new();
+    OUTCOMES.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
-fn lock_phase(entry: &Entry) -> MutexGuard<'_, RunPhase> {
+fn phase(entry: &Entry) -> RunPhase {
+    lock_status(entry).phase
+}
+
+fn lock_status(entry: &Entry) -> MutexGuard<'_, Status> {
     entry
-        .phase
+        .status
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn state(run: Uuid, entry: &Entry) -> RunState {
+fn lock_subscribers(entry: &Entry) -> MutexGuard<'_, Vec<Sender<RunUpdate>>> {
+    entry
+        .subscribers
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn state(run: Uuid, entry: &Entry, status: &Status) -> RunState {
     RunState {
         run,
         instance: entry.instance,
-        phase: phase(entry),
+        phase: status.phase,
     }
+}
+
+/// Publishes one update to every live subscriber while the caller holds the
+/// status lock, so phase order and the terminal update cannot be reordered.
+fn publish(entry: &Entry, update: &RunUpdate) {
+    lock_subscribers(entry).retain(|sender| sender.send(update.clone()).is_ok());
+}
+
+fn set_phase(run: Uuid, entry: &Entry, status: &mut Status, phase: RunPhase) {
+    status.phase = phase;
+    publish(
+        entry,
+        &RunUpdate::State(RunState {
+            run,
+            instance: entry.instance,
+            phase,
+        }),
+    );
+}
+
+fn retain(outcome: RunOutcome) {
+    retain_in(
+        &mut outcomes()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        outcome,
+    );
+}
+
+fn retain_in(outcomes: &mut VecDeque<RunOutcome>, outcome: RunOutcome) {
+    if outcomes.len() >= RETAINED_OUTCOMES {
+        outcomes.pop_front();
+    }
+    outcomes.push_back(outcome);
 }
 
 /// Removes its run from the directory when the owning runner finishes,
@@ -71,9 +132,9 @@ pub(super) struct RunGuard {
 impl RunGuard {
     /// Admission has resumed the root process.
     pub(super) fn running(&self) {
-        let mut phase = lock_phase(&self.entry);
-        if *phase == RunPhase::Starting {
-            *phase = RunPhase::Running;
+        let mut status = lock_status(&self.entry);
+        if status.phase == RunPhase::Starting {
+            set_phase(self.run, &self.entry, &mut status, RunPhase::Running);
         }
     }
 
@@ -81,12 +142,23 @@ impl RunGuard {
     /// Returns false when a stop request claimed the run first, so a later
     /// request cannot rewrite an outcome the owner already decided.
     pub(super) fn finish(&self) -> bool {
-        let mut phase = lock_phase(&self.entry);
-        if matches!(*phase, RunPhase::Stopping | RunPhase::Draining) {
+        let mut status = lock_status(&self.entry);
+        if matches!(
+            status.phase,
+            RunPhase::Stopping | RunPhase::Draining | RunPhase::Finished
+        ) {
             return false;
         }
-        *phase = RunPhase::Finishing;
+        status.completed = true;
+        set_phase(self.run, &self.entry, &mut status, RunPhase::Finishing);
         true
+    }
+
+    /// Withdraws a completion claim when the run failed after the empty tree was
+    /// observed, so the terminal record reports an unsettled outcome instead of
+    /// a sample the caller never received.
+    pub(super) fn unsettle(&self) {
+        lock_status(&self.entry).completed = false;
     }
 
     /// True when a stop request was observed before the run finished.
@@ -97,6 +169,30 @@ impl RunGuard {
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
+        {
+            let mut status = lock_status(&self.entry);
+            status.retired = true;
+            let end = if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
+                RunEnd::StopRequested
+            } else if status.completed {
+                RunEnd::Completed
+            } else {
+                RunEnd::Unsettled
+            };
+            status.phase = RunPhase::Finished;
+            let outcome = RunOutcome {
+                run: self.run,
+                instance: self.entry.instance,
+                end,
+            };
+            // Retain and notify while the status lock still proves the entry is
+            // live, so a subscriber that races registration cannot miss the
+            // terminal update.
+            retain(outcome.clone());
+            for sender in lock_subscribers(&self.entry).drain(..) {
+                let _ = sender.send(RunUpdate::Finished(outcome.clone()));
+            }
+        }
         let mut directory = entries();
         if directory
             .get(&self.run)
@@ -110,8 +206,13 @@ impl Drop for RunGuard {
 pub(super) fn register(run: Uuid, instance: Uuid, job: Arc<Handle>) -> RunGuard {
     let entry = Arc::new(Entry {
         instance,
-        phase: Mutex::new(RunPhase::Starting),
+        status: Mutex::new(Status {
+            phase: RunPhase::Starting,
+            completed: false,
+            retired: false,
+        }),
         job,
+        subscribers: Mutex::new(Vec::new()),
     });
     let replaced = entries().insert(run, Arc::clone(&entry));
     debug_assert!(replaced.is_none(), "a run UUID is only registered once");
@@ -120,14 +221,49 @@ pub(super) fn register(run: Uuid, instance: Uuid, job: Arc<Handle>) -> RunGuard 
 
 pub(super) fn inspect(run: Uuid) -> Option<RunState> {
     let entry = entries().get(&run).cloned()?;
-    Some(state(run, &entry))
+    let status = lock_status(&entry);
+    Some(state(run, &entry, &status))
 }
 
 pub(super) fn active() -> Vec<RunState> {
     entries()
         .iter()
-        .map(|(run, entry)| state(*run, entry))
+        .map(|(run, entry)| state(*run, entry, &lock_status(entry)))
         .collect()
+}
+
+pub(super) fn outcome(run: Uuid) -> Option<RunOutcome> {
+    outcomes()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find(|outcome| outcome.run == run)
+        .cloned()
+}
+
+/// Registers one observer without changing the run. A run that already retired
+/// yields its retained terminal record instead of a live phase stream.
+pub(super) fn subscribe(run: Uuid) -> Result<RunSubscription, RunControlError> {
+    if let Some(entry) = entries().get(&run).cloned() {
+        let (sender, receiver) = mpsc::channel();
+        {
+            let status = lock_status(&entry);
+            if !status.retired {
+                let current = state(run, &entry, &status);
+                // Registration and the first update happen under the status
+                // lock, so no later transition can overtake the current phase.
+                lock_subscribers(&entry).push(sender.clone());
+                let _ = sender.send(RunUpdate::State(current));
+                return Ok(RunSubscription { receiver });
+            }
+        }
+    }
+    if let Some(outcome) = outcome(run) {
+        let (sender, receiver) = mpsc::channel();
+        let _ = sender.send(RunUpdate::Finished(outcome));
+        return Ok(RunSubscription { receiver });
+    }
+    Err(RunControlError::UnknownRun)
 }
 
 /// Requests termination of one run's own process tree. A repeated request while
@@ -149,9 +285,11 @@ fn stop_after(run: Uuid, grace: Duration) -> Result<RunState, RunControlError> {
     // sends the close and starts the bound. The lock is released before any
     // window enumeration or wait.
     let claimed = {
-        let mut phase = lock_phase(&entry);
-        if matches!(*phase, RunPhase::Starting | RunPhase::Running) {
-            *phase = RunPhase::Stopping;
+        let mut status = lock_status(&entry);
+        if status.retired {
+            false
+        } else if matches!(status.phase, RunPhase::Starting | RunPhase::Running) {
+            set_phase(run, &entry, &mut status, RunPhase::Stopping);
             true
         } else {
             false
@@ -159,15 +297,16 @@ fn stop_after(run: Uuid, grace: Duration) -> Result<RunState, RunControlError> {
     };
     if claimed {
         request_close(&entry);
-        let mut phase = lock_phase(&entry);
-        if *phase == RunPhase::Stopping {
-            *phase = RunPhase::Draining;
+        let mut status = lock_status(&entry);
+        if status.phase == RunPhase::Stopping {
+            set_phase(run, &entry, &mut status, RunPhase::Draining);
         }
-        drop(phase);
+        drop(status);
         let escalation = Arc::clone(&entry);
         thread::spawn(move || escalate(&escalation, grace));
     }
-    Ok(state(run, &entry))
+    let status = lock_status(&entry);
+    Ok(state(run, &entry, &status))
 }
 
 fn request_close(entry: &Entry) {
@@ -382,5 +521,155 @@ mod tests {
         let state = inspect(run).unwrap();
         assert_eq!(state.run, run);
         assert_eq!(state.instance, instance);
+    }
+
+    fn update(subscription: &RunSubscription) -> RunUpdate {
+        subscription
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the subscribed run should publish an update")
+    }
+
+    fn next_phase(subscription: &RunSubscription, expected: RunPhase) {
+        match update(subscription) {
+            RunUpdate::State(state) => assert_eq!(state.phase, expected),
+            other => panic!("expected the {expected:?} phase, received {other:?}"),
+        }
+    }
+
+    fn next_end(subscription: &RunSubscription, expected: RunEnd) {
+        match update(subscription) {
+            RunUpdate::Finished(outcome) => assert_eq!(outcome.end, expected),
+            other => panic!("expected the {expected:?} outcome, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_subscriber_follows_a_run_through_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        let subscription = subscribe(run).unwrap();
+        next_phase(&subscription, RunPhase::Starting);
+        guard.running();
+        next_phase(&subscription, RunPhase::Running);
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        next_phase(&subscription, RunPhase::Finishing);
+        drop(guard);
+        next_end(&subscription, RunEnd::Completed);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::Completed);
+        assert!(inspect(run).is_none());
+        assert!(subscription
+            .recv_timeout(Duration::from_millis(50))
+            .is_err());
+    }
+
+    #[test]
+    fn a_subscriber_sees_a_requested_stop() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        let subscription = subscribe(run).unwrap();
+        next_phase(&subscription, RunPhase::Running);
+        assert_eq!(stop_soon(run).unwrap().phase, RunPhase::Draining);
+        next_phase(&subscription, RunPhase::Stopping);
+        next_phase(&subscription, RunPhase::Draining);
+        wait_drained(run);
+        drop(guard);
+        next_end(&subscription, RunEnd::StopRequested);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::StopRequested);
+    }
+
+    #[test]
+    fn a_late_subscriber_gets_the_retained_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        drop(guard);
+        assert!(inspect(run).is_none());
+        let subscription = subscribe(run).unwrap();
+        next_end(&subscription, RunEnd::Unsettled);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::Unsettled);
+    }
+
+    #[test]
+    fn a_retracted_completion_claim_reports_an_unsettled_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        // The sample's exit could not be verified, so the caller received an
+        // error and the terminal record must not claim a completion.
+        guard.unsettle();
+        drop(guard);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::Unsettled);
+    }
+
+    #[test]
+    fn a_dropped_subscriber_does_not_disturb_the_run() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        let subscription = subscribe(run).unwrap();
+        next_phase(&subscription, RunPhase::Starting);
+        drop(subscription);
+        guard.running();
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        drop(guard);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::Completed);
+    }
+
+    #[test]
+    fn an_unknown_run_cannot_be_subscribed() {
+        let run = Uuid::new_v4();
+        assert!(matches!(subscribe(run), Err(RunControlError::UnknownRun)));
+        assert!(outcome(run).is_none());
+    }
+
+    #[test]
+    fn retention_keeps_only_a_bounded_recent_window() {
+        let mut outcomes = VecDeque::new();
+        let runs: Vec<_> = (0..RETAINED_OUTCOMES + 4).map(|_| Uuid::new_v4()).collect();
+        for run in &runs {
+            retain_in(
+                &mut outcomes,
+                RunOutcome {
+                    run: *run,
+                    instance: Uuid::new_v4(),
+                    end: RunEnd::Completed,
+                },
+            );
+        }
+        assert_eq!(outcomes.len(), RETAINED_OUTCOMES);
+        assert!(outcomes.iter().all(|outcome| outcome.run != runs[0]));
+        assert_eq!(outcomes.back().unwrap().run, *runs.last().unwrap());
     }
 }

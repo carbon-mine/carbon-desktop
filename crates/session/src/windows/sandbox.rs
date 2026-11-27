@@ -524,8 +524,14 @@ pub(super) fn launch(
         }
         observation.boundary_empty = true;
         let mut exit = 0;
-        win(GetExitCodeProcess(process.0, &mut exit))?;
+        if let Err(error) = win(GetExitCodeProcess(process.0, &mut exit)) {
+            // The tree drained but the sample's own result was not verified, so
+            // the terminal record must not claim a published completion.
+            run.unsettle();
+            return Err(error);
+        }
         if exit != 0 {
+            run.unsettle();
             return Err(Error::other(format!(
                 "The fixed Java session exited {exit:#x}"
             )));
@@ -548,6 +554,14 @@ pub(super) fn inspect_run(run: Uuid) -> Option<crate::RunState> {
 
 pub(super) fn stop_run(run: Uuid) -> Result<crate::RunState, crate::RunControlError> {
     runs::stop(run)
+}
+
+pub(super) fn subscribe(run: Uuid) -> Result<crate::RunSubscription, crate::RunControlError> {
+    runs::subscribe(run)
+}
+
+pub(super) fn outcome(run: Uuid) -> Option<crate::RunOutcome> {
+    runs::outcome(run)
 }
 
 #[cfg(test)]
