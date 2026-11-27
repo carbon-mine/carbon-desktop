@@ -195,6 +195,17 @@ enum ActivityTarget {
     Fixture(InstanceId),
 }
 
+/// Outcome of asking the live-run directory to stop the sample task.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SampleStop {
+    /// This launcher has no protected sample task.
+    Unavailable,
+    /// The task exists but its run has not been published yet.
+    Waiting,
+    /// This many runs were signalled.
+    Requested(usize),
+}
+
 impl Task {
     fn target(&self) -> Option<ActivityTarget> {
         self.profile
@@ -250,6 +261,7 @@ struct Launcher {
     popup: Option<AnyWindowHandle>,
     main_window: Option<AnyWindowHandle>,
     exit_after_sample: bool,
+    pending_sample_stop: bool,
     picker_open: bool,
     task: Option<Task>,
     fixture_task: Option<Task>,
@@ -404,6 +416,7 @@ impl Launcher {
             popup: None,
             main_window: None,
             exit_after_sample: false,
+            pending_sample_stop: false,
             picker_open: false,
             task: None,
             fixture_task: None,
@@ -516,19 +529,14 @@ impl Launcher {
     }
 
     /// Ask each live run for the running sample instance to drain. The owner
-    /// still decides the final outcome; this only requests termination. Returns
-    /// whether at least one run was visible to stop.
-    fn stop_sample(&mut self, cx: &mut Context<Self>) -> bool {
+    /// still decides the final outcome; this only requests termination.
+    fn stop_sample_runs(&mut self, cx: &mut Context<Self>) -> SampleStop {
         let Some(instance) = self.task.as_ref().and_then(|task| task.profile) else {
-            return false;
+            return SampleStop::Unavailable;
         };
         let runs = Self::owned_sample_runs(&carbon_session::active_runs(), instance);
         if runs.is_empty() {
-            self.message =
-                "The protected sample is still starting. Close Carbon Desktop again once it is running."
-                    .into();
-            cx.notify();
-            return false;
+            return SampleStop::Waiting;
         }
         let mut requested = 0usize;
         let mut failure = false;
@@ -550,13 +558,24 @@ impl Launcher {
             format!("Stopping {requested} protected samples…")
         };
         cx.notify();
-        requested > 0
+        SampleStop::Requested(requested)
+    }
+
+    /// Stop sample command for the task row. Waiting is reported rather than
+    /// leaving the player unsure whether the request was seen.
+    fn stop_sample(&mut self, cx: &mut Context<Self>) {
+        if self.stop_sample_runs(cx) == SampleStop::Waiting {
+            self.message =
+                "The protected sample is still starting. Try again once it is running.".into();
+            cx.notify();
+        }
     }
 
     /// The player chose to keep Carbon Desktop open. A previously requested
     /// stop-and-exit must not close the window when the sample later drains.
     fn keep_sample_open(&mut self) {
         self.exit_after_sample = false;
+        self.pending_sample_stop = false;
     }
 
     /// Stop the sample and close Carbon Desktop only after its tree has
@@ -564,15 +583,52 @@ impl Launcher {
     /// completion path performs the actual close.
     fn stop_sample_and_exit(&mut self, cx: &mut Context<Self>) {
         self.exit_after_sample = true;
-        if self.task.is_some() {
-            if !self.stop_sample(cx) {
+        match self.stop_sample_runs(cx) {
+            SampleStop::Unavailable => self.close_after_sample(cx),
+            SampleStop::Waiting => {
+                self.pending_sample_stop = true;
                 self.message =
-                    "Carbon Desktop will close after the protected sample finishes.".into();
+                    "Carbon Desktop will stop the protected sample as soon as it starts, then close."
+                        .into();
                 cx.notify();
+                self.poll_pending_sample_stop(cx);
             }
-        } else {
-            self.close_after_sample(cx);
+            SampleStop::Requested(_) => {}
         }
+    }
+
+    /// A sample that was still starting when the player asked to exit is
+    /// stopped as soon as its run becomes visible. The instance filter still
+    /// comes from the sample task, so no other run is touched.
+    fn poll_pending_sample_stop(&mut self, cx: &mut Context<Self>) {
+        let timer = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                timer.timer(Duration::from_millis(150)).await;
+                let again = this
+                    .update(cx, |this, cx| {
+                        if !this.exit_after_sample || !this.pending_sample_stop {
+                            return false;
+                        }
+                        if this.task.is_none() {
+                            this.pending_sample_stop = false;
+                            return false;
+                        }
+                        match this.stop_sample_runs(cx) {
+                            SampleStop::Waiting => true,
+                            SampleStop::Unavailable | SampleStop::Requested(_) => {
+                                this.pending_sample_stop = false;
+                                false
+                            }
+                        }
+                    })
+                    .unwrap_or(false);
+                if !again {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn close_after_sample(&mut self, cx: &mut Context<Self>) {
@@ -887,8 +943,12 @@ impl Launcher {
             self.task.take()
         };
         if self.exit_after_sample && !fixture_work {
+            self.pending_sample_stop = false;
             self.close_after_sample(cx);
             return;
+        }
+        if !fixture_work {
+            self.pending_sample_stop = false;
         }
         self.last_activity = task.as_ref().and_then(Task::target);
         let cancelled = task
