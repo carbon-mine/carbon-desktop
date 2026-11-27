@@ -101,6 +101,7 @@ pub(super) fn run(
     reservation.record_admission().map_err(SessionError::Data)?;
     let mut observation = sandbox::LaunchObservation {
         smoke,
+        run: reservation.id(),
         boundary_empty: true,
     };
     let result = sandbox::launch(
@@ -147,6 +148,17 @@ pub(super) fn run(
         sample_count: next.unwrap_or(initial),
         saved: next.is_some(),
     })
+}
+
+/// A lost owner's process boundary is identified by the job name derived from
+/// the run record. Other builds keep the previous fail-closed behavior.
+pub(super) fn sample_boundary_empty(run: Uuid) -> io::Result<bool> {
+    sandbox::boundary_empty(run)
+}
+
+#[cfg(test)]
+pub(super) fn test_boundary(run: Uuid, root: &Path) -> io::Result<impl Sized> {
+    sandbox::test_boundary(run, root)
 }
 
 fn lock_error(error: TryLockError) -> SessionError {

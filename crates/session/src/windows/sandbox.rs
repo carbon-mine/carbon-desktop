@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
+use uuid::Uuid;
 use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::ConvertSidToStringSidW, Isolation::*, *},
@@ -43,7 +44,8 @@ fn hr(value: i32) -> io::Result<()> {
     }
 }
 
-struct Handle(HANDLE);
+#[derive(Debug)]
+pub(super) struct Handle(HANDLE);
 impl Drop for Handle {
     fn drop(&mut self) {
         unsafe {
@@ -296,6 +298,7 @@ fn environment(own: &Path) -> io::Result<Vec<u16>> {
 
 pub(super) struct LaunchObservation {
     pub(super) smoke: bool,
+    pub(super) run: Uuid,
     pub(super) boundary_empty: bool,
 }
 
@@ -339,7 +342,7 @@ pub(super) fn launch(
     ])?;
     let env = environment(own)?;
     unsafe {
-        let job = job::create(1)?;
+        let job = job::create(1, observation.run)?;
         let caps = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid,
             ..Default::default()
@@ -440,4 +443,13 @@ pub(super) fn launch(
         }
     }
     Ok(())
+}
+
+pub(super) fn boundary_empty(run: Uuid) -> io::Result<bool> {
+    job::boundary_empty(run)
+}
+
+#[cfg(test)]
+pub(super) fn test_boundary(run: Uuid, root: &Path) -> io::Result<Handle> {
+    job::test_boundary(run, root)
 }
