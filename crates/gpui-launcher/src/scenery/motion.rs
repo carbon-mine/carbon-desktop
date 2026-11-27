@@ -279,22 +279,36 @@ mod mf {
 mod mf {
     use super::super::package::Movie;
     use gpui::RenderImage;
-    use std::sync::Arc;
+    use std::{path::PathBuf, sync::Arc};
 
-    pub(super) struct Reader;
+    /// Keeps the package contract identical on platforms without a qualified
+    /// decoder; every read reports that bundled artwork should be used.
+    pub(super) struct Reader {
+        path: PathBuf,
+        frames: usize,
+        next: usize,
+    }
 
     impl Reader {
-        pub(super) fn open(_: &Movie, _: usize) -> Result<Self, String> {
-            Err("No in-process scenery decoder is qualified on this platform".into())
+        pub(super) fn open(movie: &Movie, step: usize) -> Result<Self, String> {
+            Ok(Self {
+                path: movie.motion().to_owned(),
+                frames: movie.frames as usize,
+                next: step,
+            })
         }
-        pub(super) fn matches(&self, _: &Movie) -> bool {
-            false
+        pub(super) fn matches(&self, movie: &Movie) -> bool {
+            movie.motion() == self.path
         }
         pub(super) fn next(&self) -> usize {
-            0
+            self.next
         }
         pub(super) fn read(&mut self) -> Result<Arc<RenderImage>, String> {
-            Err("No in-process scenery decoder is qualified on this platform".into())
+            self.next = (self.next + 1) % self.frames.max(1);
+            Err(format!(
+                "No in-process scenery decoder is qualified on {}",
+                std::env::consts::OS
+            ))
         }
     }
 }

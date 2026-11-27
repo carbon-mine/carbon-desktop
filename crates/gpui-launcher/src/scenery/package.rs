@@ -174,7 +174,7 @@ fn root() -> Option<PathBuf> {
     directory.is_dir().then_some(directory)
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 impl Movie {
     pub(super) fn test(poster: PathBuf, motion: PathBuf, frames: u32) -> Self {
         Self {
