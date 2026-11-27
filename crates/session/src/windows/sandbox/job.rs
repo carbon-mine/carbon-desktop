@@ -22,7 +22,11 @@ use windows_sys::{
             SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, SECURITY_ATTRIBUTES,
             SECURITY_DESCRIPTOR, TOKEN_USER,
         },
-        System::{JobObjects::*, SystemServices::JOB_OBJECT_QUERY},
+        System::{
+            JobObjects::*,
+            SystemServices::JOB_OBJECT_QUERY,
+            Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        },
         UI::WindowsAndMessaging::{
             EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
         },
@@ -137,7 +141,11 @@ fn member_pids(job: &Handle) -> io::Result<Vec<u32>> {
         if queried == 0 {
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) {
-                capacity = (needed as usize).max(capacity * 2);
+                // `needed` is a byte count, not a number of entries.
+                let required = (needed as usize)
+                    .saturating_sub(header)
+                    .div_ceil(size_of::<usize>());
+                capacity = required.max(capacity * 2);
                 continue;
             }
             return Err(error);
@@ -160,8 +168,21 @@ fn member_pids(job: &Handle) -> io::Result<Vec<u32>> {
 }
 
 struct CloseTargets<'a> {
+    job: &'a Handle,
     pids: &'a [u32],
     posted: usize,
+}
+
+/// Confirms that the process that owns a matched window is still the member the
+/// job reported, so a recycled PID cannot redirect the close request.
+fn still_member(job: &Handle, pid: u32) -> bool {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return false;
+    }
+    let process = Handle(process);
+    let mut member = 0;
+    unsafe { IsProcessInJob(process.0, job.0, &mut member) != 0 && member != 0 }
 }
 
 unsafe extern "system" fn close_owned_window(window: HWND, parameter: LPARAM) -> BOOL {
@@ -171,6 +192,7 @@ unsafe extern "system" fn close_owned_window(window: HWND, parameter: LPARAM) ->
     if pid != 0
         && targets.pids.contains(&pid)
         && IsWindowVisible(window) != 0
+        && still_member(targets.job, pid)
         && PostMessageW(window, WM_CLOSE, 0, 0) != 0
     {
         targets.posted += 1;
@@ -188,12 +210,17 @@ pub(super) fn request_close(job: &Handle) -> io::Result<usize> {
         return Ok(0);
     }
     let mut targets = CloseTargets {
+        job,
         pids: &pids,
         posted: 0,
     };
     let parameter = (&mut targets as *mut CloseTargets<'_>) as LPARAM;
-    unsafe {
-        EnumWindows(Some(close_owned_window), parameter);
+    if unsafe { EnumWindows(Some(close_owned_window), parameter) } == 0 {
+        let error = io::Error::last_os_error();
+        return Err(match error.raw_os_error() {
+            Some(0) | None => io::Error::other("Window enumeration failed"),
+            Some(_) => error,
+        });
     }
     Ok(targets.posted)
 }
@@ -550,6 +577,30 @@ mod tests {
         terminate(&job).unwrap();
         wait_empty(&job, DRAIN_TIMEOUT).unwrap();
         child.wait().ok();
+    }
+
+    #[test]
+    fn a_close_request_skips_windows_outside_the_run() {
+        let outsider_root = tempfile::tempdir().unwrap();
+        let mut outsider = fixture(outsider_root.path(), "windowed").spawn().unwrap();
+        wait_for(&outsider_root.path().join("ready"));
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let Some((job, mut member)) = window_boundary(run, root.path(), false) else {
+            outsider.kill().ok();
+            outsider.wait().ok();
+            return;
+        };
+        // Only the run's own window is a member, so only it is asked to close.
+        assert_eq!(request_close(&job).unwrap(), 1);
+        wait_empty(&job, DRAIN_TIMEOUT).unwrap();
+        assert_eq!(member.wait().unwrap().code(), Some(0));
+        assert!(
+            outsider.try_wait().unwrap().is_none(),
+            "a window outside the run must not receive the request"
+        );
+        outsider.kill().ok();
+        outsider.wait().ok();
     }
 
     #[test]
