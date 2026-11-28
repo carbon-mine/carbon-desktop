@@ -24,7 +24,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms
+try { Add-Type -AssemblyName System.Drawing.Common -ErrorAction Stop } catch { }
+try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop } catch { }
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
 $uia = [System.Windows.Automation.AutomationElement]
 $scope = [System.Windows.Automation.TreeScope]
@@ -124,7 +126,7 @@ public static class CarbonCaptureNative {
 
     [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, int dwRop);
 }
-'@ -ReferencedAssemblies System.Drawing.dll
+'@ -ReferencedAssemblies ([System.Drawing.Bitmap].Assembly.Location)
 
 function Wait-Until([scriptblock]$Condition, [string]$Message, [int]$TimeoutSeconds = 30) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
