@@ -2,6 +2,8 @@
 
 Folders organize the native library into named groups. They apply separately to **Instances** and **Worlds**. A folder is app-owned metadata: filing, renaming, moving or removing one never renames a world directory, moves a save, copies world data or changes launch preferences.
 
+The Rust service below is implemented. The native list presentation is staged behind the library-mode work; until it lands, existing libraries stay flat and no folder is created automatically.
+
 ## Storage contract
 
 The Rust profiles service owns `personal/folders.json` beside `profiles.json`:
@@ -61,9 +63,9 @@ Missing and unknown references stay in the folder. The UI can show a recovery ro
 - Duplicate labels in one scope are refused without writing the file. Labels are trimmed and may not contain control or bidirectional formatting characters.
 - Search is global: matching items appear even when their folder is collapsed.
 
-## Keyboard and accessibility
+## Planned presentation and keyboard
 
-The native list reuses the existing selection, search, scroll and Escape behaviour. Folder headings are disclosure controls: Enter or Space toggles, Left collapses and moves to the parent heading, Right expands, Home/End jump within the folder list, and F2 or the item menu renames. Focus never moves into a hidden member, and there is no second navigation stack or focus trap. Folder headings show the label and mode in their accessible names; the ungrouped heading is announced as such.
+The folder list will reuse the existing selection, search, scroll and Escape behaviour. Folder headings are disclosure controls: Enter or Space toggles, Left collapses and keeps focus on the heading, Right expands, Home/End jump within the folder list, and F2 or the item menu renames. Focus never moves into a hidden member, and there is no second navigation stack or focus trap. Folder headings show the label and mode in their accessible names; the ungrouped heading is announced as such. None of this is claimed before the presentation lands in GPUI with native verification.
 
 ## Safety and verification
 
