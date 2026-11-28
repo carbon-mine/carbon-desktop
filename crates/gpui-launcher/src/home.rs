@@ -659,6 +659,16 @@ impl Launcher {
                             self.popup.is_some() || self.picker_open,
                             cx,
                             |this, window, cx| this.pick(Picker::Pack, window, cx),
+                        ))
+                        .child(self.home_launchbox_command(
+                            p,
+                            glass,
+                            "home-open-library",
+                            "Open library",
+                            false,
+                            self.popup.is_some() || self.picker_open,
+                            cx,
+                            |this, window, cx| this.open_library(window, cx),
                         )),
                 );
         };
@@ -790,6 +800,16 @@ impl Launcher {
                         busy,
                         cx,
                         |this, _, cx| this.toggle_selected_pin(cx),
+                    ))
+                    .child(self.home_launchbox_command(
+                        p,
+                        glass,
+                        "home-open-library",
+                        "Open library",
+                        false,
+                        busy,
+                        cx,
+                        |this, window, cx| this.open_library(window, cx),
                     )),
             )
     }
@@ -827,28 +847,6 @@ impl Launcher {
         } else {
             tiles.into_any_element()
         };
-        let disabled = self.popup.is_some() || self.picker_open;
-        let open_library = self.control(
-            theme::label(
-                glass_action("home-open-library", p, Partition::Neutral, disabled, cx)
-                    .border_color(if p.dark {
-                        rgba(0xffffff44)
-                    } else {
-                        rgba(0x00000038)
-                    }),
-                "Open library",
-                p,
-                Partition::Neutral,
-                disabled,
-            ),
-            "home-open-library",
-            "Open library",
-            Role::Button,
-            disabled,
-            None,
-            cx,
-            |this, window, cx| this.open_library(window, cx),
-        );
         col()
             .relative()
             .flex_none()
@@ -872,27 +870,23 @@ impl Launcher {
                     .bg(glass.tint),
             )
             .child(
-                row()
-                    .w_full()
-                    .justify_between()
-                    .child(
-                        row()
-                            .gap_2()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(px(if compact { 16. } else { 19. }))
-                                    .font_semibold()
-                                    .child("Your library"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(p.muted)
-                                    .child(instance_count(count)),
-                            ),
-                    )
-                    .child(open_library),
+                row().w_full().child(
+                    row()
+                        .gap_2()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(if compact { 16. } else { 19. }))
+                                .font_semibold()
+                                .child("Recent Instances"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(p.muted)
+                                .child(instance_count(count)),
+                        ),
+                ),
             )
             .child(body)
             .into_any_element()
