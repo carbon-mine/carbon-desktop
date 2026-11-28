@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 use gpui::{
     App, Div, ElementId, Hsla, Rgba, SharedString, Window, WindowAppearance, div, prelude::*, px,
-    rgb,
+    rgb, rgba,
 };
 use gpui_component::{
     Disableable, Selectable, Sizable,
@@ -51,6 +51,46 @@ pub fn compact_action(
             !disabled && !matches!(treatment, Partition::Selected),
             |button| button.border_1().border_color(palette.stroke),
         )
+}
+
+/// Translucent glass button variant for controls sitting over the Home backdrop shelf.
+pub fn glass_action(
+    id: impl Into<ElementId>,
+    palette: Palette,
+    treatment: Partition,
+    disabled: bool,
+    cx: &App,
+) -> Button {
+    let primary = matches!(treatment, Partition::Primary);
+    if primary {
+        return compact_action(id, palette, treatment, disabled, cx);
+    }
+    let colors = if palette.dark {
+        [0xffffff12, 0xffffff20, 0xffffff28]
+    } else {
+        [0xffffff7a, 0xffffffa8, 0xffffffc8]
+    }
+    .map(rgba);
+    let (disabled_bg, disabled_border, border) = if palette.dark {
+        (rgba(0xffffff0a), rgba(0xffffff18), rgba(0xffffff24))
+    } else {
+        (rgba(0x00000008), rgba(0x00000018), rgba(0x00000024))
+    };
+    custom_button(
+        id,
+        palette,
+        colors,
+        disabled_bg,
+        disabled_border,
+        treatment,
+        disabled,
+        cx,
+    )
+    .h(px(32.))
+    .when(
+        !disabled && !matches!(treatment, Partition::Selected),
+        |button| button.border_1().border_color(border),
+    )
 }
 
 /// The selected instance's primary action. The hit area stays still as its face depresses.
@@ -160,12 +200,38 @@ fn action_button(
     cx: &App,
 ) -> Button {
     let primary = matches!(treatment, Partition::Primary);
-    let selected = matches!(treatment, Partition::Selected);
     let colors = match (primary, palette.dark) {
         (true, true) => [0xd7d7d7, 0xeeeeee, 0xa8a8a8].map(rgb),
         (true, false) => [0x353535, 0x191919, 0x525252].map(rgb),
         (false, _) => [palette.layer, palette.selected, palette.selected],
     };
+    custom_button(
+        id,
+        palette,
+        colors,
+        palette.layer,
+        palette.stroke,
+        treatment,
+        disabled,
+        cx,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The shared builder binds button identity, state palette colors, and partition rules in one place."
+)]
+fn custom_button(
+    id: impl Into<ElementId>,
+    palette: Palette,
+    colors: [Rgba; 3],
+    disabled_bg: Rgba,
+    disabled_border: Rgba,
+    treatment: Partition,
+    disabled: bool,
+    cx: &App,
+) -> Button {
+    let selected = matches!(treatment, Partition::Selected);
     let variant = ButtonCustomVariant::new(cx)
         .color(colors[0].into())
         .foreground(action_ink(palette, treatment, disabled).into())
@@ -179,10 +245,10 @@ fn action_button(
         .rounded(px(0.))
         .when(disabled, |button| {
             button
-                .bg(palette.layer)
+                .bg(disabled_bg)
                 .text_color(palette.muted)
                 .border_1()
-                .border_color(palette.stroke)
+                .border_color(disabled_border)
         })
         .when(selected && !disabled, |button| {
             button.border_0().border_b_2().border_color(palette.accent)

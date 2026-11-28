@@ -2,27 +2,35 @@
 use super::{
     Launcher,
     home_playback::HomePlayback,
-    scenery::{Landscape, SceneView},
+    scenery::{Landscape, SceneView, blur_backdrop},
 };
 use carbon_profiles::world_preview::{Destination, EntryKey, WorldMap};
-use gpui::{Context, Entity, Task, Window, prelude::*};
-use std::{path::Path, time::Instant};
+use gpui::{Context, Entity, ImageId, RenderImage, Task, Window, prelude::*};
+use std::{path::Path, sync::Arc, time::Instant};
 
 pub(super) struct HomeArtwork {
     pub(super) playback: HomePlayback,
     pub(super) view: Entity<SceneView>,
     pub(super) world: Option<EntryKey>,
+    pub(super) world_blurred: Option<(ImageId, Arc<RenderImage>)>,
     applied: (Landscape, bool),
     rotation: Option<(Instant, Task<()>)>,
 }
 
 impl HomeArtwork {
-    pub(super) fn new(root: &Path, cx: &mut Context<Launcher>) -> Self {
+    pub(super) fn new(root: &Path, window: &Window, cx: &mut Context<Launcher>) -> Self {
         let playback = HomePlayback::open(root);
-        let view = cx.new(|cx| SceneView::new(playback.scene, cx));
+        let scale = window.scale_factor();
+        let viewport = window.viewport_size();
+        let initial_px = (
+            (f32::from(viewport.width) * scale).round().max(0.) as u32,
+            (f32::from(viewport.height) * scale).round().max(0.) as u32,
+        );
+        let view = cx.new(|cx| SceneView::new(playback.scene, initial_px, cx));
         Self {
             view,
             world: None,
+            world_blurred: None,
             applied: (playback.scene, false),
             playback,
             rotation: None,
@@ -82,16 +90,28 @@ impl Launcher {
         self.artwork.playback.shuffle(&self.root.path);
     }
 
+    pub(super) fn live_blur_source(&self) -> (Option<Arc<RenderImage>>, Entity<SceneView>) {
+        let world_blur = self.home_world_image().and_then(|_| {
+            self.artwork
+                .world_blurred
+                .as_ref()
+                .map(|(_, blurred)| blurred.clone())
+        });
+        (world_blur, self.artwork.view.clone())
+    }
+
     pub(super) fn sync_home_artwork(
         &mut self,
         home_visible: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let active = home_visible
-            && self.popup.is_none()
-            && window.is_window_active()
-            && !self.reduced_motion();
+        let active = playback_active(
+            home_visible,
+            self.popup.is_some(),
+            self.reduced_motion(),
+            window_minimized(window),
+        );
         let now = Instant::now();
         let mut deadline = self.artwork.playback.deadline(active, now);
         if deadline.is_some_and(|d| d <= now) {
@@ -101,11 +121,38 @@ impl Launcher {
         if self.artwork.world.is_some() && self.home_world_image().is_none() {
             self.artwork.world = None;
         }
+        let world_image = self.home_world_image();
+        match world_image {
+            Some(image) => {
+                if self
+                    .artwork
+                    .world_blurred
+                    .as_ref()
+                    .is_none_or(|(id, _)| *id != image.id)
+                    && let Some(blurred) = blur_backdrop(&image)
+                    && let Some((_, old)) = self.artwork.world_blurred.replace((image.id, blurred))
+                {
+                    cx.defer(move |app| app.drop_image(old, None));
+                }
+            }
+            None => {
+                if let Some((_, old)) = self.artwork.world_blurred.take() {
+                    cx.defer(move |app| app.drop_image(old, None));
+                }
+            }
+        }
         let art = &mut self.artwork;
         let scene = art.playback.scene;
         let playing = active && !art.playback.paused && art.world.is_none();
+        let viewport = window.viewport_size();
+        let scale = window.scale_factor();
+        let target_px = (
+            (f32::from(viewport.width) * scale).round().max(0.) as u32,
+            (f32::from(viewport.height) * scale).round().max(0.) as u32,
+        );
         if art.applied != (scene, playing) {
             art.view.update(cx, |view, cx| {
+                view.set_viewport(target_px);
                 if art.applied.0 != scene {
                     view.set_landscape(scene, cx);
                 }
@@ -127,5 +174,50 @@ impl Launcher {
                 )
             });
         }
+    }
+}
+
+/// A minimised window still reports Home as visible, so stop ambient decode
+/// explicitly. An unfocused but visible window keeps playing.
+#[cfg(windows)]
+fn window_minimized(window: &Window) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    match handle.as_raw() {
+        RawWindowHandle::Win32(handle) => unsafe {
+            IsIconic(HWND(handle.hwnd.get() as *mut _)).as_bool()
+        },
+        _ => false,
+    }
+}
+
+#[cfg(not(windows))]
+fn window_minimized(_window: &Window) -> bool {
+    false
+}
+
+/// Ambient Home playback is intentionally independent of window focus: a
+/// visible but unfocused window keeps playing, while a hidden Home, an open
+/// popup, reduced motion or a minimised window stops it.
+fn playback_active(home_visible: bool, popup: bool, reduced_motion: bool, minimized: bool) -> bool {
+    home_visible && !popup && !reduced_motion && !minimized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::playback_active;
+
+    #[test]
+    fn home_playback_pauses_for_hidden_home_popups_reduced_motion_and_minimise() {
+        assert!(playback_active(true, false, false, false));
+        assert!(!playback_active(false, false, false, false));
+        assert!(!playback_active(true, true, false, false));
+        assert!(!playback_active(true, false, true, false));
+        assert!(!playback_active(true, false, false, true));
+        assert!(!playback_active(false, true, true, true));
     }
 }

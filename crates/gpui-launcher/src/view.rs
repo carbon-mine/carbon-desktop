@@ -167,11 +167,7 @@ impl Launcher {
         } else {
             self.profiles
                 .iter()
-                .filter(|profile| {
-                    format!("{} {}", profile.name, profile.version.id())
-                        .to_lowercase()
-                        .contains(&query)
-                })
+                .filter(|profile| matches_profile_query(profile, &query))
                 .map(|profile| {
                     let id = profile.id;
                     self.entry(
@@ -2367,4 +2363,42 @@ fn fixture_status(item: &InstanceView) -> &'static str {
         Phase::Interrupted => "Interrupted",
         Phase::Staged => "Awaiting activation",
     }
+}
+
+pub(super) fn matches_profile_query(profile: &Profile, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    if query.is_ascii() {
+        if contains_ascii_icase(&profile.name, query)
+            || contains_ascii_icase(profile.version.id(), query)
+        {
+            return true;
+        }
+        // The byte fast path cannot see Unicode case folding (for example
+        // "İstanbul" lowercases to "i\u{307}stanbul"), so a miss may only
+        // short-circuit when the name is ASCII too.
+        if !query.contains(' ') && profile.name.is_ascii() {
+            return false;
+        }
+    }
+    format!("{} {}", profile.name, profile.version.id())
+        .to_lowercase()
+        .contains(query)
+}
+
+fn contains_ascii_icase(haystack: &str, needle_lower: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle_lower.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    if n.len() > h.len() {
+        return false;
+    }
+    h.windows(n.len()).any(|win| {
+        win.iter()
+            .zip(n)
+            .all(|(&a, &b)| a.to_ascii_lowercase() == b)
+    })
 }
