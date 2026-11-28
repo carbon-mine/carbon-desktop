@@ -106,7 +106,10 @@ impl Launcher {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let active = home_visible && self.popup.is_none() && !self.reduced_motion();
+        let active = home_visible
+            && self.popup.is_none()
+            && !self.reduced_motion()
+            && !window_minimized(window);
         let now = Instant::now();
         let mut deadline = self.artwork.playback.deadline(active, now);
         if deadline.is_some_and(|d| d <= now) {
@@ -170,4 +173,27 @@ impl Launcher {
             });
         }
     }
+}
+
+/// A minimised window still reports Home as visible, so stop ambient decode
+/// explicitly. An unfocused but visible window keeps playing.
+#[cfg(windows)]
+fn window_minimized(window: &Window) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    match handle.as_raw() {
+        RawWindowHandle::Win32(handle) => unsafe {
+            IsIconic(HWND(handle.hwnd.get() as *mut _)).as_bool()
+        },
+        _ => false,
+    }
+}
+
+#[cfg(not(windows))]
+fn window_minimized(_window: &Window) -> bool {
+    false
 }

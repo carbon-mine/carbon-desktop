@@ -62,14 +62,14 @@ mod mf {
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::Media::MediaFoundation::{
         IMFAttributes, IMFMediaType, IMFSample, IMFSourceReader, MF_MT_DEFAULT_STRIDE,
-        MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-        MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-        MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_ENDOFSTREAM,
-        MF_SOURCE_READERF_ERROR, MF_VERSION, MFMediaType_Video, MFSTARTUP_LITE, MFVideoFormat_NV12,
-        MFVideoFormat_RGB32,
+        MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_VIDEO_NOMINAL_RANGE,
+        MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SOURCE_READER_ALL_STREAMS,
+        MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+        MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_ERROR, MF_VERSION, MFMediaType_Video,
+        MFNominalRange_0_255, MFSTARTUP_LITE, MFVideoFormat_NV12, MFVideoFormat_RGB32,
     };
     use windows::Win32::System::Com::{
-        COINIT_MULTITHREADED, CoInitializeEx, StructuredStorage::PROPVARIANT,
+        COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize, StructuredStorage::PROPVARIANT,
     };
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::Win32::System::Variant::VT_I8;
@@ -77,7 +77,7 @@ mod mf {
 
     const MAX_EDGE: u32 = 4096;
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
     enum PixelFormat {
         Nv12,
         Rgb32,
@@ -200,7 +200,9 @@ mod mf {
             let frames = (movie.frames as usize).max(1);
             let target = Arc::new(AtomicU64::new(pack_target(target_size)));
             let stop = Arc::new(AtomicBool::new(false));
-            let (tx, rx) = mpsc::sync_channel::<Result<Arc<RenderImage>, String>>(10);
+            // A small prefetch: viewport-sized BGRA frames are tens of MiB, so
+            // four slots cover a few ticks without pinning hundreds of MiB.
+            let (tx, rx) = mpsc::sync_channel::<Result<Arc<RenderImage>, String>>(4);
             let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
 
             let worker_path = path.clone();
@@ -222,7 +224,7 @@ mod mf {
                 })
                 .map_err(|error| format!("Cannot start scenery decode worker: {error}"))?;
 
-            match ready_rx.recv() {
+            match ready_rx.recv_timeout(Duration::from_secs(3)) {
                 Ok(Ok(())) => Ok(Self {
                     path,
                     next: step,
@@ -234,14 +236,12 @@ mod mf {
                 Ok(Err(error)) => {
                     stop.store(true, Ordering::Release);
                     drop(rx);
-                    let _ = worker.join();
                     Err(error)
                 }
                 Err(_) => {
                     stop.store(true, Ordering::Release);
                     drop(rx);
-                    let _ = worker.join();
-                    Err("Scenery decode worker stopped during startup".into())
+                    Err("Scenery decode worker did not start within three seconds".into())
                 }
             }
         }
@@ -273,11 +273,13 @@ mod mf {
 
     impl Drop for Reader {
         fn drop(&mut self) {
+            // Stop signal plus receiver close is enough for a healthy worker to
+            // exit. Never join here: Drop can run on the UI thread and a stalled
+            // Media Foundation read would freeze the launcher. The worker
+            // detaches and finishes on its own.
             self.stop.store(true, Ordering::Release);
             drop(self.rx.take());
-            if let Some(worker) = self.worker.take() {
-                let _ = worker.join();
-            }
+            self.worker = None;
         }
     }
 
@@ -319,7 +321,9 @@ mod mf {
     }
 
     impl RowPool {
-        fn new() -> Self {
+        /// Builds the row pool, or falls back to inline conversion when the
+        /// platform cannot start the helper threads.
+        fn new() -> Option<Self> {
             let shared = Arc::new(RowShared {
                 work: Mutex::new((false, None)),
                 work_cv: Condvar::new(),
@@ -330,38 +334,50 @@ mod mf {
             let mut workers = Vec::with_capacity(BANDS - 1);
             for tid in 1..BANDS {
                 let s = shared.clone();
-                workers.push(
-                    std::thread::Builder::new()
-                        .name("carbon-scenic-row".into())
-                        .spawn(move || {
-                            let mut seen = 0u64;
-                            loop {
-                                let task = {
-                                    let mut guard = s.work.lock().expect("row pool lock");
-                                    loop {
-                                        if guard.0 {
-                                            return;
-                                        }
-                                        if let Some(task) = guard.1
-                                            && task.seq != seen
-                                        {
-                                            break task;
-                                        }
-                                        guard = s.work_cv.wait(guard).expect("row pool wait");
+                let spawned = std::thread::Builder::new()
+                    .name("carbon-scenic-row".into())
+                    .spawn(move || {
+                        let mut seen = 0u64;
+                        loop {
+                            let task = {
+                                let mut guard = s.work.lock().expect("row pool lock");
+                                loop {
+                                    if guard.0 {
+                                        return;
                                     }
-                                };
-                                seen = task.seq;
-                                unsafe { Self::run_slice(&task, tid) };
-                                if s.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
-                                    let _done = s.done_mu.lock().expect("row done lock");
-                                    s.done_cv.notify_one();
+                                    if let Some(task) = guard.1
+                                        && task.seq != seen
+                                    {
+                                        break task;
+                                    }
+                                    guard = s.work_cv.wait(guard).expect("row pool wait");
                                 }
+                            };
+                            seen = task.seq;
+                            unsafe { Self::run_slice(&task, tid) };
+                            if s.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                                let _done = s.done_mu.lock().expect("row done lock");
+                                s.done_cv.notify_one();
                             }
-                        })
-                        .expect("spawn scenic row worker"),
-                );
+                        }
+                    });
+                match spawned {
+                    Ok(worker) => workers.push(worker),
+                    Err(_) => {
+                        // Stop and join the workers that did start so the caller
+                        // can convert this frame inline instead of panicking.
+                        if let Ok(mut guard) = shared.work.lock() {
+                            guard.0 = true;
+                            shared.work_cv.notify_all();
+                        }
+                        for worker in workers.drain(..) {
+                            let _ = worker.join();
+                        }
+                        return None;
+                    }
+                }
             }
-            Self { shared, workers }
+            Some(Self { shared, workers })
         }
 
         unsafe fn run_slice(task: &BandTask, tid: usize) {
@@ -451,11 +467,14 @@ mod mf {
         lut: Option<ScaleLut>,
         pool: Option<RowPool>,
         pool_seq: u64,
+        // Keeps this worker thread's COM apartment initialised for as long as
+        // the reader exists; the guard drops on the same thread that opened it.
+        _com: ComGuard,
     }
 
     impl Decoder {
         fn open(path: &Path) -> Result<Self, String> {
-            start()?;
+            let com = start()?;
             let (reader, width, height, stride, format) = source(path).map_err(|error| {
                 format!("Media Foundation cannot open {}: {error}", path.display())
             })?;
@@ -469,6 +488,7 @@ mod mf {
                 lut: None,
                 pool: None,
                 pool_seq: 0,
+                _com: com,
             })
         }
 
@@ -578,7 +598,7 @@ mod mf {
                     let src_w = self.width as usize;
                     let src_h = self.height as usize;
                     if dst_h >= 256 && self.pool.is_none() {
-                        self.pool = Some(RowPool::new());
+                        self.pool = RowPool::new();
                     }
                     let src = nv12_planes(data, length, self.width, self.height, self.stride);
                     match src {
@@ -714,6 +734,16 @@ mod mf {
                 return Err(format!(
                     "Media Foundation reported an unsupported {width}x{height} frame"
                 ));
+            }
+            // The NV12 kernels apply limited-range BT.709 coefficients. If the
+            // negotiated output is full range, let the RGB32 video processor
+            // convert instead of silently darkening the image.
+            if format == PixelFormat::Nv12
+                && current
+                    .GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE)
+                    .is_ok_and(|range| range == MFNominalRange_0_255.0 as u32)
+            {
+                return Err("Media Foundation negotiated full-range NV12".into());
             }
             let default_stride = match format {
                 PixelFormat::Nv12 => width as i32,
@@ -912,17 +942,28 @@ mod mf {
             .ok_or_else(|| "Unexpected Media Foundation buffer alignment".to_owned())
     }
 
-    fn start() -> Result<(), String> {
+    /// Balances `CoInitializeEx` on the thread that opened the decoder. A
+    /// successful call, including `S_FALSE`, must be paired with
+    /// `CoUninitialize` from the same thread.
+    struct ComGuard;
+
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
+        }
+    }
+
+    fn start() -> Result<ComGuard, String> {
         static PLATFORM: OnceLock<Result<(), String>> = OnceLock::new();
-        // Decoding runs on the shared background executor, so every call joins
-        // the same multi-threaded apartment before using a reader. A thread
-        // that is already initialised reports S_FALSE and stays usable.
+        // Decoding runs on a dedicated worker thread, so each worker joins the
+        // multi-threaded apartment before using a reader. A thread that is
+        // already initialised reports S_FALSE and stays usable.
         let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         if initialized.is_err() {
             return Err(format!("COM initialization failed: {initialized:?}"));
         }
         // The platform is deliberately kept for the process lifetime instead of
-        // being shut down while another executor task may still hold a reader.
+        // being shut down while another worker may still hold a reader.
         PLATFORM
             .get_or_init(|| {
                 let api = api()?;
@@ -930,7 +971,8 @@ mod mf {
                     .ok()
                     .map_err(|error| format!("Media Foundation cannot start: {error}"))
             })
-            .clone()
+            .clone()?;
+        Ok(ComGuard)
     }
 
     #[cfg(test)]
@@ -960,13 +1002,16 @@ mod mf {
             };
             let fixture_mp4 =
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scenery/movie.mp4");
-            start().unwrap();
+            let _com = start().unwrap();
             let api = api().unwrap();
 
-            for mp4 in [
-                PathBuf::from(r"C:\carbon-backdrops-target\debug\scenery\kingdom-keep.mp4"),
-                fixture_mp4,
-            ] {
+            let mut clips = vec![fixture_mp4];
+            // An extra clip is opt-in so a clean checkout measures the fixture.
+            if let Some(extra) = std::env::var_os("CARBON_SCENERY_CLIP") {
+                clips.push(PathBuf::from(extra));
+            }
+
+            for mp4 in clips {
                 let wide = HSTRING::from(mp4.to_string_lossy().as_ref());
                 let mut rgb32_sample0 = Vec::new();
                 let mut nv12_sample0 = Vec::new();

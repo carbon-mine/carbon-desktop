@@ -11,7 +11,7 @@ use std::{
 #[cfg(windows)]
 mod hi_res {
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::Threading::{
         CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateEventW, CreateWaitableTimerExW, INFINITE,
@@ -78,7 +78,7 @@ mod hi_res {
     }
 
     pub(super) async fn sleep_or_cancel(
-        duration: Duration,
+        deadline: Instant,
         cancel: CancelRx,
         executor: &gpui::BackgroundExecutor,
     ) {
@@ -94,34 +94,58 @@ mod hi_res {
             .map(OwnedHandle)
         {
             let rx_fallback = cancel.rx;
-            let ok = executor
-                .spawn(async move {
-                    let due_100ns =
-                        -((duration.as_nanos() / 100).max(1).min(i64::MAX as u128) as i64);
-                    let set =
-                        unsafe { SetWaitableTimer(timer.raw(), &due_100ns, 0, None, None, false) };
-                    if set.is_err() {
-                        return false;
-                    }
-                    unsafe {
-                        let _ =
-                            WaitForMultipleObjects(&[timer.raw(), event.raw()], false, INFINITE);
-                    }
-                    true
-                })
-                .await;
+            let fallback_deadline = deadline;
+            // Recompute from the absolute deadline so executor scheduling
+            // delay cannot stretch the frame period.
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let ok = if remaining.is_zero() {
+                true
+            } else {
+                executor
+                    .spawn(async move {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            return true;
+                        }
+                        let due_100ns =
+                            -((remaining.as_nanos() / 100).max(1).min(i64::MAX as u128) as i64);
+                        let set = unsafe {
+                            SetWaitableTimer(timer.raw(), &due_100ns, 0, None, None, false)
+                        };
+                        if set.is_err() {
+                            return false;
+                        }
+                        unsafe {
+                            let _ = WaitForMultipleObjects(
+                                &[timer.raw(), event.raw()],
+                                false,
+                                INFINITE,
+                            );
+                        }
+                        true
+                    })
+                    .await
+            };
             if ok {
                 return;
             }
+            let remaining = fallback_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
             let _ = futures::future::select(
-                Box::pin(executor.timer(duration)),
+                Box::pin(executor.timer(remaining)),
                 Box::pin(rx_fallback.recv()),
             )
             .await;
             return;
         }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
         let _ = futures::future::select(
-            Box::pin(executor.timer(duration)),
+            Box::pin(executor.timer(remaining)),
             Box::pin(cancel.rx.recv()),
         )
         .await;
@@ -130,7 +154,7 @@ mod hi_res {
 
 #[cfg(not(windows))]
 mod hi_res {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     pub(super) struct Interrupt(async_channel::Sender<()>);
 
@@ -150,12 +174,16 @@ mod hi_res {
     pub(super) struct CancelRx(async_channel::Receiver<()>);
 
     pub(super) async fn sleep_or_cancel(
-        duration: Duration,
+        deadline: Instant,
         cancel: CancelRx,
         executor: &gpui::BackgroundExecutor,
     ) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
         let _ = futures::future::select(
-            Box::pin(executor.timer(duration)),
+            Box::pin(executor.timer(remaining)),
             Box::pin(cancel.0.recv()),
         )
         .await;
@@ -453,6 +481,9 @@ pub struct SceneView {
     movie_failed: bool,
     image: Option<Arc<RenderImage>>,
     blurred: Option<Arc<RenderImage>>,
+    /// Landscape whose image is actually painted, which can lag a new selection
+    /// until its poster decodes.
+    shown: Option<Landscape>,
     viewport_px: (u32, u32),
     step: usize,
     poster_pending: bool,
@@ -482,6 +513,7 @@ impl SceneView {
             movie_failed: false,
             image: None,
             blurred: None,
+            shown: None,
             viewport_px: initial_viewport,
             step: 0,
             poster_pending: true,
@@ -505,6 +537,11 @@ impl SceneView {
 
     pub fn blurred_image(&self) -> Option<Arc<RenderImage>> {
         self.blurred.clone()
+    }
+
+    /// Landscape the view is currently painting, if its image has arrived.
+    pub fn shown_landscape(&self) -> Option<Landscape> {
+        self.shown
     }
     pub fn set_landscape(&mut self, landscape: Landscape, cx: &mut Context<Self>) {
         if self.landscape == landscape {
@@ -583,6 +620,8 @@ impl SceneView {
         };
         let previous_reader = self.video.take();
         let previous_movie = self.movie.take();
+        let packaged = movie.is_some();
+        let streamed = video_source.is_some();
         let target_size =
             (self.viewport_px.0 > 0 && self.viewport_px.1 > 0).then_some(self.viewport_px);
         let refresh_blur = poster || step.is_multiple_of(3);
@@ -663,13 +702,25 @@ impl SceneView {
                 }
                 decoded
             });
-            let decoded = if video_source.is_some() && !poster {
+            let decoded = if (packaged || streamed) && !poster {
                 let timeout = cx.background_executor().timer(Duration::from_secs(3));
                 match futures::future::select(decode_job, Box::pin(timeout)).await {
                     futures::future::Either::Left((result, _)) => result,
                     futures::future::Either::Right((_, pending)) => {
-                        timeout_cancel.cancel();
-                        pending.await
+                        if packaged {
+                            // A blocking Media Foundation read cannot be
+                            // interrupted, so abandon the job and show the
+                            // poster instead of holding the view busy. Its
+                            // decoder worker detaches and exits on its own.
+                            drop(pending);
+                            Decoded {
+                                movie_failed: true,
+                                ..Decoded::default()
+                            }
+                        } else {
+                            timeout_cancel.cancel();
+                            pending.await
+                        }
                     }
                 }
             } else {
@@ -683,10 +734,7 @@ impl SceneView {
                 movie: movie_reader,
                 movie_failed,
             } = decoded;
-            let remaining = due.saturating_duration_since(Instant::now());
-            if !remaining.is_zero() {
-                hi_res::sleep_or_cancel(remaining, interrupted, cx.background_executor()).await;
-            }
+            hi_res::sleep_or_cancel(due, interrupted, cx.background_executor()).await;
             let _ = this.update(cx, |view, cx| {
                 view.busy = false;
                 view.interrupt.take();
@@ -703,6 +751,7 @@ impl SceneView {
                         if let Some(blur) = blurred {
                             retire(view.blurred.replace(blur), cx);
                         }
+                        view.shown = Some(scene);
                         view.poster_pending = false;
                         if !poster {
                             let period = Duration::from_secs_f64(1. / f64::from(fps));
@@ -715,6 +764,7 @@ impl SceneView {
                         view.poster_failed = true;
                         retire(view.image.take(), cx);
                         retire(view.blurred.take(), cx);
+                        view.shown = None;
                         cx.notify();
                     } else {
                         view.fallback(cx);

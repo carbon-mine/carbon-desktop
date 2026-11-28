@@ -2375,7 +2375,10 @@ pub(super) fn matches_profile_query(profile: &Profile, query: &str) -> bool {
         {
             return true;
         }
-        if !query.contains(' ') {
+        // The byte fast path cannot see Unicode case folding (for example
+        // "İstanbul" lowercases to "i\u{307}stanbul"), so a miss may only
+        // short-circuit when the name is ASCII too.
+        if !query.contains(' ') && profile.name.is_ascii() {
             return false;
         }
     }

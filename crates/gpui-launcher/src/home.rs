@@ -420,7 +420,7 @@ impl Launcher {
         let bottom_band = if compact {
             col()
                 .w_full()
-                .when_some(self.home_credit(true), |el, credit| {
+                .when_some(self.home_credit(true, cx), |el, credit| {
                     el.child(row().w_full().justify_end().child(credit))
                 })
                 .child(self.home_launchbox(p, compact, backdrop, cx))
@@ -432,7 +432,7 @@ impl Launcher {
                 .justify_between()
                 .gap_4()
                 .child(self.home_launchbox(p, compact, backdrop, cx))
-                .children(self.home_credit(false))
+                .children(self.home_credit(false, cx))
                 .into_any_element()
         };
         col()
@@ -455,11 +455,18 @@ impl Launcher {
             .into_any_element()
     }
 
-    fn home_credit(&self, compact: bool) -> Option<AnyElement> {
+    fn home_credit(&self, compact: bool, cx: &Context<Self>) -> Option<AnyElement> {
         if self.home_world_image().is_some() {
             return None;
         }
-        let credit = self.artwork.playback.scene.source_credit();
+        // The painted image can lag a new selection until its poster decodes.
+        let credit = self
+            .artwork
+            .view
+            .read(cx)
+            .shown_landscape()
+            .unwrap_or(self.artwork.playback.scene)
+            .source_credit();
         let pill = div()
             .flex_initial()
             .min_w_0()
@@ -1314,7 +1321,9 @@ impl ShelfGlass {
     fn for_palette(p: Palette) -> Self {
         if p.dark {
             Self {
-                tint: rgba(0x14151888),
+                // Opaque enough that the muted instance count keeps 4.5:1
+                // contrast even over the brightest blurred backdrop.
+                tint: rgba(0x141518cc),
                 top_border: rgba(0xffffff38),
                 mark_fill: rgba(0x10111470),
                 mark_border: rgba(0xffffff24),
