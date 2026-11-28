@@ -505,21 +505,22 @@ try {
         Start-Sleep -Milliseconds 700
     }
 
-    $manifest = [ordered]@{
-        schema = 'carbon-readme-screenshots/v1'
-        generatedAt = [DateTime]::UtcNow.ToString('o')
-        commit = $CommitSha
-        sourceRef = $SourceRef
-        repository = 'carbon-mine/carbon-desktop'
-        executable = $exe
-        seed = [ordered]@{
-            fixtures = 'default'
-            fixtureRoot = $fixtureRoot
-            readyFile = $readyFile
-            readyMarker = 'CARBON_LIBRARY_READY'
-        }
-        screenshots = @($captures)
+    $shots = @()
+    foreach ($c in $captures) { $shots += $c }
+    $manifest = [ordered]@{}
+    $manifest['schema'] = 'carbon-readme-screenshots/v1'
+    $manifest['generatedAt'] = [DateTime]::UtcNow.ToString('o')
+    $manifest['commit'] = [string]$CommitSha
+    $manifest['sourceRef'] = [string]$SourceRef
+    $manifest['repository'] = 'carbon-mine/carbon-desktop'
+    $manifest['executable'] = [string]$exe
+    $manifest['seed'] = [ordered]@{
+        fixtures = 'default'
+        fixtureRoot = [string]$fixtureRoot
+        readyFile = [string]$readyFile
+        readyMarker = 'CARBON_LIBRARY_READY'
     }
+    $manifest['screenshots'] = $shots
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestOut -Encoding utf8
     Write-Host "Wrote manifest $manifestOut"
 }
