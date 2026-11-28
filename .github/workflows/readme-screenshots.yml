@@ -35,8 +35,11 @@ jobs:
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event == 'push')
-    runs-on: windows-2025
-    timeout-minutes: 60
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
     env:
       RUSTUP_TOOLCHAIN: 1.99.1-x86_64-pc-windows-msvc
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
@@ -57,24 +60,46 @@ jobs:
         id: meta
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
-          REPO: ${{ github.repository }}
-          REF: ${{ github.ref }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
-        run: |
-          set -euo pipefail
-          echo "capture_sha=$CAPTURE_SHA" >> "$GITHUB_OUTPUT"
-          should_deploy=false
-          if [[ "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
-            should_deploy=true
-          elif [[ "$EVENT_NAME" == "workflow_run" && "$HEAD_BRANCH" == "main" ]]; then
-            should_deploy=true
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+          HEAD_EVENT: ${{ github.event.workflow_run.event || '' }}
+          HEAD_CONCLUSION: ${{ github.event.workflow_run.conclusion || '' }}
+        run: |
+          set -euo pipefail
+          echo "capture_sha=$CAPTURE_SHA" >> "$GITHUB_OUTPUT"
+          # A capture may run from a pull request, a bare main push, or a completed
+          # Desktop CI run. Only a successful Desktop CI push run on main may
+          # deploy, so the published images always follow a green main CI for the
+          # same commit. A bare main push still captures, but never deploys.
+          should_deploy=false
+          if [[ "$EVENT_NAME" == "workflow_run" &&
+                "$HEAD_BRANCH" == "main" &&
+                "$HEAD_EVENT" == "push" &&
+                "$HEAD_CONCLUSION" == "success" ]]; then
+            should_deploy=true
+          fi
+          if [[ "$EVENT_NAME" == "pull_request" && "$PR_HEAD_REPO" != "$REPO" ]]; then
+            should_deploy=false
+          fi
+          echo "should_deploy=$should_deploy" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the triggering Desktop CI push run succeeded for the captured commit
+        if: steps.meta.outputs.should_deploy == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          state="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '.head_sha + " " + .event + " " + .conclusion')"
+          if [[ "$state" != "$CAPTURE_SHA push success" ]]; then
+            echo "::error::Desktop CI run ${RUN_ID} is '${state}', not a successful push run for ${CAPTURE_SHA}; refusing deploy."
+            exit 1
           fi
-          if [[ "$EVENT_NAME" == "pull_request" && "$PR_HEAD_REPO" != "$REPO" ]]; then
-            should_deploy=false
-          fi
-          echo "should_deploy=$should_deploy" >> "$GITHUB_OUTPUT"
 
       - name: Verify captured SHA is still tip of origin/main before deploy
         if: steps.meta.outputs.should_deploy == 'true'

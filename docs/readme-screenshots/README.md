@@ -9,8 +9,8 @@ Windows runner and published as a static, image-only GitHub Pages site.
 
 1. `.github/workflows/readme-screenshots.yml` runs on `pull_request` and `push`
    events that touch the workflow, the capture script, or this directory, and on
-   a completed `Desktop CI` run for a `main` push. The capture job is skipped
-   unless that `Desktop CI` run succeeded.
+   a completed `Desktop CI` run for a `main` push. Pull request and bare main-push
+   runs only capture; a bare main push never deploys.
 2. The job builds the locked `carbon-desktop-gpui` package for
    `x86_64-pc-windows-msvc` and runs `scripts/capture-readme-screenshots.ps1`.
    The script seeds the deterministic `default` fixture library into a disposable
@@ -25,11 +25,13 @@ Windows runner and published as a static, image-only GitHub Pages site.
    | `library-compact` | `library-compact.png` | compact window, library list |
    | `instance-compact` | `instance-compact.png` | compact window, selected instance |
 
-4. On a trusted `main` event only (never a fork pull request) the job verifies the
-   captured commit is still the tip of `main`, writes a path-free public manifest,
-   and deploys the images plus `manifest.json` to GitHub Pages. The deploy job
-   re-checks the tip before publishing, so a late job cannot overwrite newer
-   screenshots.
+4. Deployment is limited to a completed `Desktop CI` **push** run on `main` that
+   succeeded for the exact captured commit: the job asserts that the triggering
+   workflow run is that successful push run, then checks the captured commit is
+   still the tip of `main`. A pull request or bare main push therefore captures
+   but cannot publish, and a deploy never starts before that commit's main
+   Desktop CI is green. The deploy job re-checks the tip before publishing, so a
+   late job cannot overwrite newer screenshots.
 
 ## Published layout
 
