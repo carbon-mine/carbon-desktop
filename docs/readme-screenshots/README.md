@@ -7,9 +7,10 @@ Windows runner and published as a static, image-only GitHub Pages site.
 
 ## Pipeline
 
-1. `.github/workflows/readme-screenshots.yml` runs on every `pull_request` that
-   touches the workflow, the capture script, or this directory, and on every
-   completed `Desktop CI` push to `main`.
+1. `.github/workflows/readme-screenshots.yml` runs on `pull_request` and `push`
+   events that touch the workflow, the capture script, or this directory, and on
+   a completed `Desktop CI` run for a `main` push. The capture job is skipped
+   unless that `Desktop CI` run succeeded.
 2. The job builds the locked `carbon-desktop-gpui` package for
    `x86_64-pc-windows-msvc` and runs `scripts/capture-readme-screenshots.ps1`.
    The script seeds the deterministic `default` fixture library into a disposable
@@ -45,8 +46,8 @@ The site serves stable URLs directly under
 The Pages artifact intentionally contains only those PNG files and the manifest.
 There is no root `index.html`, so `https://carbon-mine.github.io/carbon-desktop/`
 returns the Pages 404 page: the site is a stable asset host for the README, not a
-browsable gallery, and nothing is indexable beyond the images themselves. Do not
-add a landing page or directory listing.
+browsable gallery. The images and manifest are public and directly addressable,
+and there is no HTML landing page or directory listing. Do not add one.
 
 ## Verifying a publish
 
@@ -63,10 +64,14 @@ curl -sS https://carbon-mine.github.io/carbon-desktop/library-wide.png | sha256s
 ```
 
 Rendered README images are served through GitHub's image proxy, which caches per
-URL. If a screenshot ever lags behind the manifest, the tested fallback is to
-revert that image reference to the bundled `docs/images/gpui-*.png` copy until
-the next deploy; the bundled copies remain in the repository for that purpose.
-No cache-purge step is part of the pipeline.
+URL. If a screenshot ever lags behind the manifest, revert that image reference to
+its previously bundled screenshot until the next deploy: `library-wide` to
+`docs/images/gpui-library.png`, `library-compact` to
+`docs/images/gpui-narrow-library.png`, and `instance-compact` to
+`docs/images/gpui-narrow-instance.png`. Those older files differ from the
+published captures (they predate the Home card change), so they are a
+readability fallback rather than a like-for-like replacement. No cache-purge step
+is part of the pipeline.
 
 ## Adding a screen
 

@@ -14,7 +14,7 @@
 
 ![Carbon Desktop library showing local instances in a wide window](https://carbon-mine.github.io/carbon-desktop/library-wide.png)
 
-*A wide library view in the GPUI edition, captured automatically from the latest protected `main` build. See [README screenshots](docs/readme-screenshots/README.md) for the pipeline and current capture commit.*
+*A wide library view in the GPUI edition, captured automatically from the latest protected `main` build. See [README screenshots](docs/readme-screenshots/README.md) for the pipeline, and the published `manifest.json` for the capture commit it came from.*
 
 ## What you can do
 
@@ -34,7 +34,7 @@
   </tr>
 </table>
 
-*Compact screenshots are captured from the same protected `main` build, with the bundled `docs/images/gpui-*.png` copies kept in the repository as the fallback.*
+*Compact screenshots are captured from the same protected `main` build, with the previously bundled `docs/images/gpui-*.png` screenshots kept in the repository if the published images are unavailable.*
 
 ## Quick start
 

@@ -176,7 +176,11 @@ jobs:
             $entry = @($check.screenshots | Where-Object { $_.file -eq $image.Name })
             if ($entry.Count -ne 1) { throw "Published manifest is missing file $($image.Name)" }
           }
-          $unexpected = @($siteImages + (Get-Item -LiteralPath $manifestOut) |
+          $siteFiles = @(Get-ChildItem -LiteralPath $site -File)
+          if ($siteFiles.Count -ne ($images.Count + 1)) {
+            throw "Pages artifact should hold $($images.Count) images plus manifest.json but holds $($siteFiles.Count) files"
+          }
+          $unexpected = @($siteFiles |
             Where-Object { $_.Extension -notin @('.png') -and $_.Name -ne 'manifest.json' })
           if ($unexpected.Count -gt 0) { throw "Pages artifact must contain only screenshots and manifest.json (found $($unexpected.Name -join ', '))" }
           Write-Host "Pages artifact: $($images.Count) images and manifest.json for commit $($manifest.commit)"
