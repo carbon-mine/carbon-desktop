@@ -197,8 +197,9 @@ impl Launcher {
         cx: &Context<Self>,
     ) -> accessibility::Semantic {
         let selected = self.surface == surface;
+        let busy = self.popup.is_some() || self.picker_open;
         let id = SharedString::from(format!("surface-{name}"));
-        let button = home_pill_button(id.clone(), selected, false, cx)
+        let button = home_pill_button(id.clone(), selected, busy, cx)
             .min_w(px(72.))
             .justify_center()
             .child(name);
@@ -207,7 +208,7 @@ impl Launcher {
             id,
             name,
             Role::Tab,
-            self.popup.is_some() || self.picker_open,
+            busy,
             Some(selected),
             cx,
             move |this, window, cx| {
@@ -853,6 +854,15 @@ impl Launcher {
         } else {
             tiles.into_any_element()
         };
+        let heading = self.accessibility.text(
+            div()
+                .text_size(px(if compact { 16. } else { 19. }))
+                .font_semibold()
+                .child(HOME_SHELF_HEADING),
+            "home-shelf-heading",
+            HOME_SHELF_HEADING,
+            Role::Heading,
+        );
         col()
             .relative()
             .flex_none()
@@ -877,21 +887,12 @@ impl Launcher {
             )
             .child(
                 row().w_full().child(
-                    row()
-                        .gap_2()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .text_size(px(if compact { 16. } else { 19. }))
-                                .font_semibold()
-                                .child(HOME_SHELF_HEADING),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(p.muted)
-                                .child(instance_count(count)),
-                        ),
+                    row().gap_2().min_w_0().child(heading).child(
+                        div()
+                            .text_sm()
+                            .text_color(p.muted)
+                            .child(instance_count(count)),
+                    ),
                 ),
             )
             .child(body)
@@ -905,12 +906,13 @@ impl Launcher {
         glass: ShelfGlass,
         compact: bool,
         cx: &Context<Self>,
-    ) -> accessibility::Semantic {
+    ) -> AnyElement {
         let id = profile.id;
         let selected = self.personal == Some(id);
         let disabled = self.popup.is_some() || self.picker_open;
         let kind = home_tile_meta(profile_kind(profile), self.home_order.is_pinned(id));
         let label = format!("{}, {kind}", profile.name);
+        let height = px(if compact { 50. } else { 62. });
         let button = home_recents_button(
             SharedString::from(format!("home-shelf-{id}")),
             selected,
@@ -919,22 +921,11 @@ impl Launcher {
             glass,
             cx,
         )
-        .flex_1()
+        .w_full()
         .min_w(px(0.))
-        .h(px(if compact { 50. } else { 62. }))
+        .h(height)
         .justify_start()
         .px_2()
-        .when(selected, |button| {
-            button.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(RECENTS_SELECTED_RAIL))
-                    .bg(p.accent),
-            )
-        })
         .child(
             row()
                 .gap_2()
@@ -953,7 +944,7 @@ impl Launcher {
                                 .w_full()
                                 .truncate()
                                 .font_semibold()
-                                .text_color(p.ink)
+                                .text_color(if disabled { p.muted } else { p.ink })
                                 .child(profile.name.clone()),
                         )
                         .child(
@@ -961,29 +952,48 @@ impl Launcher {
                                 .w_full()
                                 .truncate()
                                 .text_xs()
-                                .text_color(p.muted)
+                                .text_color(glass.recents_meta)
                                 .child(kind),
                         ),
                 ),
         );
-        self.control(
-            button,
-            SharedString::from(format!("home-shelf-{id}")),
-            &label,
-            Role::ListBoxOption,
-            disabled,
-            Some(selected),
-            cx,
-            move |this, window, cx| {
-                this.open_profile_from_home(
-                    id,
-                    SharedString::from(format!("home-shelf-{id}")).into(),
-                    window,
-                    cx,
+        let row = self
+            .control(
+                button,
+                SharedString::from(format!("home-shelf-{id}")),
+                &label,
+                Role::ListBoxOption,
+                disabled,
+                Some(selected),
+                cx,
+                move |this, window, cx| {
+                    this.open_profile_from_home(
+                        id,
+                        SharedString::from(format!("home-shelf-{id}")).into(),
+                        window,
+                        cx,
+                    )
+                },
+            )
+            .with_focus_outline(p.ink());
+        div()
+            .relative()
+            .flex_1()
+            .min_w(px(0.))
+            .h(height)
+            .child(row)
+            .when(selected, |tile| {
+                tile.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left_0()
+                        .w(px(RECENTS_SELECTED_RAIL))
+                        .bg(p.accent),
                 )
-            },
-        )
-        .with_focus_outline(p.ink())
+            })
+            .into_any_element()
     }
 
     fn open_home_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1023,6 +1033,11 @@ impl Launcher {
         self.tab = Tab::Overview;
         self.show_detail = true;
         self.focus_detail(window);
+        if !is_narrow(window) {
+            // The Home row unmounts; keep focus in the selected Library detail
+            // instead of dropping it on the removed shelf control.
+            self.detail_focus.focus(window);
+        }
         cx.notify();
     }
 
@@ -1238,7 +1253,7 @@ fn instance_count(count: usize) -> String {
 
 fn home_tile_meta(kind: String, pinned: bool) -> String {
     if pinned {
-        format!("{kind} · Pinned")
+        format!("Pinned · {kind}")
     } else {
         kind
     }
@@ -1338,6 +1353,7 @@ struct ShelfGlass {
     recents_selected: Rgba,
     recents_selected_hover: Rgba,
     recents_selected_pressed: Rgba,
+    recents_meta: Rgba,
 }
 
 impl ShelfGlass {
@@ -1359,12 +1375,13 @@ impl ShelfGlass {
                 meta: rgba(0xbec3ccff),
                 status_muted: rgba(0xffffff5c),
                 recents_border: rgba(0xffffff2e),
-                recents_rest: rgba(0xffffff10),
-                recents_hover: rgba(0xffffff24),
-                recents_pressed: rgba(0xffffff38),
-                recents_selected: rgba(0xffffff2e),
-                recents_selected_hover: rgba(0xffffff40),
-                recents_selected_pressed: rgba(0xffffff52),
+                recents_rest: rgba(0xffffff0f),
+                recents_hover: rgba(0xffffff1b),
+                recents_pressed: rgba(0xffffff28),
+                recents_selected: rgba(0xffffff25),
+                recents_selected_hover: rgba(0xffffff2e),
+                recents_selected_pressed: rgba(0xffffff35),
+                recents_meta: rgba(0xf0f2f5ff),
             }
         } else {
             Self {
@@ -1387,6 +1404,7 @@ impl ShelfGlass {
                 recents_selected: rgba(0xc8cbd0c8),
                 recents_selected_hover: rgba(0xbfc3c8da),
                 recents_selected_pressed: rgba(0xb4b8bfe8),
+                recents_meta: rgba(0x2f333aff),
             }
         }
     }
@@ -1432,7 +1450,6 @@ fn home_recents_button(
         .disabled(disabled)
         .small()
         .rounded(px(0.))
-        .relative()
         .border_1()
         .when(!disabled, |button| button.cursor_pointer())
 }
@@ -1580,7 +1597,7 @@ mod tests {
     fn pinned_metadata_stays_explicit_without_changing_the_rest_label() {
         assert_eq!(
             home_tile_meta("Minecraft 26.3 · Vanilla".to_owned(), true),
-            "Minecraft 26.3 · Vanilla · Pinned"
+            "Pinned · Minecraft 26.3 · Vanilla"
         );
         assert_eq!(
             home_tile_meta("Minecraft 26.3 · Vanilla".to_owned(), false),
@@ -1617,7 +1634,70 @@ mod tests {
                 idle[1], selected[0],
                 "hover must not read as the selected state in {preference:?}"
             );
-            assert_eq!(RECENTS_SELECTED_RAIL, 2.);
+        }
+    }
+
+    fn composite(fill: Rgba, backdrop: Rgba) -> [f32; 3] {
+        let alpha = fill.a;
+        [
+            fill.r * alpha + backdrop.r * (1. - alpha),
+            fill.g * alpha + backdrop.g * (1. - alpha),
+            fill.b * alpha + backdrop.b * (1. - alpha),
+        ]
+    }
+
+    fn luminance(rgb: [f32; 3]) -> f32 {
+        let linear = |channel: f32| {
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
+    }
+
+    fn contrast_ratio(foreground: Rgba, background: [f32; 3]) -> f32 {
+        let foreground = luminance([foreground.r, foreground.g, foreground.b]);
+        let background = luminance(background);
+        let (lighter, darker) = if foreground > background {
+            (foreground, background)
+        } else {
+            (background, foreground)
+        };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn recents_meta_keeps_contrast_over_the_brightest_supported_scene() {
+        for (preference, appearance, shelf) in [
+            (
+                Preference::Light,
+                gpui::WindowAppearance::Light,
+                rgba(0xb8b9bcff),
+            ),
+            (
+                Preference::Dark,
+                gpui::WindowAppearance::Dark,
+                rgba(0x434446ff),
+            ),
+        ] {
+            let glass = ShelfGlass::for_palette(Palette::read(preference, appearance));
+            let fills = [
+                glass.recents_rest,
+                glass.recents_hover,
+                glass.recents_pressed,
+                glass.recents_selected,
+                glass.recents_selected_hover,
+                glass.recents_selected_pressed,
+            ];
+            for fill in fills {
+                let ratio = contrast_ratio(glass.recents_meta, composite(fill, shelf));
+                assert!(
+                    ratio >= 4.5,
+                    "Recents metadata contrast {ratio:.2}:1 in {preference:?} over {fill:?}"
+                );
+            }
         }
     }
 }
