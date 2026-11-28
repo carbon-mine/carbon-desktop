@@ -114,6 +114,67 @@ fn empty_library_starts_flat_and_creates_the_folder_file_only_on_write() {
 }
 
 #[test]
+fn saved_folder_json_uses_stable_typed_kinds_and_scopes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let id = create(&root, "Typed");
+    add_world(&save_root(&root, id), "Home");
+    let snapshot = create_folder(&root, None, FolderScope::Instances, "Local");
+    let local = folder_id(&snapshot, "Local", FolderScope::Instances);
+    let world_folder = create_folder(&root, snapshot.revision, FolderScope::Worlds, "Adventure");
+    let adventure = folder_id(&world_folder, "Adventure", FolderScope::Worlds);
+    let filled = change_folders(
+        &root,
+        world_folder.revision,
+        FolderAction::File {
+            id: local,
+            members: vec![instance(id)],
+        },
+    )
+    .unwrap();
+    let filled = change_folders(
+        &root,
+        filled.revision,
+        FolderAction::File {
+            id: adventure,
+            members: vec![world(id, "Home")],
+        },
+    )
+    .unwrap();
+
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(folder_file(&root)).unwrap()).unwrap();
+    assert_eq!(stored["version"], 1);
+    assert!(stored["revision"].is_string());
+    let folders = stored["folders"].as_array().unwrap();
+    assert_eq!(folders.len(), 2);
+    let local = folders
+        .iter()
+        .find(|folder| folder["label"] == "Local")
+        .unwrap();
+    assert_eq!(local["scope"], "instances");
+    assert_eq!(local["members"][0]["kind"], "instance");
+    assert_eq!(local["members"][0]["id"], id.to_string());
+    let adventure = folders
+        .iter()
+        .find(|folder| folder["label"] == "Adventure")
+        .unwrap();
+    assert_eq!(adventure["scope"], "worlds");
+    assert_eq!(adventure["members"][0]["kind"], "world");
+    assert_eq!(adventure["members"][0]["instance"], id.to_string());
+    assert_eq!(adventure["members"][0]["directory"], "Home");
+    let adventure_view = filled
+        .folders
+        .iter()
+        .find(|folder| folder.id == adventure)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&adventure_view.members[0].resolution).unwrap(),
+        "resolved"
+    );
+}
+
+#[test]
 fn rename_move_and_remove_only_change_the_folder_file_and_never_instance_data() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
