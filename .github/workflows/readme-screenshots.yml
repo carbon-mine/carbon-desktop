@@ -10,13 +10,6 @@ permissions:
 jobs:
   capture:
     name: Capture README screenshots
-    runs-on: windows-2025
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Smoke
-        shell: bash
-        run: echo ok
+      - run: echo ok
