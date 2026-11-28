@@ -138,6 +138,11 @@ pub enum RunEnd {
     /// process terminated the remaining tree. The owner then confirmed the empty
     /// boundary. Whether the game saved is not claimed.
     StopForced,
+    /// The owner confirmed an empty tree after the root process exited on its
+    /// own, but that root reported a non-zero status. The sample ended without
+    /// settling its own work, so the record does not claim a completion; the
+    /// caller already has the concrete error.
+    SampleFailed,
     /// The owner could not settle either outcome, including a stop whose drain
     /// or post-launch checks did not complete. The caller already has the
     /// concrete error; this record does not replace it.
