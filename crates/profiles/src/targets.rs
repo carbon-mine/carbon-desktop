@@ -209,15 +209,29 @@ impl WorldScan {
 /// resolution uses the same scan as the launch-target chooser.
 #[derive(Clone, Debug)]
 pub(crate) struct SavePresence {
+    /// Every observed directory-entry name, including entries that are not
+    /// usable worlds. Absence from a complete scan is pruning evidence.
     pub(crate) present: HashSet<String>,
+    /// Ordinary save directories with an ordinary `level.dat`. Only these
+    /// resolve as a world for filing; observed-only names stay ambiguous.
+    pub(crate) worlds: HashSet<String>,
     /// False when at least one entry could not be inspected safely.
     pub(crate) complete: bool,
 }
 
 pub(crate) fn save_presence(root: &Path, id: Uuid) -> SavePresence {
     let scan = inventory(root, id);
+    let worlds = scan
+        .worlds
+        .iter()
+        .filter_map(|world| match &world.key {
+            TargetKey::World(directory) => Some(directory.clone()),
+            TargetKey::Server(_) => None,
+        })
+        .collect();
     SavePresence {
         present: scan.present,
+        worlds,
         complete: scan.issue.is_none(),
     }
 }

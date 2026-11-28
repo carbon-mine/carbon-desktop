@@ -49,9 +49,9 @@ Every change takes the revision the window observed. A stale write fails with "F
 
 Reads resolve every member without mutating the file:
 
-- **Resolved**: the instance exists; or the backing instance exists and a complete save scan observed the exact directory.
-- **Missing**: the instance no longer exists, or a complete save scan does not contain the directory.
-- **Unknown**: the save scan could not inspect every entry, so absence is not proven.
+- **Resolved**: the instance exists; or the backing instance exists and a complete save scan observed an ordinary save directory with an ordinary `level.dat` at the exact directory name.
+- **Missing**: the instance no longer exists, or a complete save scan has no entry with that name.
+- **Unknown**: the save scan could not inspect every entry, or an entry with that name exists but is linked, special, incomplete or over the scan limit. Absence is not proven, so it cannot be pruned.
 
 Missing and unknown references stay in the folder. The UI can show a recovery row with **Remove from folder**; unknown references disable that action until a complete refresh. A folder removal always works and never deletes the referenced item.
 
@@ -60,7 +60,7 @@ Missing and unknown references stay in the folder. The UI can show a recovery ro
 - With no folders, the library keeps its existing flat list. **New folder** is the only addition.
 - A folder with no members remains and says it is empty.
 - The ungrouped section is always available, including when every item is filed.
-- Duplicate labels in one scope are refused without writing the file. Labels are trimmed and may not contain control or bidirectional formatting characters.
+- Duplicate labels in one scope are refused without writing the file, compared case-insensitively by Unicode lowercase. Labels are trimmed and may not contain control or bidirectional formatting characters; the original spelling is kept for display.
 - Search is global: matching items appear even when their folder is collapsed.
 
 ## Planned presentation and keyboard

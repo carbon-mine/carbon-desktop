@@ -453,6 +453,36 @@ fn world_references_survive_renames_and_only_a_complete_scan_can_prune() {
     )
     .unwrap();
 
+    // An observed but unusable save entry cannot be filed, and an existing
+    // entry that stops being a usable world stays ambiguous rather than missing.
+    fs::create_dir(saves.join("Incomplete")).unwrap();
+    let observed = folders(&root).unwrap();
+    assert!(change_folders(
+        &root,
+        observed.revision,
+        FolderAction::File {
+            id: survival,
+            members: vec![world(id, "Incomplete")],
+        }
+    )
+    .is_err());
+    fs::remove_file(saves.join("Home/level.dat")).unwrap();
+    let ambiguous = folders(&root).unwrap();
+    assert_eq!(
+        member_resolutions(&ambiguous, survival),
+        vec![MemberResolution::Unknown]
+    );
+    assert!(change_folders(
+        &root,
+        ambiguous.revision,
+        FolderAction::PruneMissing {
+            id: survival,
+            members: vec![home.clone()],
+        }
+    )
+    .is_err());
+    fs::write(saves.join("Home/level.dat"), b"synthetic level").unwrap();
+
     // Renaming the physical directory is outside Carbon. The reference stays,
     // is reported missing, and is not silently dropped.
     fs::rename(saves.join("Home"), saves.join("Away")).unwrap();

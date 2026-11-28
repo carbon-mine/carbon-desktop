@@ -387,18 +387,13 @@ impl FolderIndex {
                             .into(),
                     );
                 }
-                let mut final_members: Vec<FolderMember> = self.folders[position]
+                let requested: HashSet<FolderMember> = members.iter().cloned().collect();
+                let retained = self.folders[position]
                     .members
                     .iter()
-                    .filter(|member| !members.contains(member))
-                    .cloned()
-                    .collect();
-                for member in &members {
-                    if !final_members.contains(member) {
-                        final_members.push(member.clone());
-                    }
-                }
-                if final_members.len() > MAX_MEMBERS_PER_FOLDER {
+                    .filter(|member| !requested.contains(*member))
+                    .count();
+                if retained + members.len() > MAX_MEMBERS_PER_FOLDER {
                     return Err("This folder already has 4096 items.".into());
                 }
                 for folder in self
@@ -406,7 +401,7 @@ impl FolderIndex {
                     .iter_mut()
                     .filter(|folder| folder.scope == scope)
                 {
-                    folder.members.retain(|member| !members.contains(member));
+                    folder.members.retain(|member| !requested.contains(member));
                 }
                 // The target folder was filtered above but never removed.
                 self.folders[position].members.extend(members);
@@ -516,8 +511,12 @@ impl<'a> Resolver<'a> {
                     .or_insert_with(|| save_presence(self.root, *instance));
                 if !scan.complete {
                     MemberResolution::Unknown
-                } else if scan.present.contains(directory) {
+                } else if scan.worlds.contains(directory) {
                     MemberResolution::Resolved
+                } else if scan.present.contains(directory) {
+                    // The entry exists but is not a usable world: linked,
+                    // special, incomplete or over the scan limit.
+                    MemberResolution::Unknown
                 } else {
                     MemberResolution::Missing
                 }
