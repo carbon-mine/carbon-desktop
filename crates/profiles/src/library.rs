@@ -280,6 +280,12 @@ mod tests {
         let root = temp.path();
         crate::seed_review_library(root, false).unwrap();
         let before = crate::list(root).unwrap();
+        let save = root
+            .join("instances-v1")
+            .join(before[0].id.to_string())
+            .join("game/saves/Keep/level.dat");
+        fs::create_dir_all(save.parent().unwrap()).unwrap();
+        fs::write(&save, b"preserve this save").unwrap();
         assert_eq!(library_mode(root).unwrap(), LibraryMode::Worlds);
         assert_eq!(
             set_library_mode(root, LibraryMode::Instances).unwrap(),
@@ -287,6 +293,7 @@ mod tests {
         );
         assert_eq!(library_mode(root).unwrap(), LibraryMode::Instances);
         assert_eq!(crate::list(root).unwrap(), before);
+        assert_eq!(fs::read(&save).unwrap(), b"preserve this save");
         let bytes = fs::read(root.join("personal/library-mode.json")).unwrap();
         assert!(bytes.windows(9).any(|window| window == b"instances"));
     }
