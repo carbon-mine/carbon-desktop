@@ -1,11 +1,16 @@
 //! Personal vanilla launch preferences. Profile display names never become paths.
 mod folder;
 pub mod icons;
+mod library;
 mod server;
 mod storage;
 mod targets;
 pub mod world_preview;
 pub use folder::open_game_folder;
+pub use library::{
+    library_mode, set_library_mode, world_library, LibraryMode, LibraryWorld, WorldBacking,
+    WorldId, WorldIssue, WorldLaunch, WorldLibrary,
+};
 pub use server::{
     server_profile, set_server_address, ServerAddress, ServerBindingUpdate, ServerJoinReadiness,
 };

@@ -39,6 +39,9 @@ add a row there and the matching table row below when a new UI state needs cover
 The default roots are `%LOCALAPPDATA%\CarbonDesktopGpui\dev-fixtures\<set>` on Windows and
 `$XDG_DATA_HOME/carbon-desktop-gpui/dev-fixtures/<set>` (or `~/.local/share/...`) on Linux. They are
 siblings of the ordinary `library-v1` root, never that root. `--fixture-root` must be absolute.
+Ordinary fixture previews start in Worlds. The legacy `--comparison-review`,
+`--temporary-review` and `CARBON_README_SCREENSHOT=1` capture paths explicitly select
+Instances so their established instance-first automation remains deterministic.
 The command is offline: it creates profiles, target preferences, inert save-folder markers, Home
 ordering and local Review tools only. It refuses a normal per-user data root, any ancestor or
 descendant of one (including a path spelled through a symlink or junction), a relative path, a path

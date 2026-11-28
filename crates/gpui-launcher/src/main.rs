@@ -19,7 +19,7 @@ mod theme;
 mod view;
 
 use anyhow::Context as _;
-use carbon_profiles::Profile;
+use carbon_profiles::{LibraryMode, LibraryWorld, Profile, WorldId, WorldLibrary};
 use carbon_store::{Action, InstanceId, InstanceView, Snapshot};
 use carbon_vanilla::{GameFilePlan, GameFilesPrepared};
 use data::{Activity, DataRoot, Inspection, size_label};
@@ -424,6 +424,13 @@ struct Launcher {
     account: Entity<account_panel::AccountPanel>,
     profiles: Vec<Profile>,
     profile_issue: Option<String>,
+    library_mode: LibraryMode,
+    library_mode_issue: Option<String>,
+    worlds: Option<WorldLibrary>,
+    worlds_issue: Option<String>,
+    worlds_loading: bool,
+    worlds_request: Option<Uuid>,
+    selected_world: Option<WorldId>,
     fixtures: Option<Snapshot>,
     fixture_issue: Option<String>,
     search: Entity<InputState>,
@@ -483,6 +490,9 @@ impl Launcher {
     ) -> Self {
         let profiles = carbon_profiles::list(&root.path);
         let fixtures = carbon_store::snapshot(&root.path);
+        let mode = carbon_profiles::library_mode(&root.path);
+        let library_mode_issue = mode.as_ref().err().cloned();
+        let library_mode = mode.unwrap_or_default();
         let personal = profiles
             .as_ref()
             .ok()
@@ -490,7 +500,13 @@ impl Launcher {
             .map(|profile| profile.id);
         let profile_issue = profiles.as_ref().err().cloned();
         let fixture_issue = fixtures.as_ref().err().cloned();
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find an instance"));
+        let search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(if library_mode == LibraryMode::Worlds {
+                "Find a world"
+            } else {
+                "Find an instance"
+            })
+        });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
         cx.subscribe_in(
             &search,
@@ -507,6 +523,20 @@ impl Launcher {
                             .map(|item| item.id)
                         {
                             this.choose_fixture(id);
+                        }
+                    } else if this.library_mode == LibraryMode::Worlds {
+                        if let Some(id) = this
+                            .worlds
+                            .as_ref()
+                            .and_then(|worlds| {
+                                worlds.worlds.iter().find(|world| {
+                                    world.display_name.to_lowercase().contains(&query)
+                                        || world.instance_name.to_lowercase().contains(&query)
+                                })
+                            })
+                            .map(|world| world.id.clone())
+                        {
+                            this.select_world(id, cx);
                         }
                     } else if let Some(id) = this
                         .profiles
@@ -576,6 +606,13 @@ impl Launcher {
             account,
             profiles: profiles.unwrap_or_default(),
             profile_issue,
+            library_mode,
+            library_mode_issue,
+            worlds: None,
+            worlds_issue: None,
+            worlds_loading: false,
+            worlds_request: None,
+            selected_world: None,
             fixtures: fixtures.ok(),
             fixture_issue,
             search,
@@ -627,6 +664,8 @@ impl Launcher {
             launcher.choose_personal(id, cx);
             launcher.show_detail = false;
         }
+        launcher.load_worlds(cx);
+        launcher.show_detail = false;
         #[cfg(target_os = "linux")]
         progress::observe_linux_motion(cx);
         launcher
@@ -659,6 +698,120 @@ impl Launcher {
             .iter()
             .find(|item| item.id == self.fixture)
     }
+
+    fn selected_world(&self) -> Option<&LibraryWorld> {
+        let id = self.selected_world.as_ref()?;
+        self.worlds.as_ref()?.get(id)
+    }
+
+    fn load_worlds(&mut self, cx: &mut Context<Self>) {
+        let request = Uuid::new_v4();
+        self.worlds_request = Some(request);
+        self.worlds_loading = true;
+        self.worlds_issue = None;
+        let path = self.root.path.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { carbon_profiles::world_library(&path) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                if this.worlds_request != Some(request) {
+                    return;
+                }
+                this.worlds_loading = false;
+                match result {
+                    Ok(worlds) => {
+                        this.worlds = Some(worlds);
+                        this.worlds_issue = None;
+                        if this.selected_world.as_ref().is_some_and(|id| {
+                            this.worlds
+                                .as_ref()
+                                .and_then(|worlds| worlds.get(id))
+                                .is_none()
+                        }) {
+                            this.selected_world = None;
+                        }
+                        this.ensure_world_selection(cx);
+                    }
+                    Err(error) => this.worlds_issue = Some(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Worlds is the initial presentation. Prefer a real readable world and
+    /// select its backing instance without changing any saved data.
+    fn ensure_world_selection(&mut self, cx: &mut Context<Self>) {
+        if self.library_mode != LibraryMode::Worlds {
+            return;
+        }
+        if self.selected_world().is_none() {
+            let recommended = self
+                .worlds
+                .as_ref()
+                .and_then(WorldLibrary::recommended)
+                .map(|world| world.id.clone());
+            self.selected_world = recommended;
+        }
+        let Some(instance) = self.selected_world().map(|world| world.id.instance) else {
+            return;
+        };
+        if self.personal != Some(instance) {
+            self.choose_personal(instance, cx);
+        }
+    }
+
+    fn select_world(&mut self, id: WorldId, cx: &mut Context<Self>) {
+        let Some(world) = self
+            .worlds
+            .as_ref()
+            .and_then(|worlds| worlds.get(&id))
+            .cloned()
+        else {
+            self.message = "This world is no longer available. Refresh the library.".to_owned();
+            self.selected_world = None;
+            cx.notify();
+            return;
+        };
+        let instance = id.instance;
+        self.choose_personal(instance, cx);
+        self.selected_world = Some(id);
+        self.remember_recent(instance);
+        self.tab = Tab::Overview;
+        self.message = format!(
+            "Opened {}. Direct world launch remains unavailable until protected launch and entry are qualified.",
+            world.display_name
+        );
+        cx.notify();
+    }
+
+    fn apply_library_mode(&mut self, mode: LibraryMode, cx: &mut Context<Self>) {
+        self.library_mode = mode;
+        if mode == LibraryMode::Worlds {
+            self.ensure_world_selection(cx);
+        }
+        self.message = match mode {
+            LibraryMode::Worlds => {
+                "Library mode: Worlds. Existing instances and saves are unchanged.".to_owned()
+            }
+            LibraryMode::Instances => {
+                "Library mode: Instances. Existing instances and saves are unchanged.".to_owned()
+            }
+        };
+        cx.notify();
+    }
+
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.popup.is_some() || self.picker_open {
+            return;
+        }
+        popup::open(self, popup::Kind::Settings(self.library_mode), window, cx);
+    }
+
     fn switch_view(&mut self, review: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.show_surface(Surface::Library, window, cx);
         self.tab = Tab::Overview;
@@ -888,6 +1041,13 @@ impl Launcher {
         if self.personal != Some(id) || self.review {
             self.tab = Tab::Overview;
             self.diagnostics_open = false;
+        }
+        if self
+            .selected_world
+            .as_ref()
+            .is_some_and(|world| world.instance != id)
+        {
+            self.selected_world = None;
         }
         self.personal = Some(id);
         self.review = false;
@@ -1282,6 +1442,7 @@ impl Launcher {
                         self.profiles = profiles;
                         self.home_order.retain_profiles(&self.profiles);
                         self.profile_issue = None;
+                        self.load_worlds(cx);
                         if self.selected_profile().is_none() {
                             self.personal = self.profiles.first().map(|profile| profile.id);
                         }
@@ -1803,6 +1964,7 @@ impl Launcher {
         let id = updated.profile.id;
         self.last_activity = Some(ActivityTarget::Personal(id));
         self.refresh_server_binding(updated.profile);
+        self.load_worlds(cx);
         self.targets.remove(&id);
         self.load_targets(id, cx);
         cx.notify();
@@ -1839,6 +2001,7 @@ impl Launcher {
         self.setup.remove(&id);
         self.targets.clear();
         self.profiles = profiles;
+        self.load_worlds(cx);
         self.last_activity = Some(ActivityTarget::Personal(id));
         self.message = "Instance saved.".to_owned();
         self.choose_personal(id, cx);
@@ -2041,6 +2204,15 @@ fn main() -> anyhow::Result<()> {
         };
         (DataRoot::open(temporary, seed, comparison)?, start)
     };
+    // Existing comparison and README-capture harnesses are instance-first and
+    // operate on disposable or fixture-owned roots. Keep their established
+    // entry state deterministic; ordinary and fixture-preview launches retain
+    // the Worlds default.
+    if (comparison || temporary || screenshot_mode)
+        && let Err(error) = carbon_profiles::set_library_mode(&data.path, LibraryMode::Instances)
+    {
+        eprintln!("Could not set the instance-first automation mode: {error}");
+    }
     let app = Application::new().with_assets(icons::Assets);
     app.run(move |cx: &mut App| {
         gpui_component::init(cx);

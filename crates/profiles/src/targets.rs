@@ -421,6 +421,26 @@ fn load(root: &Path, id: Uuid, library: &crate::Library) -> Result<LoadedTargets
     })
 }
 
+pub(crate) struct WorldSnapshot {
+    pub worlds: Vec<LocalWorld>,
+    pub selected: Option<TargetKey>,
+    pub issue: Option<String>,
+}
+
+/// Read local worlds and their launcher labels without applying the dedicated
+/// server-bound restriction. World-first presentation may inspect those saves,
+/// but their existing instance tools and launch policy remain unchanged.
+pub(crate) fn world_snapshot(root: &Path, id: Uuid) -> Result<WorldSnapshot, String> {
+    let directory = root.join("personal");
+    let saved = read_preferences(&directory.join(format!("targets-{id}.json")))?;
+    let targets = saved.snapshot(inventory(root, id));
+    Ok(WorldSnapshot {
+        worlds: targets.worlds,
+        selected: targets.selected,
+        issue: targets.world_issue,
+    })
+}
+
 /// List an instance's verified directory entries and saved destinations without contacting servers.
 pub fn instance_targets(root: &Path, id: Uuid) -> Result<InstanceTargets, String> {
     let (_lock, library) = storage::open(root)?;

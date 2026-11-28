@@ -607,6 +607,17 @@ impl Launcher {
         glass: ShelfGlass,
         cx: &Context<Self>,
     ) -> gpui::Div {
+        if self.library_mode == LibraryMode::Worlds {
+            let world = self.selected_world().cloned().or_else(|| {
+                self.worlds
+                    .as_ref()
+                    .and_then(WorldLibrary::recommended)
+                    .cloned()
+            });
+            if let Some(world) = world {
+                return self.home_world_launchbox(world, p, glass, cx);
+            }
+        }
         let Some(profile) = self.selected_profile().cloned() else {
             return col()
                 .gap(px(10.))
@@ -814,6 +825,134 @@ impl Launcher {
             )
     }
 
+    fn home_world_launchbox(
+        &self,
+        world: LibraryWorld,
+        p: Palette,
+        glass: ShelfGlass,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let source = match world.backing {
+            carbon_profiles::WorldBacking::Local => "Local",
+            carbon_profiles::WorldBacking::Imported => "Imported",
+            carbon_profiles::WorldBacking::ServerBound => "Server-bound",
+            carbon_profiles::WorldBacking::Managed => "Managed",
+        };
+        let selected = self.selected_world.as_ref() == Some(&world.id);
+        let eyebrow = if selected {
+            "Selected world"
+        } else {
+            "Recommended world"
+        };
+        let metadata = format!(
+            "{} · {} · Minecraft {}{}",
+            world.instance_name,
+            source,
+            world.version,
+            world
+                .loader
+                .as_ref()
+                .map_or_else(String::new, |loader| format!(" · {loader}"))
+        );
+        let icon = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id == world.id.instance)
+            .map_or(Icon::Instance, |profile| {
+                Icon::Builtin(carbon_profiles::icons::displayed(profile))
+            });
+        let busy = self.popup.is_some() || self.picker_open;
+        let instance = world.id.instance;
+        col()
+            .gap(px(10.))
+            .child(
+                col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_medium()
+                            .text_color(glass.eyebrow)
+                            .child(eyebrow),
+                    )
+                    .child(
+                        row()
+                            .w_full()
+                            .min_w_0()
+                            .gap_2()
+                            .child(icon.render(px(22.), p.ink))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(18.))
+                                    .font_semibold()
+                                    .truncate()
+                                    .child(world.display_name.clone()),
+                            ),
+                    )
+                    .child(div().text_xs().text_color(glass.meta).child(metadata)),
+            )
+            .child(div().h(px(1.)).w_full().bg(glass.divider))
+            .child(
+                row()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_none().size(px(6.)).bg(glass.status_muted))
+                    .child(self.accessibility.text(
+                        div()
+                            .text_xs()
+                            .text_color(glass.meta)
+                            .child("Direct world launch is unavailable until protected launch is qualified."),
+                        "home-world-readiness",
+                        "Direct world launch is unavailable until protected launch is qualified.",
+                        Role::Label,
+                    )),
+            )
+            .child(
+                row()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(self.home_launchbox_command(
+                        p,
+                        glass,
+                        "home-world-open",
+                        "Open world",
+                        true,
+                        busy,
+                        cx,
+                        |this, window, cx| this.open_selected_world_from_home(window, cx),
+                    ))
+                    .child(self.home_launchbox_command(
+                        p,
+                        glass,
+                        "home-world-instance",
+                        "Open instance",
+                        false,
+                        busy,
+                        cx,
+                        move |this, window, cx| {
+                            this.open_profile_from_home(
+                                instance,
+                                "home-world-instance".into(),
+                                window,
+                                cx,
+                            )
+                        },
+                    ))
+                    .child(self.home_launchbox_command(
+                        p,
+                        glass,
+                        "home-world-library",
+                        "All worlds",
+                        false,
+                        busy,
+                        cx,
+                        |this, window, cx| this.open_library(window, cx),
+                    )),
+            )
+    }
+
     fn home_shelf(
         &self,
         p: Palette,
@@ -995,6 +1134,24 @@ impl Launcher {
         if let Some(id) = self.personal {
             self.open_profile_from_home(id, "home-open".into(), window, cx);
         }
+    }
+
+    fn open_selected_world_from_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(world) = self.selected_world().cloned().or_else(|| {
+            self.worlds
+                .as_ref()
+                .and_then(WorldLibrary::recommended)
+                .cloned()
+        }) else {
+            self.open_library(window, cx);
+            return;
+        };
+        let id = world.id.clone();
+        self.show_surface_from(Surface::Library, Some("home-world-open".into()), window, cx);
+        self.select_world(id, cx);
+        self.show_detail = true;
+        self.focus_detail(window);
+        cx.notify();
     }
 
     fn open_profile_from_home(
