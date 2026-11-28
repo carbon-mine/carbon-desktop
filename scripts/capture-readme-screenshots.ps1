@@ -399,6 +399,23 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ("carbon-readme-screenshots-" + [Gu
 $fixtureRoot = Join-Path $work 'fixture-root'
 $readyFile = Join-Path $work 'ready.txt'
 [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+
+# Seed fixtures first (seed-only) so we can write deterministic appearance before launch.
+$seedPsi = [Diagnostics.ProcessStartInfo]::new($exe)
+$seedPsi.UseShellExecute = $false
+$seedPsi.WorkingDirectory = Split-Path -Parent $exe
+$seedPsi.ArgumentList.Add('--seed-fixtures')
+$seedPsi.ArgumentList.Add('default')
+$seedPsi.ArgumentList.Add('--fixture-root')
+$seedPsi.ArgumentList.Add($fixtureRoot)
+$seedPsi.ArgumentList.Add('--seed-only')
+$seedPsi.Environment['GPUI_DISABLE_DIRECT_COMPOSITION'] = '1'
+$seedProc = [Diagnostics.Process]::Start($seedPsi)
+$seedProc.WaitForExit()
+if ($seedProc.ExitCode -ne 0) {
+    throw "Fixture seed failed with exit code $($seedProc.ExitCode)"
+}
+
 # Force deterministic dark appearance in the disposable fixture root only.
 Set-Content -LiteralPath (Join-Path $fixtureRoot 'shell-appearance.json') -Value '"dark"' -Encoding utf8
 
@@ -407,8 +424,6 @@ try {
     $psi = [Diagnostics.ProcessStartInfo]::new($exe)
     $psi.UseShellExecute = $false
     $psi.WorkingDirectory = Split-Path -Parent $exe
-    $psi.ArgumentList.Add('--seed-fixtures')
-    $psi.ArgumentList.Add('default')
     $psi.ArgumentList.Add('--fixture-root')
     $psi.ArgumentList.Add($fixtureRoot)
     $psi.ArgumentList.Add('--ready-file')
