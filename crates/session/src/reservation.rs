@@ -321,6 +321,20 @@ mod tests {
         ));
     }
 
+    /// Fails with the actual outcome so an intermittent run says whether the
+    /// fence was granted, busy, or a different error, without relaxing it.
+    #[track_caller]
+    fn assert_fenced(outcome: Result<RunReservation, SessionError>) {
+        let observed = match &outcome {
+            Ok(_) => "Ok(a reservation was granted)".to_owned(),
+            Err(error) => format!("Err({error:?})"),
+        };
+        assert!(
+            matches!(outcome, Err(SessionError::RecoveryRequired)),
+            "the pending run record must stay fenced, got {observed}"
+        );
+    }
+
     #[test]
     fn legacy_and_damaged_records_stay_fenced() {
         let owned = tempfile::tempdir().unwrap();
@@ -329,16 +343,10 @@ mod tests {
             format!("carbon-desktop-sample-run-v1\n{}\n", Uuid::new_v4()),
         )
         .unwrap();
-        assert!(matches!(
-            reserve(owned.path()),
-            Err(SessionError::RecoveryRequired)
-        ));
+        assert_fenced(reserve(owned.path()));
         fs::remove_file(owned.path().join(LEGACY_PENDING)).unwrap();
         fs::write(owned.path().join(PENDING), b"not owned").unwrap();
-        assert!(matches!(
-            reserve(owned.path()),
-            Err(SessionError::RecoveryRequired)
-        ));
+        assert_fenced(reserve(owned.path()));
         assert!(owned.path().join(PENDING).exists());
     }
 
