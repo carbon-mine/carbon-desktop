@@ -20,7 +20,9 @@ All four conditions are required:
 2. a debug/test build (`cfg!(debug_assertions)`);
 3. the explicit `--dev-account-simulation` startup flag;
 4. an absolute `--fixture-root` that passes the existing dev-fixture ownership
-   and ordinary-root checks.
+   and ordinary-root checks and is an existing seeded dev-fixture root. The
+   account module additionally requires its own provenance marker before it
+   creates a synthetic vault.
 
 There is no environment variable, stored setting or release/package switch. A
 non-feature build rejects the flag. A feature-enabled release build rejects the
@@ -84,9 +86,9 @@ shown; fixture instances remain honestly **Setup required**.
 3. **Approve** — **Approve simulated sign-in** completes the ordinary device
    poll/exchange path through Xbox, Minecraft, entitlement and profile replies.
    The account appears as **Active · Verified**.
-4. **Two personas** — add the other persona with **Add test account** (the
-   button label becomes **Start simulated sign-in**). Both rows are independent
-   and switchable.
+4. **Two personas** — add the other persona by selecting
+   **Use Coast (test)** and then **Start simulated sign-in**. Both rows are
+   independent and switchable.
 5. **Switch / refresh** — use the ordinary **Switch** and **Refresh account**
    buttons. A still-current verification switches without a provider call;
    refresh runs the simulated refresh exchange and rotates the synthetic token.
@@ -104,8 +106,8 @@ shown; fixture instances remain honestly **Setup required**.
    instances/saves untouched.
 10. **Restart / restore** — close and reopen the same `--fixture-root`. The
     saved personas restore through the simulated refresh path. Scenario controls
-    reset to granted on a new process; saved accounts and the selected persona
-    persist in the isolated test root.
+    and the next-sign-in persona reset to granted / Forest on a new process;
+    saved accounts and the active selection persist in the isolated test root.
 
 Synthetic codes are labelled **Synthetic sign-in code** and never ask for a
 Microsoft password, token or real device code. The visible account names are
@@ -138,7 +140,9 @@ cargo test --locked -p carbon-desktop-gpui
 Focused coverage:
 
 - `simulation::tests` exercises pending, approve, decline, expiry, two personas,
-  entitlement denial, refresh revocation and the absence of a network client.
+  entitlement denial, refresh revocation and the in-process transport. The
+  simulation never constructs the HTTP client; the guarantee is structural
+  through `DeviceClient::with_transport`, not a live-network assertion.
 - `desktop::tests::simulated_accounts_sign_in_switch_restore_deny_and_remove`
   drives the real `Accounts` worker through sign-in, switch, restart, denial,
   sign-out and denied `prepare_launch`.

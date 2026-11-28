@@ -371,6 +371,18 @@ struct SimulatedCredentialFile {
     credentials: BTreeMap<String, String>,
 }
 
+#[cfg(feature = "dev-simulation")]
+fn simulated_file_linked(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    metadata.is_symlink()
+}
+
 /// File-backed synthetic credentials used only by the developer simulation.
 /// The file is inside the guarded fixture root and is never the OS vault.
 #[cfg(feature = "dev-simulation")]
@@ -398,7 +410,7 @@ impl SimulatedCredentials {
             Err(_) => return Err(()),
         };
         if !metadata.is_file()
-            || metadata.is_symlink()
+            || simulated_file_linked(&metadata)
             || metadata.len() > SIMULATED_CREDENTIALS_LIMIT
         {
             return Err(());

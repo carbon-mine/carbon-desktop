@@ -2007,6 +2007,21 @@ fn argument_value(
 }
 
 #[cfg(feature = "dev-account-simulation")]
+fn simulation_startup_precheck() -> anyhow::Result<()> {
+    if !cfg!(debug_assertions) {
+        anyhow::bail!("--dev-account-simulation is restricted to a debug or test build.");
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "dev-account-simulation"))]
+fn simulation_startup_precheck() -> anyhow::Result<()> {
+    anyhow::bail!(
+        "--dev-account-simulation requires a build with the non-default dev-account-simulation feature."
+    )
+}
+
+#[cfg(feature = "dev-account-simulation")]
 fn simulated_account_mode(root: &std::path::Path) -> anyhow::Result<AccountMode> {
     let session = dev_account_simulation::prepare(root)?;
     Ok(AccountMode::simulated(session))
@@ -2056,6 +2071,7 @@ fn main() -> anyhow::Result<()> {
         );
     }
     if dev_account_simulation {
+        simulation_startup_precheck()?;
         if comparison || temporary || seed {
             anyhow::bail!(
                 "--dev-account-simulation is separate from --comparison-review, --temporary-review and --seed-review."

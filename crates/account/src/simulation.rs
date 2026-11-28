@@ -11,10 +11,12 @@ use crate::{
     transport::{Request, Response, Transport},
     AccountError,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::BTreeMap,
+    fs,
+    path::Path,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
@@ -24,11 +26,82 @@ use zeroize::Zeroizing;
 /// A fixed public client identifier used only by the developer simulation.
 pub const CLIENT_ID: Uuid = Uuid::from_u128(0x5eed_1120_0000_4000_8000_0000_0000_0001);
 
+/// Provenance marker written by the guarded GPUI startup.
+pub const ROOT_MARKER_FILE: &str = "dev-account-simulation.json";
+pub const ROOT_MARKER_KIND: &str = "carbon-desktop-dev-account-simulation";
+pub const ROOT_MARKER_VERSION: u32 = 1;
+const ROOT_MARKER_LIMIT: u64 = 16 * 1024;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RootMarker {
+    version: u32,
+    kind: String,
+    client_id: Uuid,
+}
+
+fn marker_is_linked(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    metadata.is_symlink()
+}
+
+fn read_root_marker(root: &Path) -> Result<RootMarker, ()> {
+    let path = root.join(ROOT_MARKER_FILE);
+    let metadata = fs::symlink_metadata(&path).map_err(|_| ())?;
+    if marker_is_linked(&metadata) || !metadata.is_file() || metadata.len() > ROOT_MARKER_LIMIT {
+        return Err(());
+    }
+    let bytes = fs::read(&path).map_err(|_| ())?;
+    if bytes.len() as u64 > ROOT_MARKER_LIMIT {
+        return Err(());
+    }
+    let marker: RootMarker = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    if marker.version != ROOT_MARKER_VERSION
+        || marker.kind != ROOT_MARKER_KIND
+        || marker.client_id != CLIENT_ID
+    {
+        return Err(());
+    }
+    Ok(marker)
+}
+
+/// Whether a directory already carries this simulation's provenance marker.
+pub fn root_is_marked(root: &Path) -> bool {
+    read_root_marker(root).is_ok()
+}
+
+/// Write or validate the marker for a guarded simulation account root.
+/// Callers still own the decision to use the developer feature.
+pub fn mark_root(root: &Path) -> Result<(), String> {
+    match read_root_marker(root) {
+        Ok(_) => Ok(()),
+        Err(()) if !root.join(ROOT_MARKER_FILE).exists() => {
+            let marker = RootMarker {
+                version: ROOT_MARKER_VERSION,
+                kind: ROOT_MARKER_KIND.to_owned(),
+                client_id: CLIENT_ID,
+            };
+            let bytes = serde_json::to_vec_pretty(&marker)
+                .map_err(|_| "The developer account marker could not be serialized.".to_owned())?;
+            fs::write(root.join(ROOT_MARKER_FILE), bytes)
+                .map_err(|_| "The developer account marker could not be written.".to_owned())
+        }
+        Err(()) => {
+            Err("The developer account root has an unreadable or unsupported marker.".to_owned())
+        }
+    }
+}
+
 const DEVICE_LOGIN_URI: &str = "https://www.microsoft.com/devicelogin";
 const TOKEN_LIFETIME: u64 = 3600;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Persona {
     Forest,
     Coast,
@@ -73,16 +146,14 @@ impl Persona {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EntitlementState {
     Granted,
     Denied,
     Revoked,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SimulationPhase {
     Idle,
     AwaitingApproval,
@@ -218,6 +289,11 @@ impl Simulation {
 
     pub fn reset(&self) {
         *self.state() = State::new();
+    }
+
+    /// Drop an outstanding challenge when the account service cancels it.
+    pub fn cancel_pending(&self) -> bool {
+        self.state().pending.take().is_some()
     }
 
     pub(crate) fn transport(&self) -> impl Transport + 'static {

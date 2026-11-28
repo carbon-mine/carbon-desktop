@@ -66,6 +66,8 @@ enum Backend {
     Real,
     #[cfg(feature = "dev-simulation")]
     Simulated(crate::simulation::Simulation),
+    #[cfg(feature = "dev-simulation")]
+    SimulatedUnavailable,
 }
 
 struct Owner(Arc<Core>);
@@ -300,17 +302,29 @@ impl Core {
             Backend::Simulated(simulation) => {
                 DeviceClient::with_transport(client_id, simulation.transport())
             }
+            #[cfg(feature = "dev-simulation")]
+            Backend::SimulatedUnavailable => Err(AccountError::TemporarilyUnavailable),
         }
     }
 
     fn is_simulated(&self) -> bool {
         #[cfg(feature = "dev-simulation")]
         {
-            matches!(self.backend, Backend::Simulated(_))
+            matches!(
+                self.backend,
+                Backend::Simulated(_) | Backend::SimulatedUnavailable
+            )
         }
         #[cfg(not(feature = "dev-simulation"))]
         {
             false
+        }
+    }
+
+    fn cancel_simulation(&self) {
+        #[cfg(feature = "dev-simulation")]
+        if let Backend::Simulated(simulation) = &self.backend {
+            simulation.cancel_pending();
         }
     }
 
@@ -371,6 +385,20 @@ impl Accounts {
     /// only after the GPUI developer startup gates accept a fixture root.
     #[cfg(feature = "dev-simulation")]
     pub fn simulated(root: &Path, simulation: crate::simulation::Simulation) -> Self {
+        if !crate::simulation::root_is_marked(root) {
+            let accounts = Self::start_backend(
+                Some(root.to_path_buf()),
+                None,
+                None,
+                None,
+                Backend::SimulatedUnavailable,
+            );
+            accounts.owner.0.state().finish(
+                AccountState::Unavailable,
+                "The developer simulation root is not marked. Start it through the guarded GPUI developer flag.",
+            );
+            return accounts;
+        }
         Self::start_backend(
             Some(root.to_path_buf()),
             None,
@@ -432,7 +460,10 @@ impl Accounts {
     pub fn is_simulated(&self) -> bool {
         #[cfg(feature = "dev-simulation")]
         {
-            matches!(self.owner.0.backend, Backend::Simulated(_))
+            matches!(
+                self.owner.0.backend,
+                Backend::Simulated(_) | Backend::SimulatedUnavailable
+            )
         }
         #[cfg(not(feature = "dev-simulation"))]
         {
@@ -445,7 +476,7 @@ impl Accounts {
     pub fn simulation(&self) -> Option<&crate::simulation::Simulation> {
         match &self.owner.0.backend {
             Backend::Simulated(simulation) => Some(simulation),
-            Backend::Real => None,
+            Backend::Real | Backend::SimulatedUnavailable => None,
         }
     }
 
@@ -591,6 +622,7 @@ impl Accounts {
         let core = &self.owner.0;
         let mut state = core.state();
         if state.cancellable() {
+            core.cancel_simulation();
             let status = state.stable_status();
             state.finish(status, AccountError::Cancelled.to_string());
             core.changed.notify_one();
@@ -682,7 +714,7 @@ fn run(core: &Core, root: Option<&Path>, client_id: Uuid) {
     let vault = root.map(|root| match &core.backend {
         Backend::Real => Vault::new(root, client_id),
         #[cfg(feature = "dev-simulation")]
-        Backend::Simulated(_) => Vault::simulated(root, client_id),
+        Backend::Simulated(_) | Backend::SimulatedUnavailable => Vault::simulated(root, client_id),
     });
     let vault = vault.as_ref();
     loop {

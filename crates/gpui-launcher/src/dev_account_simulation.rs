@@ -10,27 +10,13 @@
 
 use crate::dev_fixtures;
 use anyhow::{Context as _, Result, bail};
-use carbon_account::simulation::Simulation;
-use serde::{Deserialize, Serialize};
+use carbon_account::simulation::{ROOT_MARKER_FILE, Simulation, mark_root, root_is_marked};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use uuid::Uuid;
 
 pub(crate) const ACCOUNT_DIR: &str = "dev-account-simulation";
-const MARKER_FILE: &str = "dev-account-simulation.json";
-const MARKER_VERSION: u32 = 1;
-const MARKER_KIND: &str = "carbon-desktop-dev-account-simulation";
-const MARKER_LIMIT: u64 = 16 * 1024;
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Marker {
-    version: u32,
-    kind: String,
-    client_id: Uuid,
-}
 
 pub struct Session {
     pub account_root: PathBuf,
@@ -86,59 +72,16 @@ pub(crate) fn prepare(root: &Path) -> Result<Session> {
             account_root.display()
         )
     })?;
-    let marker_path = account_root.join(MARKER_FILE);
-    let marker = Marker {
-        version: MARKER_VERSION,
-        kind: MARKER_KIND.to_owned(),
-        client_id: carbon_account::simulation::CLIENT_ID,
-    };
-    match fs::symlink_metadata(&marker_path) {
-        Ok(metadata) => {
-            if !metadata.is_file() || metadata.is_symlink() || metadata.len() > MARKER_LIMIT {
-                bail!(
-                    "The developer account marker at {} is not a small regular file. Preserve the directory.",
-                    marker_path.display()
-                );
-            }
-            let bytes = fs::read(&marker_path).with_context(|| {
-                format!(
-                    "Read the developer account marker at {}",
-                    marker_path.display()
-                )
-            })?;
-            let existing: Marker = serde_json::from_slice(&bytes).with_context(|| {
-                format!(
-                    "The developer account marker at {} is unreadable. Preserve the directory.",
-                    marker_path.display()
-                )
-            })?;
-            if existing.version != MARKER_VERSION
-                || existing.kind != MARKER_KIND
-                || existing.client_id != carbon_account::simulation::CLIENT_ID
-            {
-                bail!(
-                    "The developer account root uses a different or unsupported marker. Choose a dedicated root."
-                );
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let bytes = serde_json::to_vec_pretty(&marker)
-                .context("Serialize the developer account marker")?;
-            fs::write(&marker_path, bytes).with_context(|| {
-                format!(
-                    "Write the developer account marker at {}",
-                    marker_path.display()
-                )
-            })?;
-        }
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "Inspect the developer account marker at {}",
-                    marker_path.display()
-                )
-            });
-        }
+    mark_root(&account_root)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| {
+            format!(
+                "Validate the developer account marker at {}",
+                account_root.join(ROOT_MARKER_FILE).display()
+            )
+        })?;
+    if !root_is_marked(&account_root) {
+        bail!("The developer account root marker could not be confirmed.");
     }
     Ok(Session {
         account_root,
@@ -175,7 +118,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let session = prepare(root.path()).unwrap();
         assert!(session.account_root.ends_with(ACCOUNT_DIR));
-        assert!(session.account_root.join(MARKER_FILE).is_file());
+        assert!(session.account_root.join(ROOT_MARKER_FILE).is_file());
         let reopened = prepare(root.path()).unwrap();
         assert_eq!(reopened.account_root, session.account_root);
         assert!(
@@ -197,7 +140,7 @@ mod tests {
     fn an_unsupported_marker_is_refused_without_deleting_anything() {
         let root = tempfile::tempdir().unwrap();
         let session = prepare(root.path()).unwrap();
-        let marker = session.account_root.join(MARKER_FILE);
+        let marker = session.account_root.join(ROOT_MARKER_FILE);
         let mut value: serde_json::Value =
             serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
         value["version"] = serde_json::json!(999);

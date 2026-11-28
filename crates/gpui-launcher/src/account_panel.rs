@@ -141,6 +141,14 @@ impl AccountPanel {
     }
 
     pub fn open_minecraft_launcher(&mut self, cx: &mut Context<Self>) {
+        if self.is_simulated() {
+            self.launcher_error = Some(
+                "The developer simulation does not open the Minecraft Launcher or a download page."
+                    .to_owned(),
+            );
+            cx.notify();
+            return;
+        }
         if self.launcher_opening {
             return;
         }
@@ -409,6 +417,7 @@ mod tests {
     #[test]
     fn a_simulated_panel_is_marked_as_a_test_account_and_offers_no_client_setting() {
         let root = tempfile::tempdir().unwrap();
+        carbon_account::simulation::mark_root(root.path()).unwrap();
         let panel =
             AccountPanel::new_simulated(root.path(), carbon_account::simulation::Simulation::new());
         assert!(panel.is_simulated());

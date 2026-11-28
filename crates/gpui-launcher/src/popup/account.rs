@@ -526,6 +526,17 @@ impl Popup {
                 Role::Status,
             ))
             .child(
+                self.accessibility.text(
+                    div()
+                        .text_sm()
+                        .text_color(p.muted)
+                        .child("Entitlement controls apply to the next sign-in persona above."),
+                    "account-simulation-entitlement-scope",
+                    "Entitlement controls apply to the next sign-in persona above.",
+                    Role::Label,
+                ),
+            )
+            .child(
                 div()
                     .flex()
                     .flex_wrap()

@@ -562,13 +562,30 @@ fn failed_vault_removals_preserve_denials_and_block_only_affected_slots() {
 
 #[cfg(feature = "dev-simulation")]
 #[test]
-fn simulated_accounts_ignore_real_client_settings_and_stay_on_the_test_store() {
+fn simulated_accounts_refuse_an_unmarked_root_without_writing_it() {
     use crate::simulation::Simulation;
 
     let root = tempfile::tempdir().unwrap();
-    let stored = Uuid::from_u128(9);
-    client::store(root.path(), stored).unwrap();
     let accounts = Accounts::simulated(root.path(), Simulation::new());
+    assert!(accounts.is_simulated());
+    assert_eq!(accounts.snapshot().state, AccountState::Unavailable);
+    assert!(accounts.simulation().is_none());
+    assert!(!root.path().join("synthetic-credentials.json").exists());
+    assert!(!root.path().join("account-vault.lock").exists());
+}
+
+#[cfg(feature = "dev-simulation")]
+#[test]
+fn simulated_accounts_ignore_real_client_settings_and_stay_on_the_test_store() {
+    use crate::simulation::Simulation;
+
+    let library = tempfile::tempdir().unwrap();
+    let root = library.path().join("dev-account-simulation");
+    std::fs::create_dir_all(&root).unwrap();
+    let stored = Uuid::from_u128(9);
+    client::store(library.path(), stored).unwrap();
+    crate::simulation::mark_root(&root).unwrap();
+    let accounts = Accounts::simulated(&root, Simulation::new());
     wait_for(&accounts, |view| view.state == AccountState::SignedOut);
     assert!(accounts.is_simulated());
     assert!(!accounts.custom_client_allowed());
@@ -580,7 +597,11 @@ fn simulated_accounts_ignore_real_client_settings_and_stay_on_the_test_store() {
     );
     assert!(accounts.set_custom_client(&stored.to_string()).is_err());
     assert!(accounts.clear_custom_client().is_err());
-    assert_eq!(client::load(root.path()), Some(stored));
+    assert_eq!(client::load(library.path()), Some(stored));
+    assert!(
+        !root.join("account-client.json").exists(),
+        "synthetic mode must not copy or rewrite the real client setting"
+    );
 }
 
 #[cfg(feature = "dev-simulation")]
@@ -607,6 +628,7 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
 
     let root = tempfile::tempdir().unwrap();
     let simulation = Simulation::new();
+    crate::simulation::mark_root(root.path()).unwrap();
     let accounts = Accounts::simulated(root.path(), simulation.clone());
     wait_for(&accounts, |view| view.state == AccountState::SignedOut);
 
@@ -627,6 +649,15 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
         accounts.open_browser().is_err(),
         "the simulated service must reject a real browser action"
     );
+    accounts.cancel();
+    wait_for(&accounts, |view| view.state == AccountState::SignedOut);
+    assert_eq!(simulation.phase(), crate::simulation::SimulationPhase::Idle);
+    assert_eq!(simulation.pending_persona(), None);
+
+    accounts.begin();
+    wait_for(&accounts, |view| {
+        view.state == AccountState::AwaitingBrowser
+    });
     assert!(simulation.approve());
     wait_for(&accounts, |view| view.state == AccountState::SignedIn);
     assert_eq!(
@@ -670,12 +701,19 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
     ));
 
     drop(accounts);
-    let restarted = Accounts::simulated(root.path(), simulation.clone());
+    let restarted_simulation = Simulation::new();
+    let restarted = Accounts::simulated(root.path(), restarted_simulation.clone());
+    assert_eq!(restarted_simulation.next_persona(), Persona::Forest);
+    assert_eq!(
+        restarted_simulation.entitlement(Persona::Forest),
+        EntitlementState::Granted
+    );
     wait_for(&restarted, |view| {
         view.state == AccountState::SignedIn
             && view.active_account == Some(Persona::Forest.profile_id())
     });
     assert_eq!(restarted.snapshot().accounts.len(), 2);
+
     let decision = crate::play::synthetic_decision_for_test(
         Persona::Forest.profile_id(),
         crate::simulation::CLIENT_ID,
@@ -689,7 +727,7 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
     );
     assert!(!started, "synthetic admission must never start a process");
 
-    simulation.set_entitlement(Persona::Forest, EntitlementState::Denied);
+    restarted_simulation.set_entitlement(Persona::Forest, EntitlementState::Denied);
     restarted.refresh_selected();
     wait_for(&restarted, |view| view.state == AccountState::Error);
     assert_eq!(

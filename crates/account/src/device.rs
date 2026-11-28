@@ -150,7 +150,7 @@ impl AuthenticatedAccount {
 
 pub struct DeviceClient {
     client_id: Uuid,
-    transport: Box<dyn Transport>,
+    transport: Box<dyn Transport + Send + Sync>,
 }
 
 impl DeviceClient {
@@ -170,7 +170,7 @@ impl DeviceClient {
     #[cfg(feature = "dev-simulation")]
     pub(crate) fn with_transport(
         client_id: Uuid,
-        transport: impl Transport + 'static,
+        transport: impl Transport + Send + Sync + 'static,
     ) -> Result<Self, AccountError> {
         if client_id.is_nil() {
             return Err(AccountError::InvalidRegistration);
