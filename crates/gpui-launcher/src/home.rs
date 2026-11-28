@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::{cell::Cell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
 use theme::{Palette, Partition, compact_action, glass_action};
 
+const HOME_SHELF_HEADING: &str = "Recents";
+const RECENTS_SELECTED_RAIL: f32 = 2.;
 const ORDER_FILE: &str = "home-order.json";
 /// Two capped UUID lists need about 10 KiB, so the shared 4 KiB preference cap
 /// would discard a full order and silently clear pins and recents.
@@ -149,7 +151,8 @@ impl Launcher {
         let label = label.into();
         let button = if primary {
             theme::label(
-                compact_action(id.clone(), p, treatment, disabled, cx),
+                compact_action(id.clone(), p, treatment, disabled, cx)
+                    .when(!disabled, |button| button.cursor_pointer()),
                 label.clone(),
                 p,
                 treatment,
@@ -588,6 +591,7 @@ impl Launcher {
                 button.border_color(glass.card_control_border)
             })
         };
+        let base = base.when(!disabled, |button| button.cursor_pointer());
         let button = theme::label(base, label.clone(), p, treatment, disabled);
         self.control(
             button,
@@ -698,7 +702,9 @@ impl Launcher {
             .w_full()
             .h(px(40.))
             .when(!busy, |button| {
-                button.border_color(glass.card_control_border)
+                button
+                    .border_color(glass.card_control_border)
+                    .cursor_pointer()
             })
             .justify_start()
             .gap_2()
@@ -878,7 +884,7 @@ impl Launcher {
                             div()
                                 .text_size(px(if compact { 16. } else { 19. }))
                                 .font_semibold()
-                                .child("Recent Instances"),
+                                .child(HOME_SHELF_HEADING),
                         )
                         .child(
                             div()
@@ -902,17 +908,15 @@ impl Launcher {
     ) -> accessibility::Semantic {
         let id = profile.id;
         let selected = self.personal == Some(id);
-        let kind = profile_kind(profile);
+        let disabled = self.popup.is_some() || self.picker_open;
+        let kind = home_tile_meta(profile_kind(profile), self.home_order.is_pinned(id));
         let label = format!("{}, {kind}", profile.name);
-        let button = glass_action(
+        let button = home_recents_button(
             SharedString::from(format!("home-shelf-{id}")),
+            selected,
+            disabled,
             p,
-            if selected {
-                Partition::Selected
-            } else {
-                Partition::Neutral
-            },
-            false,
+            glass,
             cx,
         )
         .flex_1()
@@ -921,7 +925,15 @@ impl Launcher {
         .justify_start()
         .px_2()
         .when(selected, |button| {
-            button.border_l_2().border_color(p.accent)
+            button.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(RECENTS_SELECTED_RAIL))
+                    .bg(p.accent),
+            )
         })
         .child(
             row()
@@ -941,6 +953,7 @@ impl Launcher {
                                 .w_full()
                                 .truncate()
                                 .font_semibold()
+                                .text_color(p.ink)
                                 .child(profile.name.clone()),
                         )
                         .child(
@@ -958,7 +971,7 @@ impl Launcher {
             SharedString::from(format!("home-shelf-{id}")),
             &label,
             Role::ListBoxOption,
-            self.popup.is_some() || self.picker_open,
+            disabled,
             Some(selected),
             cx,
             move |this, window, cx| {
@@ -970,6 +983,7 @@ impl Launcher {
                 )
             },
         )
+        .with_focus_outline(p.ink())
     }
 
     fn open_home_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1222,6 +1236,14 @@ fn instance_count(count: usize) -> String {
     }
 }
 
+fn home_tile_meta(kind: String, pinned: bool) -> String {
+    if pinned {
+        format!("{kind} · Pinned")
+    } else {
+        kind
+    }
+}
+
 fn profile_kind(profile: &Profile) -> String {
     match &profile.imported_pack {
         Some(pack) => match &pack.loader {
@@ -1309,6 +1331,13 @@ struct ShelfGlass {
     eyebrow: Rgba,
     meta: Rgba,
     status_muted: Rgba,
+    recents_border: Rgba,
+    recents_rest: Rgba,
+    recents_hover: Rgba,
+    recents_pressed: Rgba,
+    recents_selected: Rgba,
+    recents_selected_hover: Rgba,
+    recents_selected_pressed: Rgba,
 }
 
 impl ShelfGlass {
@@ -1329,6 +1358,13 @@ impl ShelfGlass {
                 eyebrow: rgba(0xd0d4dcff),
                 meta: rgba(0xbec3ccff),
                 status_muted: rgba(0xffffff5c),
+                recents_border: rgba(0xffffff2e),
+                recents_rest: rgba(0xffffff10),
+                recents_hover: rgba(0xffffff24),
+                recents_pressed: rgba(0xffffff38),
+                recents_selected: rgba(0xffffff2e),
+                recents_selected_hover: rgba(0xffffff40),
+                recents_selected_pressed: rgba(0xffffff52),
             }
         } else {
             Self {
@@ -1344,9 +1380,61 @@ impl ShelfGlass {
                 eyebrow: rgba(0x4b5058ff),
                 meta: rgba(0x52565eff),
                 status_muted: rgba(0x00000038),
+                recents_border: rgba(0x00000024),
+                recents_rest: rgba(0xffffff70),
+                recents_hover: rgba(0xe8eaedd8),
+                recents_pressed: rgba(0xdcdfe4e2),
+                recents_selected: rgba(0xc8cbd0c8),
+                recents_selected_hover: rgba(0xbfc3c8da),
+                recents_selected_pressed: rgba(0xb4b8bfe8),
             }
         }
     }
+}
+
+fn recents_row_colors(glass: ShelfGlass, selected: bool) -> [Rgba; 3] {
+    if selected {
+        [
+            glass.recents_selected,
+            glass.recents_selected_hover,
+            glass.recents_selected_pressed,
+        ]
+    } else {
+        [
+            glass.recents_rest,
+            glass.recents_hover,
+            glass.recents_pressed,
+        ]
+    }
+}
+
+fn home_recents_button(
+    id: impl Into<gpui::ElementId>,
+    selected: bool,
+    disabled: bool,
+    p: Palette,
+    glass: ShelfGlass,
+    cx: &App,
+) -> gpui_component::button::Button {
+    use gpui_component::{
+        Disableable, Sizable,
+        button::{Button, ButtonCustomVariant, ButtonVariants},
+    };
+    let [rest, hover, pressed] = recents_row_colors(glass, selected);
+    let variant = ButtonCustomVariant::new(cx)
+        .color(rest.into())
+        .foreground(p.ink.into())
+        .hover(hover.into())
+        .active(pressed.into())
+        .border(glass.recents_border.into());
+    Button::new(id)
+        .custom(variant)
+        .disabled(disabled)
+        .small()
+        .rounded(px(0.))
+        .relative()
+        .border_1()
+        .when(!disabled, |button| button.cursor_pointer())
 }
 
 fn home_pill_button(
@@ -1399,6 +1487,7 @@ fn home_pill_button(
         .border_1()
         .border_color(border)
         .text_color(ink)
+        .when(!disabled, |button| button.cursor_pointer())
 }
 
 fn home_mark(p: Palette, glass: ShelfGlass, icon: Icon) -> gpui::Div {
@@ -1479,5 +1568,56 @@ mod tests {
         assert_eq!(home_shelf_height_for(400.), 96.);
         assert_eq!(home_shelf_height_for(720.), 158.4);
         assert_eq!(home_shelf_height_for(2000.), 166.);
+    }
+
+    #[test]
+    fn recents_heading_is_exact_and_library_agnostic() {
+        assert_eq!(HOME_SHELF_HEADING, "Recents");
+        assert!(!HOME_SHELF_HEADING.contains("Instance"));
+    }
+
+    #[test]
+    fn pinned_metadata_stays_explicit_without_changing_the_rest_label() {
+        assert_eq!(
+            home_tile_meta("Minecraft 26.3 · Vanilla".to_owned(), true),
+            "Minecraft 26.3 · Vanilla · Pinned"
+        );
+        assert_eq!(
+            home_tile_meta("Minecraft 26.3 · Vanilla".to_owned(), false),
+            "Minecraft 26.3 · Vanilla"
+        );
+    }
+
+    #[test]
+    fn recents_rest_hover_pressed_and_selected_stay_distinct_in_both_themes() {
+        for (preference, appearance) in [
+            (Preference::Light, gpui::WindowAppearance::Light),
+            (Preference::Dark, gpui::WindowAppearance::Dark),
+        ] {
+            let glass = ShelfGlass::for_palette(Palette::read(preference, appearance));
+            let idle = recents_row_colors(glass, false);
+            let selected = recents_row_colors(glass, true);
+            let states = [
+                idle[0],
+                idle[1],
+                idle[2],
+                selected[0],
+                selected[1],
+                selected[2],
+            ];
+            for (index, left) in states.iter().enumerate() {
+                for right in &states[index + 1..] {
+                    assert_ne!(
+                        left, right,
+                        "Recents row states must remain distinguishable in {preference:?}"
+                    );
+                }
+            }
+            assert_ne!(
+                idle[1], selected[0],
+                "hover must not read as the selected state in {preference:?}"
+            );
+            assert_eq!(RECENTS_SELECTED_RAIL, 2.);
+        }
     }
 }
