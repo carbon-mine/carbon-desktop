@@ -4,6 +4,10 @@
 
 Reviewed on 26 November 2026 against the saved Panel product direction and primary sources. The comparison is a desk review. The discovery worker reviewed the linked sources. Desktop QA and the product owner are the reviewers for runtime and adoption evidence respectively. Record an observed result only after running the cited release and recording the machine, steps and outcome. Carbon shipping statements below describe the discovery baseline. Use the candidate's own run evidence to advance them.
 
+A focused follow-up on world-first and instance-first library modes, including the
+selected projection model and the current direct-launch boundary, is in
+[library modes and Carbon-managed worlds](library-modes-worlds.md).
+
 ## Launcher comparison
 
 | Reference and maturity | Platform scope used here | Evidence and open check |

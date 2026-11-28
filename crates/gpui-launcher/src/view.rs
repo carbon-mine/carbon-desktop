@@ -176,6 +176,63 @@ impl Launcher {
                     )
                 })
                 .collect()
+        } else if self.library_mode == LibraryMode::Worlds {
+            self.worlds
+                .as_ref()
+                .map(|worlds| {
+                    worlds
+                        .worlds
+                        .iter()
+                        .filter(|world| {
+                            query.is_empty()
+                                || world.display_name.to_lowercase().contains(&query)
+                                || world.instance_name.to_lowercase().contains(&query)
+                        })
+                        .map(|world| {
+                            let world_id = world.id.clone();
+                            let element_id = format!("world-{}", world.id.key());
+                            let selected = self.selected_world.as_ref() == Some(&world.id);
+                            let icon = self
+                                .profiles
+                                .iter()
+                                .find(|profile| profile.id == world.id.instance)
+                                .map(|profile| {
+                                    Icon::Builtin(carbon_profiles::icons::displayed(profile))
+                                })
+                                .unwrap_or(Icon::Instance);
+                            let source = match world.backing {
+                                carbon_profiles::WorldBacking::Local => "Local",
+                                carbon_profiles::WorldBacking::Imported => "Imported",
+                                carbon_profiles::WorldBacking::ServerBound => "Server-bound",
+                                carbon_profiles::WorldBacking::Managed => "Managed",
+                            };
+                            let mut subtitle = format!(
+                                "{} · {} · Minecraft {}{}",
+                                world.instance_name,
+                                source,
+                                world.version,
+                                world
+                                    .loader
+                                    .as_ref()
+                                    .map_or_else(String::new, |loader| { format!(" · {loader}") })
+                            );
+                            if world.issue.is_some() {
+                                subtitle.push_str(" · Save scan needs attention");
+                            }
+                            self.entry(
+                                element_id,
+                                world.display_name.clone(),
+                                subtitle,
+                                selected,
+                                icon,
+                                p,
+                                cx,
+                                move |this, _, cx| this.select_world(world_id.clone(), cx),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
         } else {
             self.profiles
                 .iter()
@@ -208,8 +265,32 @@ impl Launcher {
             self.fixtures
                 .as_ref()
                 .map_or(0, |items| items.instances.len())
+        } else if self.library_mode == LibraryMode::Worlds {
+            self.worlds.as_ref().map_or(0, |worlds| worlds.worlds.len())
         } else {
             self.profiles.len()
+        };
+        let list_title = if self.review {
+            "Review fixtures"
+        } else if self.library_mode == LibraryMode::Worlds {
+            "Local worlds"
+        } else {
+            "Local instances"
+        };
+        let empty_label = if self.review {
+            "No fixtures"
+        } else if self.library_mode == LibraryMode::Worlds && self.worlds_loading {
+            "Reading local worlds…"
+        } else if self.library_mode == LibraryMode::Worlds {
+            if query.is_empty() {
+                "No local worlds"
+            } else {
+                "No matching worlds"
+            }
+        } else if query.is_empty() {
+            "No instances"
+        } else {
+            "No matching instances"
         };
         let sidebar = col()
             .relative()
@@ -230,16 +311,16 @@ impl Launcher {
                     .py_3()
                     .justify_between()
                     .font_semibold()
-                    .child(if self.review {
-                        "Review fixtures"
-                    } else {
-                        "Local instances"
-                    })
+                    .child(list_title)
                     .child(div().text_xs().text_color(p.muted).child(count.to_string())),
             )
             .child(div().px_3().child(self.accessibility.input(
                 Input::new(&self.search).small(),
-                "Find an instance",
+                if self.library_mode == LibraryMode::Worlds && !self.review {
+                    "Find a world"
+                } else {
+                    "Find an instance"
+                },
                 Role::SearchInput,
                 &self.search,
                 false,
@@ -258,20 +339,10 @@ impl Launcher {
                         .track_scroll(&self.library_scroll)
                         .children(entries)
                         .when(empty, |list| {
-                            list.child(div().px_2().py_2().text_color(p.muted).child(
-                                if query.is_empty() {
-                                    "No instances"
-                                } else {
-                                    "No matching instances"
-                                },
-                            ))
+                            list.child(div().px_2().py_2().text_color(p.muted).child(empty_label))
                         }),
                     "instances",
-                    if self.review {
-                        "Review fixtures"
-                    } else {
-                        "Local instances"
-                    },
+                    list_title,
                     Role::ListBox,
                 ),
             )
@@ -515,6 +586,74 @@ impl Launcher {
                     )),
             );
         }
+        if !self.review
+            && let Some(issue) = &self.library_mode_issue
+        {
+            pane = pane.child(
+                col()
+                    .p_3()
+                    .mx_3()
+                    .mt_3()
+                    .gap_2()
+                    .bg(p.layer)
+                    .child(self.accessibility.text(
+                        div().text_color(p.warning).child(issue.clone()),
+                        "library-mode-error",
+                        issue.clone(),
+                        Role::Alert,
+                    ))
+                    .child(div().text_sm().text_color(p.muted).child(
+                        "Carbon is using Worlds for this run. Existing profiles and saves are unchanged; restore the preference file or choose a mode in Settings.",
+                    )),
+            );
+        }
+        if !self.review
+            && self.library_mode == LibraryMode::Worlds
+            && let Some(issue) = &self.worlds_issue
+        {
+            pane = pane.child(
+                col()
+                    .p_3()
+                    .mx_3()
+                    .mt_3()
+                    .gap_2()
+                    .bg(p.layer)
+                    .child(self.accessibility.text(
+                        div().text_color(p.warning).child(issue.clone()),
+                        "world-load-error",
+                        issue.clone(),
+                        Role::Alert,
+                    ))
+                    .child(self.command(
+                        p,
+                        "reload-worlds",
+                        "Reload worlds",
+                        false,
+                        self.busy(),
+                        cx,
+                        |this, _, cx| this.load_worlds(cx),
+                    )),
+            );
+        }
+        if !self.review && self.library_mode == LibraryMode::Worlds {
+            let scan_issues = self.worlds.as_ref().map_or(0, |worlds| worlds.issues.len());
+            if scan_issues > 0 {
+                let message = format!(
+                    "{scan_issues} backing instance save scan{} could not be completed. Carbon keeps the readable worlds and does not guess, prune or delete the rest.",
+                    if scan_issues == 1 { "" } else { "s" }
+                );
+                pane = pane.child(
+                    div()
+                        .p_3()
+                        .mx_3()
+                        .mt_3()
+                        .bg(p.layer)
+                        .text_sm()
+                        .text_color(p.warning)
+                        .child(message),
+                );
+            }
+        }
         let pane =
             if self.review {
                 let detail = self.accessibility.group(
@@ -525,6 +664,38 @@ impl Launcher {
                     Role::Group,
                 );
                 pane.child(detail).into_any_element()
+            } else if self.library_mode == LibraryMode::Worlds {
+                if let Some(world) = self.selected_world().cloned() {
+                    let profile = self
+                        .profiles
+                        .iter()
+                        .find(|profile| profile.id == world.id.instance);
+                    let detail = profile.map_or_else(
+                        || self.world_empty(p, cx),
+                        |profile| {
+                            col()
+                                .child(self.world_summary(&world, p, cx))
+                                .child(self.personal_detail(
+                                    profile,
+                                    p,
+                                    narrow,
+                                    stack_targets,
+                                    detail_opacity,
+                                    cx,
+                                ))
+                                .into_any_element()
+                        },
+                    );
+                    let detail = self.accessibility.group(
+                        detail,
+                        format!("world-{}", world.id.key()),
+                        &world.display_name,
+                        Role::Group,
+                    );
+                    pane.child(detail).into_any_element()
+                } else {
+                    pane.child(self.world_empty(p, cx)).into_any_element()
+                }
             } else if let Some(profile) = self.selected_profile() {
                 let detail = self.accessibility.group(
                     self.personal_detail(profile, p, narrow, stack_targets, detail_opacity, cx),
@@ -570,6 +741,166 @@ impl Launcher {
                 },
                 Role::Main,
                 &self.detail_focus,
+            )
+            .into_any_element()
+    }
+
+    fn world_summary(&self, world: &LibraryWorld, p: Palette, cx: &Context<Self>) -> AnyElement {
+        let source = match world.backing {
+            carbon_profiles::WorldBacking::Local => "Local",
+            carbon_profiles::WorldBacking::Imported => "Imported",
+            carbon_profiles::WorldBacking::ServerBound => "Server-bound",
+            carbon_profiles::WorldBacking::Managed => "Managed",
+        };
+        let metadata = format!(
+            "{} · {} · Minecraft {}{}",
+            world.instance_name,
+            source,
+            world.version,
+            world
+                .loader
+                .as_ref()
+                .map_or_else(String::new, |loader| format!(" · {loader}"))
+        );
+        let mut status = if world.selected {
+            "This world is the backing instance's saved launch target. ".to_owned()
+        } else {
+            String::new()
+        };
+        match &world.issue {
+            Some(issue) => {
+                status.push_str(&format!("Save scan needs attention. {issue}"));
+            }
+            None => status.push_str(
+                "Direct world launch is unavailable until protected launch and confirmed entry are qualified.",
+            ),
+        }
+        let id = world.id.clone();
+        col()
+            .px_5()
+            .py_4()
+            .gap_2()
+            .bg(p.layer)
+            .border_b_1()
+            .border_color(p.stroke)
+            .child(
+                div()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(p.muted)
+                    .child("Selected world"),
+            )
+            .child(
+                div()
+                    .text_size(px(22.))
+                    .line_height(px(26.))
+                    .font_semibold()
+                    .truncate()
+                    .child(world.display_name.clone()),
+            )
+            .child(div().text_sm().text_color(p.muted).child(metadata))
+            .child(detail_row("Save directory", world.id.directory.clone(), p))
+            .child(
+                self.accessibility.text(
+                    div()
+                        .text_sm()
+                        .text_color(if world.issue.is_some() {
+                            p.warning
+                        } else {
+                            p.muted
+                        })
+                        .child(status.clone()),
+                    "world-launch-status",
+                    status,
+                    Role::Status,
+                ),
+            )
+            .child(row().flex_wrap().gap_2().child(self.command(
+                p,
+                "world-open-instance",
+                "Open in Instances mode",
+                false,
+                self.busy(),
+                cx,
+                move |this, _, cx| {
+                    this.apply_library_mode(LibraryMode::Instances, cx);
+                    this.select_personal(id.instance, cx);
+                },
+            )))
+            .into_any_element()
+    }
+
+    fn world_empty(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
+        let recommended = self
+            .worlds
+            .as_ref()
+            .and_then(WorldLibrary::recommended)
+            .cloned();
+        let has_worlds = self
+            .worlds
+            .as_ref()
+            .is_some_and(|worlds| !worlds.worlds.is_empty());
+        let issue_count = self.worlds.as_ref().map_or(0, |worlds| worlds.issues.len());
+        let title = if self.worlds_loading {
+            "Reading local worlds"
+        } else if has_worlds {
+            "Choose a world"
+        } else {
+            "No local worlds yet"
+        };
+        let description = if self.worlds_loading {
+            "Carbon is scanning existing instance save folders without opening or changing them."
+        } else if has_worlds {
+            "Worlds are projected from existing instance save folders. Choosing one opens its backing instance without moving or copying saves."
+        } else {
+            "Worlds mode lists saves that already exist in a backing instance. Creating or copying a world is not available in this build, so create an instance first and populate a save through a qualified workflow."
+        };
+        col()
+            .p_6()
+            .gap_3()
+            .child(div().text_xl().font_semibold().child(title))
+            .child(div().text_color(p.muted).child(description))
+            .when(issue_count > 0, |body| {
+                let verb = if issue_count == 1 { "needs" } else { "need" };
+                body.child(div().text_sm().text_color(p.warning).child(format!(
+                    "{issue_count} instance save scan{} {verb} attention. The affected worlds remain listed with their issue.",
+                    if issue_count == 1 { "" } else { "s" }
+                )))
+            })
+            .child(
+                row()
+                    .flex_wrap()
+                    .gap_2()
+                    .when_some(recommended, |row, world| {
+                        let id = world.id.clone();
+                        row.child(self.command(
+                            p,
+                            "world-open-recommended",
+                            "Open recommended world",
+                            true,
+                            self.busy(),
+                            cx,
+                            move |this, _, cx| this.select_world(id.clone(), cx),
+                        ))
+                    })
+                    .child(self.command(
+                        p,
+                        "world-empty-new-instance",
+                        "Create backing instance",
+                        false,
+                        self.busy() || self.profile_issue.is_some(),
+                        cx,
+                        |this, window, cx| this.editor(popup::Mode::Create, window, cx),
+                    ))
+                    .child(self.command(
+                        p,
+                        "world-empty-switch-instances",
+                        "Switch to Instances mode",
+                        false,
+                        self.busy(),
+                        cx,
+                        |this, _, cx| this.apply_library_mode(LibraryMode::Instances, cx),
+                    )),
             )
             .into_any_element()
     }
@@ -2221,6 +2552,15 @@ impl Render for Launcher {
                             self.busy(),
                             cx,
                             |this, win, cx| this.editor(popup::Mode::Create, win, cx),
+                        ))
+                        .child(self.command(
+                            p,
+                            "app-settings",
+                            "App settings",
+                            false,
+                            self.popup.is_some() || self.picker_open,
+                            cx,
+                            |this, window, cx| this.open_settings(window, cx),
                         ))
                         .when(cfg!(target_os = "linux"), |bar| {
                             bar.child(self.command(

@@ -10,7 +10,7 @@ use super::{Launcher, account_panel::AccountPanel};
 use accesskit::Role;
 use account::AccountDialog;
 use carbon_pack::PackReview;
-use carbon_profiles::{Profile, ProfileAction, ServerAddress, VanillaVersion};
+use carbon_profiles::{LibraryMode, Profile, ProfileAction, ServerAddress, VanillaVersion};
 use gpui::{
     AnyWindowHandle, Bounds, Context, Entity, FocusHandle, TitlebarOptions, WeakEntity, Window,
     WindowBounds, WindowDecorations, WindowOptions, actions, div, prelude::*, px, size,
@@ -48,6 +48,7 @@ pub enum Kind {
     Scenery(ScenePicker),
     ImportPack(PathBuf, PackReview),
     Account(Entity<AccountPanel>),
+    Settings(LibraryMode),
     CloseGuard,
 }
 
@@ -80,6 +81,7 @@ struct Popup {
     home: Option<HomeTargets>,
     scene: Option<ScenePicker>,
     pack: Option<(PathBuf, PackReview)>,
+    settings: Option<LibraryMode>,
     notice: Option<&'static str>,
     close_guard: bool,
     stop_requested: bool,
@@ -101,6 +103,7 @@ fn title(kind: &Kind) -> &'static str {
         Kind::ImportPack(..) => "Import modpack",
         Kind::Icon(_) => "Choose instance icon",
         Kind::Account(_) => "Minecraft account",
+        Kind::Settings(_) => "App settings",
         Kind::CloseGuard => "Protected sample is running",
     }
 }
@@ -125,6 +128,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
         Kind::Scenery(_) => (432., 296.),
         Kind::ImportPack(..) => (425., 340.),
         Kind::Account(_) => (470., 360.),
+        Kind::Settings(_) => (470., 330.),
         Kind::CloseGuard => (360., 186.),
     };
     let bounds = Bounds::centered_at(window.bounds().center(), size(width, px(height)));
@@ -211,6 +215,7 @@ impl Popup {
         let mut targets = None;
         let mut home = None;
         let mut scene = None;
+        let mut settings = None;
         let mut close_guard = false;
         let (form, pack, notice, account) = match kind {
             Kind::Icon(profile) => {
@@ -319,6 +324,11 @@ impl Popup {
                     Some(AccountDialog::new(panel, window, cx)),
                 )
             }
+            Kind::Settings(mode) => {
+                focus.focus(window);
+                settings = Some(mode);
+                (None, None, None, None)
+            }
             Kind::CloseGuard => {
                 focus.focus(window);
                 close_guard = true;
@@ -372,6 +382,7 @@ impl Popup {
             home,
             scene,
             pack,
+            settings,
             notice,
             close_guard,
             stop_requested: false,
@@ -413,6 +424,23 @@ impl Popup {
                 let _ = weak.update(cx, |this, cx| f(this, window, cx));
             },
         )
+    }
+
+    fn save_settings_mode(&mut self, mode: LibraryMode, cx: &mut Context<Self>) {
+        // Calling this for the already-selected mode is deliberate: a read
+        // error may have fallen back to Worlds, and an explicit click is the
+        // repair action. A valid unchanged preference is a no-op in the store.
+        match carbon_profiles::set_library_mode(&self.root_path, mode) {
+            Ok(mode) => {
+                self.settings = Some(mode);
+                self.error = None;
+                let _ = self
+                    .owner
+                    .update(cx, |launcher, cx| launcher.apply_library_mode(mode, cx));
+            }
+            Err(error) => self.error = Some(error),
+        }
+        cx.notify();
     }
 
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -781,9 +809,68 @@ impl Render for Popup {
         if let Some(scene) = &self.scene {
             content = content.child(self.scene_choices(scene, cx));
         }
+        if let Some(mode) = self.settings {
+            content = content
+                .child(div().font_semibold().child("Library mode"))
+                .child(div().text_sm().text_color(p.muted).child(
+                    "Choose how the library starts. This changes presentation only; profiles, worlds, settings, IDs and saves stay exactly as they are.",
+                ));
+            for candidate in LibraryMode::ALL {
+                let selected = candidate == mode;
+                let name = match candidate {
+                    LibraryMode::Worlds => "Worlds",
+                    LibraryMode::Instances => "Instances",
+                };
+                let description = match candidate {
+                    LibraryMode::Worlds => {
+                        "Foreground named local worlds and recommend one on Home. Create, copy, delete and direct launch remain unavailable until those operations are qualified."
+                    }
+                    LibraryMode::Instances => {
+                        "List and create instances, keep imported and server-bound instances, and manage worlds inside the selected instance."
+                    }
+                };
+                let treatment = if selected {
+                    Partition::Selected
+                } else {
+                    Partition::Neutral
+                };
+                let button = label(
+                    compact_action(
+                        match candidate {
+                            LibraryMode::Worlds => "library-mode-worlds",
+                            LibraryMode::Instances => "library-mode-instances",
+                        },
+                        p,
+                        treatment,
+                        false,
+                        cx,
+                    ),
+                    name,
+                    p,
+                    treatment,
+                    false,
+                );
+                content = content.child(self.control(
+                    button,
+                    match candidate {
+                        LibraryMode::Worlds => "library-mode-worlds",
+                        LibraryMode::Instances => "library-mode-instances",
+                    },
+                    name,
+                    Role::RadioButton,
+                    false,
+                    Some(selected),
+                    cx,
+                    move |this, _, cx| this.save_settings_mode(candidate, cx),
+                ));
+                content = content.child(div().text_sm().text_color(p.muted).child(description));
+            }
+        }
         if let Some(error) = &self.error {
             let reason = if self.pack.is_some() {
                 format!("Could not import this pack. {error}")
+            } else if self.settings.is_some() {
+                format!("Could not save the library mode. {error}")
             } else if self.server.is_some() || self.targets.is_some() {
                 error.clone()
             } else {
@@ -815,6 +902,7 @@ impl Render for Popup {
             (dismiss, Partition::Neutral)
         } else if self.scene.is_some()
             || self.home.is_some()
+            || self.settings.is_some()
             || self
                 .targets
                 .as_ref()

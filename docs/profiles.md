@@ -20,6 +20,42 @@ The native core exposes `carbon_profiles::list(root)` and `carbon_profiles::chan
 
 An edit uses the same fields and the returned ID, with `"kind":"edit"`. A clone takes only `kind`, `id` and the new `name`. The result includes the generated ID and settings, without the action tag. The native API rejects unknown fields. It accepts no filesystem paths, JVM arguments or command strings.
 
+## Library mode and world projection
+
+The native library has two presentation modes. **Worlds** is the default;
+**Instances** preserves the instance-first list. The mode is an app-owned
+preference in `personal/library-mode.json` and is read with
+`carbon_profiles::library_mode(root)` and written with
+`carbon_profiles::set_library_mode(root, mode)`. A missing file means Worlds.
+Malformed or unsupported data is reported and preserved on reads rather than
+silently replaced; an explicit Settings mode choice is the repair action.
+Switching modes must not change a profile, target preference, world label, save,
+ownership record or entitlement decision.
+
+`carbon_profiles::world_library(root)` projects worlds from the existing save
+directories of every saved profile. A projected world has:
+
+- a stable `WorldId { instance, directory }`, where `instance` is the profile
+  UUID and `directory` is the exact direct child of `game/saves`;
+- a display name from the existing launcher label or the directory name;
+- its backing `Local`, `Imported`, `ServerBound` or reserved `Managed` source;
+- the backing profile's Minecraft version and optional loader;
+- the backing instance's passive selected-target flag;
+- an optional scan issue and an explicit `WorldLaunch::Unavailable` state.
+
+The scan reuses the instance-target inventory: direct ordinary directories with
+an ordinary `level.dat`, no links or Windows reparse points, bounded entry counts
+and no `level.dat` parsing. Duplicate display names stay distinct. A copied save
+folder gets a new `WorldId`; a label change does not. Server-bound profiles are
+projected for inspection only and retain their existing restricted target and
+join behavior. Imported profiles are labeled as imported; their saves remain
+inside the imported profile.
+
+The projection is read-only and does not create, copy, delete or launch a world.
+Those operations remain blocked until protected launch, confirmed world entry
+and a transactional world-operation service are independently qualified. No
+managed-world overlay is written by this slice.
+
 ## Persistence and recovery
 
 The personal index lives under `personal/profiles.json` inside the library root. Names and IDs stay inside this versioned JSON document. A separate lock file serializes cooperating app processes, including first use. The index is limited to 4 MiB. The writer stages and syncs the replacement in the same directory, then renames it into place. Unix also syncs the directory. An interrupted scratch file is ignored by readers and replaced on the next write. A persistent initialization marker distinguishes a first launch from a missing index.
