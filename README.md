@@ -12,9 +12,16 @@
   </p>
 </div>
 
-![Carbon Desktop library showing local instances in a wide window](https://carbon-mine.github.io/carbon-desktop/library-wide.png)
-
-*A wide library view in the GPUI edition, captured automatically from the latest protected `main` build. See [README screenshots](docs/readme-screenshots/README.md) for the pipeline, and the published `manifest.json` for the capture commit it came from.*
+<table>
+  <tr>
+    <td><img src="docs/images/gpui-home.png" width="480" alt="Carbon Desktop Home showing recent instances and the selected instance in a wide window"></td>
+    <td><img src="https://carbon-mine.github.io/carbon-desktop/library-wide.png" width="480" alt="Carbon Desktop library showing local instances in a wide window"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Current Home in the GPUI edition, captured from the actual <code>main</code> build with seeded data.</em></td>
+    <td align="center"><em>A wide library view in the GPUI edition, captured automatically from the latest protected <code>main</code> build. See <a href="docs/readme-screenshots/README.md">README screenshots</a> for the pipeline, and the published <code>manifest.json</code> for the capture commit it came from.</em></td>
+  </tr>
+</table>
 
 ## What you can do
 
