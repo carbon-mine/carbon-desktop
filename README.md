@@ -12,9 +12,9 @@
   </p>
 </div>
 
-![Carbon Desktop on Windows with a 100-instance library, a selected Vanilla survival instance, and its Review install action](docs/images/gpui-library.png)
+![Carbon Desktop library showing local instances in a wide window](docs/images/gpui-library.png)
 
-*A disposable library in the GPUI edition. The selected instance shows its Minecraft version, Java requirement, and next setup action.*
+*A wide library view in the GPUI edition. Automated capture is wired for GitHub Pages publishing from protected main; the bundled `docs/images/gpui-library.png` image is the rendered image until the first public publish is verified and README URLs are switched in a follow-up.*
 
 ## What you can do
 
@@ -25,14 +25,16 @@
 
 <table>
   <tr>
-    <td><img src="docs/images/gpui-narrow-library.png" width="390" alt="A narrow Carbon Desktop window showing search and the populated local instance list"></td>
-    <td><img src="docs/images/gpui-narrow-instance.png" width="390" alt="The same narrow window showing the selected Vanilla survival instance, Back to library, and Review install"></td>
+    <td><img src="docs/images/gpui-narrow-library.png" width="390" alt="Carbon Desktop library list in a compact window"></td>
+    <td><img src="docs/images/gpui-narrow-instance.png" width="390" alt="Carbon Desktop selected instance details in a compact window"></td>
   </tr>
   <tr>
     <td align="center">Search and select an instance.</td>
     <td align="center">Review setup in the selected instance.</td>
   </tr>
 </table>
+
+*Compact screenshots use the bundled `docs/images/gpui-narrow-library.png` and `docs/images/gpui-narrow-instance.png` images until the first GitHub Pages publish is verified and README URLs are switched in a follow-up.*
 
 ## Quick start
 

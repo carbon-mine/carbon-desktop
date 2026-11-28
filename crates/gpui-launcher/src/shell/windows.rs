@@ -28,7 +28,11 @@ pub fn configure_renderer() {
 
 /// Suppress native size/maximize commands for the main HWND. The creation
 /// style already omits resize borders. Move and minimize keep normal handling.
-pub(super) fn configure_fixed_window(window: &Window) {
+/// `allow_resize` is capture-only and must never be enabled by installed builds.
+pub(super) fn configure_fixed_window(window: &Window, allow_resize: bool) {
+    if allow_resize {
+        return;
+    }
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::{
         Shell::{DefSubclassProc, SetWindowSubclass},
