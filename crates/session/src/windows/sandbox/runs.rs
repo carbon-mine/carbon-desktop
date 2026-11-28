@@ -222,17 +222,6 @@ impl RunGuard {
         }
     }
 
-    /// Records that the boundary itself refused a further process under the
-    /// run's qualified limit. The refusal is an observed OS notification, so the
-    /// record can explain a payload that could not start a helper. A retired run
-    /// keeps the record it already published.
-    pub(super) fn limited(&self, limit: ResourceLimit) {
-        let mut status = lock_status(&self.entry);
-        if !status.retired {
-            status.resource_limit = Some(limit);
-        }
-    }
-
     /// True when a stop request was observed before the run finished.
     pub(super) fn stopped(&self) -> bool {
         matches!(phase(&self.entry), RunPhase::Stopping | RunPhase::Draining)
@@ -247,6 +236,12 @@ impl Drop for RunGuard {
         let mut directory = entries();
         let mut status = lock_status(&self.entry);
         status.retired = true;
+        // Every notification the boundary posted before it was retired is read
+        // here, so a payload whose helper the limit refused is explained in the
+        // record even though the refusal happened while it ran.
+        if let Some(limit) = job::refusal(&self.entry.job) {
+            status.resource_limit = Some(limit);
+        }
         let drained = job::is_empty(&self.entry.job).ok();
         let end = if status.unsettled || drained != Some(true) {
             // A failed observation or a boundary that still held members means
@@ -937,10 +932,9 @@ mod tests {
         let guard = register(
             run,
             instance(),
-            job::test_boundary(run, root.path()).unwrap(),
+            job::refusing_boundary(run, root.path()).unwrap(),
         );
         guard.running();
-        guard.limited(ResourceLimit::ActiveProcess);
         fs::write(root.path().join("finish"), []).unwrap();
         wait_drained(run);
         assert!(guard.finish());

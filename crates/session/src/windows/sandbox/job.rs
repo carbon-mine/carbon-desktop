@@ -91,9 +91,13 @@ pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Arc<Handle>> {
         return Err(io::Error::last_os_error());
     }
     // An existing name means another process owns this run's boundary. Refuse
-    // rather than adopt or reconfigure a job this launcher did not create. The
-    // error is captured before any other call can replace it.
-    let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    // rather than adopt, query or reconfigure a job this launcher did not create.
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe { CloseHandle(handle) };
+        return Err(io::Error::other(
+            "The protected run's OS job object already exists",
+        ));
+    }
     // The completion port is the only way to observe a boundary refusing a
     // further process, so it is created with the job and owned by it.
     let events = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, null_mut(), 0, 1) };
@@ -121,11 +125,6 @@ pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Arc<Handle>> {
         return Err(error);
     }
     let job = Arc::new(Handle(handle, Some(events)));
-    if already_exists {
-        return Err(io::Error::other(
-            "The protected run's OS job object already exists",
-        ));
-    }
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags =
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
@@ -162,6 +161,32 @@ pub(super) fn refusal(job: &Handle) -> Option<ResourceLimit> {
             refusal = Some(ResourceLimit::ActiveProcess);
         }
     }
+}
+
+/// Creates a named job at its one-process limit with one live member, and makes
+/// the OS refuse a second member so a test can observe the reported reason.
+#[cfg(test)]
+pub(super) fn refusing_boundary(run: Uuid, root: &Path) -> io::Result<Arc<Handle>> {
+    use std::os::windows::io::AsRawHandle;
+    let job = create(1, run)?;
+    let mut member = fixture(root, "child").spawn()?;
+    if let Err(error) = unsafe { win(AssignProcessToJobObject(job.0, member.as_raw_handle())) } {
+        member.kill().ok();
+        member.wait().ok();
+        return Err(error);
+    }
+    wait_for(&root.join("ready"));
+    let mut extra = fixture(root, "child").spawn()?;
+    let refused = unsafe { win(AssignProcessToJobObject(job.0, extra.as_raw_handle())) };
+    extra.kill().ok();
+    extra.wait().ok();
+    // A boundary that admitted the extra member cannot stand in for a refusal.
+    if refused.is_ok() {
+        return Err(io::Error::other(
+            "The boundary admitted a second member at its limit",
+        ));
+    }
+    Ok(job)
 }
 
 fn active_processes(job: &Handle) -> io::Result<u32> {

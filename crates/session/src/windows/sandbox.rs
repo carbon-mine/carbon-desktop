@@ -13,7 +13,6 @@ use std::{
     path::{Path, PathBuf},
     ptr::{null, null_mut},
     sync::Arc,
-    time::{Duration, Instant},
 };
 use uuid::Uuid;
 use windows_sys::Win32::{
@@ -506,26 +505,12 @@ pub(super) fn launch(
             return Err(error);
         }
         run.running();
-        let deadline = Duration::from_millis(if observation.smoke {
+        let deadline = if observation.smoke {
             30_000
         } else {
             30 * 60_000
-        });
-        // The wait is sliced so the boundary's own notifications are read while
-        // the sample runs: a refused helper is then an observed OS event.
-        let started = Instant::now();
-        let wait = loop {
-            let wait = WaitForSingleObject(process.0, 250);
-            if wait != WAIT_TIMEOUT {
-                break wait;
-            }
-            if let Some(limit) = job::refusal(&job) {
-                run.limited(limit);
-            }
-            if started.elapsed() >= deadline {
-                break WAIT_TIMEOUT;
-            }
         };
+        let wait = WaitForSingleObject(process.0, deadline);
         if wait != WAIT_OBJECT_0 {
             if run.stopped() {
                 // The stop request terminated the root; drain what remains of its tree.
@@ -569,9 +554,6 @@ pub(super) fn launch(
             }
             observation.boundary_empty = true;
             return Err(error);
-        }
-        if let Some(limit) = job::refusal(&job) {
-            run.limited(limit);
         }
         if !run.finish() {
             // A stop request claimed the run before the owner observed the empty
