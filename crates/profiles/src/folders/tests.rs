@@ -169,7 +169,7 @@ fn saved_folder_json_uses_stable_typed_kinds_and_scopes() {
         .find(|folder| folder.id == adventure)
         .unwrap();
     assert_eq!(
-        serde_json::to_value(&adventure_view.members[0].resolution).unwrap(),
+        serde_json::to_value(adventure_view.members[0].resolution).unwrap(),
         "resolved"
     );
 }
