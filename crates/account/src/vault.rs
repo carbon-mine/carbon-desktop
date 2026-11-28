@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "dev-simulation")]
 use std::collections::BTreeMap;
+#[cfg(feature = "dev-simulation")]
+use std::io::Write;
 use std::{
     fs::{self, File, TryLockError},
     io::{self, Read},
@@ -435,7 +437,16 @@ impl SimulatedCredentials {
         if bytes.len() as u64 > SIMULATED_CREDENTIALS_LIMIT {
             return Err(());
         }
-        fs::write(&self.path, bytes).map_err(|_| ())
+        let parent = self.path.parent().ok_or(())?;
+        let mut next = tempfile::NamedTempFile::new_in(parent).map_err(|_| ())?;
+        next.write_all(&bytes).map_err(|_| ())?;
+        next.as_file().sync_all().map_err(|_| ())?;
+        next.persist(&self.path).map_err(|_| ())?;
+        #[cfg(unix)]
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| ())?;
+        Ok(())
     }
 }
 

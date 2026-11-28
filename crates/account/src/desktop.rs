@@ -816,7 +816,12 @@ fn sign_in(core: &Core, ticket: Ticket, client_id: Uuid, vault: Option<&Vault>) 
     })();
     match result {
         Ok(account) => add(core, ticket, account, vault),
-        Err(error) => core.complete(ticket, AccountState::Error, error.to_string()),
+        Err(error) => {
+            if error == AccountError::Cancelled {
+                core.cancel_simulation();
+            }
+            core.complete(ticket, AccountState::Error, error.to_string())
+        }
     }
 }
 
@@ -856,7 +861,11 @@ fn publish(
     state.live.insert(id, account);
     let status = state.stable_status();
     let message = if core.is_simulated() {
-        "Synthetic test account verified."
+        if message == VAULT_WRITE_FAILED {
+            "Synthetic test account verified for this session. The test credential file was not saved."
+        } else {
+            "Synthetic test account verified."
+        }
     } else {
         message
     };
