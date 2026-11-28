@@ -32,6 +32,22 @@ $uia = [System.Windows.Automation.AutomationElement]
 $scope = [System.Windows.Automation.TreeScope]
 $conditionTrue = [System.Windows.Automation.Condition]::TrueCondition
 
+try {
+    $null = [System.Drawing.Bitmap].Assembly
+    $probeBmp = New-Object System.Drawing.Bitmap(1,1)
+    $probeG = [System.Drawing.Graphics]::FromImage($probeBmp)
+    $probeG.Dispose(); $probeBmp.Dispose()
+} catch {}
+$drawingRefs = @([System.Drawing.Bitmap].Assembly.Location)
+try { $drawingRefs += [System.Drawing.Graphics].Assembly.Location } catch {}
+try {
+    $gdiPlus = [AppDomain]::CurrentDomain.GetAssemblies() |
+        Where-Object { $_.GetName().Name -like '*GdiPlus*' } |
+        ForEach-Object { $_.Location } |
+        Where-Object { $_ }
+    $drawingRefs += $gdiPlus
+} catch {}
+$drawingRefs = @($drawingRefs | Where-Object { $_ } | Select-Object -Unique)
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -126,7 +142,7 @@ public static class CarbonCaptureNative {
 
     [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, int dwRop);
 }
-'@ -ReferencedAssemblies ([System.Drawing.Bitmap].Assembly.Location)
+'@ -ReferencedAssemblies $drawingRefs
 
 function Wait-Until([scriptblock]$Condition, [string]$Message, [int]$TimeoutSeconds = 30) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
