@@ -194,10 +194,15 @@ pub fn set_library_mode(root: &Path, mode: LibraryMode) -> Result<LibraryMode, S
 /// Project all readable local worlds from every saved profile. The scan is
 /// passive: it does not open `level.dat`, follow links or change preferences.
 pub fn world_library(root: &Path) -> Result<WorldLibrary, String> {
-    let (_lock, library) = storage::open(root)?;
+    let (lock, library) = storage::open(root)?;
+    let profiles = library.profiles;
+    // The profile list is the consistent snapshot. Release the library lock
+    // before walking save directories so a large library does not block a
+    // profile or target write for the whole scan.
+    drop(lock);
     let mut worlds = Vec::new();
     let mut issues = Vec::new();
-    for profile in &library.profiles {
+    for profile in &profiles {
         match crate::targets::world_snapshot(root, profile.id) {
             Ok(snapshot) => {
                 let scan_issue = snapshot.issue;
