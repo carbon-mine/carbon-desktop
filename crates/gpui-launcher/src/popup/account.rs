@@ -397,15 +397,16 @@ impl Popup {
                 Role::Label,
             ));
         } else if matches!(view.state, AccountState::Error) || view.accounts.is_empty() {
-            content = content.child(self.account_button(
+            content = content.child(self.account_button_when(
                 "account-open-minecraft-launcher",
                 "Open Minecraft Launcher",
                 false,
+                panel.launcher_opening,
                 cx,
                 |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_launcher),
             ));
         }
-        if !view.accounts.is_empty() {
+        if !account.client_entry && !view.accounts.is_empty() {
             let list = div().flex().flex_col().gap_2().children(
                 view.accounts
                     .iter()
@@ -472,7 +473,9 @@ impl Popup {
                 false,
                 cx,
                 move |this, window, cx| {
-                    if let Some(dialog) = &mut this.account {
+                    if let Some(dialog) = &mut this.account
+                        && !dialog.client_entry
+                    {
                         dialog.confirm_sign_out = Some(id);
                         this.focus.focus(window);
                         cx.notify();
@@ -648,7 +651,7 @@ impl Popup {
         if panel.can_add() {
             return bar.child(self.account_button(
                 "account-begin",
-                if !view.accounts.is_empty() {
+                if !account.client_entry && !view.accounts.is_empty() {
                     "Add Microsoft account"
                 } else if matches!(view.state, AccountState::Error) {
                     "Try again"
@@ -664,10 +667,11 @@ impl Popup {
             ));
         }
         if panel.unavailable() {
-            return bar.child(self.account_button(
+            return bar.child(self.account_button_when(
                 "account-open-minecraft-launcher",
                 "Open Minecraft Launcher",
                 true,
+                panel.launcher_opening,
                 cx,
                 |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_launcher),
             ));

@@ -9,6 +9,7 @@ pub struct AccountPanel {
     pub snapshot: AccountView,
     pub browser_error: Option<String>,
     pub launcher_error: Option<String>,
+    pub launcher_opening: bool,
     dialog_visible: bool,
     monitoring: bool,
     client_configured: bool,
@@ -26,6 +27,7 @@ impl AccountPanel {
             snapshot,
             browser_error: None,
             launcher_error: None,
+            launcher_opening: false,
             dialog_visible: false,
             monitoring: false,
             client_configured,
@@ -128,8 +130,25 @@ impl AccountPanel {
     }
 
     pub fn open_minecraft_launcher(&mut self, cx: &mut Context<Self>) {
-        self.launcher_error = Self::open_minecraft_launcher_action().err();
+        if self.launcher_opening {
+            return;
+        }
+        self.launcher_opening = true;
+        self.launcher_error = None;
         cx.notify();
+
+        let launch = cx
+            .background_executor()
+            .spawn(async { Self::open_minecraft_launcher_action() });
+        cx.spawn(async move |panel, cx| {
+            let result = launch.await;
+            let _ = panel.update(cx, |panel, cx| {
+                panel.launcher_opening = false;
+                panel.launcher_error = result.err();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn open_minecraft_launcher_action() -> Result<(), String> {
@@ -250,10 +269,10 @@ impl AccountPanel {
     }
 
     pub fn play_hint(&self) -> &'static str {
-        if self.unavailable() {
+        if self.client_pending_restart {
+            "Restart Carbon Desktop before using Minecraft accounts. Protected game launch is unavailable in this build."
+        } else if self.unavailable() {
             "Minecraft account sign-in is not configured. Open account setup or use the Minecraft Launcher."
-        } else if self.client_pending_restart {
-            "Restart Carbon Desktop to apply the public client ID setting before using Minecraft accounts. Protected game launch is unavailable in this build."
         } else if self.signed_in() {
             "This account is signed in. Protected game launch is unavailable in this build."
         } else if self.active_account().is_some() {
@@ -359,6 +378,9 @@ mod tests {
         assert!(panel.custom_client_pending_restart());
         assert!(panel.play_hint().starts_with("Restart Carbon Desktop"));
         assert!(panel.restart_message().contains("apply the saved"));
+
+        panel.snapshot.state = AccountState::Unavailable;
+        assert!(panel.play_hint().starts_with("Restart Carbon Desktop"));
 
         panel.client_pending_restart = false;
         panel.snapshot.state = AccountState::AwaitingBrowser;
