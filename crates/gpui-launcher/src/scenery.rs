@@ -11,7 +11,7 @@ use std::{
 #[cfg(windows)]
 mod hi_res {
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::Threading::{
         CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateEventW, CreateWaitableTimerExW, INFINITE,
@@ -154,7 +154,7 @@ mod hi_res {
 
 #[cfg(not(windows))]
 mod hi_res {
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     pub(super) struct Interrupt(async_channel::Sender<()>);
 
@@ -751,7 +751,7 @@ impl SceneView {
                         if let Some(blur) = blurred {
                             retire(view.blurred.replace(blur), cx);
                         }
-                        view.shown = Some(scene);
+                        view.shown = Some(view.landscape);
                         view.poster_pending = false;
                         if !poster {
                             let period = Duration::from_secs_f64(1. / f64::from(fps));

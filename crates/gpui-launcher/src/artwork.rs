@@ -106,10 +106,12 @@ impl Launcher {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let active = home_visible
-            && self.popup.is_none()
-            && !self.reduced_motion()
-            && !window_minimized(window);
+        let active = playback_active(
+            home_visible,
+            self.popup.is_some(),
+            self.reduced_motion(),
+            window_minimized(window),
+        );
         let now = Instant::now();
         let mut deadline = self.artwork.playback.deadline(active, now);
         if deadline.is_some_and(|d| d <= now) {
@@ -196,4 +198,26 @@ fn window_minimized(window: &Window) -> bool {
 #[cfg(not(windows))]
 fn window_minimized(_window: &Window) -> bool {
     false
+}
+
+/// Ambient Home playback is intentionally independent of window focus: a
+/// visible but unfocused window keeps playing, while a hidden Home, an open
+/// popup, reduced motion or a minimised window stops it.
+fn playback_active(home_visible: bool, popup: bool, reduced_motion: bool, minimized: bool) -> bool {
+    home_visible && !popup && !reduced_motion && !minimized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::playback_active;
+
+    #[test]
+    fn home_playback_pauses_for_hidden_home_popups_reduced_motion_and_minimise() {
+        assert!(playback_active(true, false, false, false));
+        assert!(!playback_active(false, false, false, false));
+        assert!(!playback_active(true, true, false, false));
+        assert!(!playback_active(true, false, true, false));
+        assert!(!playback_active(true, false, false, true));
+        assert!(!playback_active(false, true, true, true));
+    }
 }
