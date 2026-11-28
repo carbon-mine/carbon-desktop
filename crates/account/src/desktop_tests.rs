@@ -615,6 +615,10 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
         view.state == AccountState::AwaitingBrowser
     });
     assert_eq!(simulation.pending_persona(), Some(Persona::Forest));
+    assert!(
+        accounts.open_browser().is_err(),
+        "the simulated service must reject a real browser action"
+    );
     assert!(simulation.approve());
     wait_for(&accounts, |view| view.state == AccountState::SignedIn);
     assert_eq!(
@@ -646,11 +650,11 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
 
     assert!(matches!(
         accounts.prepare_launch(PlayMode::OfflineSinglePlayer, None),
-        Err(PlayBlocker::OfflinePolicyUnavailable)
+        Err(PlayBlocker::SimulationUnavailable)
     ));
     assert!(matches!(
         accounts.prepare_launch(PlayMode::OnlineMultiplayer, None),
-        Err(PlayBlocker::OnlineSessionUnavailable)
+        Err(PlayBlocker::SimulationUnavailable)
     ));
 
     drop(accounts);
@@ -660,14 +664,26 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
             && view.active_account == Some(Persona::Forest.profile_id())
     });
     assert_eq!(restarted.snapshot().accounts.len(), 2);
+    let decision = crate::play::synthetic_decision_for_test(
+        Persona::Forest.profile_id(),
+        crate::simulation::CLIENT_ID,
+    );
+    let mut started = false;
+    assert_eq!(
+        restarted
+            .with_launch_authority(decision, None, || started = true)
+            .err(),
+        Some(PlayBlocker::SimulationUnavailable)
+    );
+    assert!(!started, "synthetic admission must never start a process");
 
     simulation.set_entitlement(Persona::Forest, EntitlementState::Denied);
     restarted.refresh_selected();
     wait_for(&restarted, |view| view.state == AccountState::Error);
-    assert!(matches!(
+    assert_eq!(
         restarted.play_blocker(PlayMode::OfflineSinglePlayer),
-        PlayBlocker::EntitlementDenied
-    ));
+        PlayBlocker::SimulationUnavailable
+    );
 
     restarted.sign_out_account(Persona::Coast.profile_id());
     wait_for(&restarted, |view| {

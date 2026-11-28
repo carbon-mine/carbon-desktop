@@ -508,6 +508,9 @@ impl Accounts {
 
     /// Reports a fixed, redacted reason for this build's unavailable play mode.
     pub fn play_blocker(&self, mode: PlayMode) -> PlayBlocker {
+        if self.is_simulated() {
+            return PlayBlocker::SimulationUnavailable;
+        }
         let core = &self.owner.0;
         let state = core.state();
         play::missing_evidence(core.launch_selection(&state), mode)
@@ -520,6 +523,9 @@ impl Accounts {
         mode: PlayMode,
         installation: Option<Installation>,
     ) -> Result<LaunchDecision, PlayBlocker> {
+        if self.is_simulated() {
+            return Err(PlayBlocker::SimulationUnavailable);
+        }
         let core = &self.owner.0;
         let state = core.state();
         play::issue(
@@ -540,6 +546,9 @@ impl Accounts {
         installation: Option<Installation>,
         start: impl FnOnce() -> T,
     ) -> Result<T, PlayBlocker> {
+        if self.is_simulated() {
+            return Err(PlayBlocker::SimulationUnavailable);
+        }
         let core = &self.owner.0;
         let state = core.state();
         play::admit(
@@ -606,6 +615,12 @@ impl Accounts {
     }
 
     pub fn open_browser(&self) -> Result<(), String> {
+        if self.is_simulated() {
+            return Err(
+                "The developer simulation never opens a real Microsoft browser page. Use the simulated approval controls."
+                    .to_owned(),
+            );
+        }
         let address = self
             .owner
             .0

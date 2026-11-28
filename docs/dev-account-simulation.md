@@ -35,6 +35,10 @@ Synthetic mode never reads or writes:
 - Microsoft, Xbox or Minecraft Services;
 - a real browser page or a real game process.
 
+`Accounts::open_browser` also returns an error in simulated mode even if a
+caller reaches it while a challenge is outstanding; only the simulated approval
+controls can finish the challenge.
+
 The account files live under
 `<fixture-root>/dev-account-simulation/` behind
 `dev-account-simulation.json`. `synthetic-credentials.json` is a plain test
@@ -42,8 +46,10 @@ fixture containing synthetic values; it is not a production vault and its
 values authorize nothing.
 
 No synthetic result can qualify gameplay. The signed-in synthetic profile still
-receives `OfflinePolicyUnavailable` / `OnlineSessionUnavailable` from
-`prepare_launch`, and `with_launch_authority` has no decision to admit.
+receives `SimulationUnavailable` from `play_blocker` and `prepare_launch`, and
+`with_launch_authority` rejects the simulation source before invoking any spawn
+callback. The account service itself enforces this even if a renderer hides a
+button or a future caller bypasses the UI.
 
 ## Build and run
 

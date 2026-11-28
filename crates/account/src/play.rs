@@ -33,6 +33,7 @@ pub enum PlayBlocker {
     PrivateSavesRequired,
     IsolationRequired,
     LaunchStateChanged,
+    SimulationUnavailable,
 }
 
 impl fmt::Display for PlayBlocker {
@@ -54,6 +55,9 @@ impl fmt::Display for PlayBlocker {
             Self::PrivateSavesRequired => "Carbon could not verify this instance's private save directory.",
             Self::IsolationRequired => "The required protected network boundary could not be established.",
             Self::LaunchStateChanged => "The account or instance changed. Review Play again.",
+            Self::SimulationUnavailable => {
+                "Synthetic developer test accounts cannot authorize Minecraft or protected game launch."
+            }
         })
     }
 }
@@ -308,6 +312,30 @@ pub(super) fn admit<T>(
         return Err(LaunchStateChanged);
     }
     Ok(start())
+}
+
+#[cfg(all(test, feature = "dev-simulation"))]
+pub(crate) fn synthetic_decision_for_test(profile: Uuid, registration: Uuid) -> LaunchDecision {
+    let now = Clock::now();
+    LaunchDecision {
+        owner: Weak::new(),
+        binding: Binding {
+            profile,
+            registration,
+            revision: 1,
+            mode: PlayMode::OfflineSinglePlayer,
+            policy_digest: [1; 32],
+            installation: Installation {
+                instance: Uuid::from_u128(7),
+                activation_digest: [2; 32],
+                private_saves_verified: true,
+                network: NetworkBoundary::OfflineEgressDenied,
+            },
+        },
+        issued: now,
+        expires_wall: now.wall + std::time::Duration::from_secs(60),
+        expires_monotonic: now.monotonic + std::time::Duration::from_secs(60),
+    }
 }
 
 #[cfg(test)]
