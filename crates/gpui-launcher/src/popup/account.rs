@@ -341,23 +341,18 @@ impl Popup {
                     div()
                         .text_sm()
                         .text_color(self.palette.muted)
-                        .child("Opens the official Minecraft download page in your browser."),
-                    "account-launcher-fallback",
-                    "Opens the official Minecraft download page in your browser.",
-                    Role::Label,
-                ),
-            );
-        }
-        if panel.unavailable()
-            || matches!(view.state, AccountState::Error)
-            || view.accounts.is_empty()
-        {
+                        .child("Opens the installed Minecraft Launcher on Windows when available, or the official download page."),
+                "account-launcher-fallback",
+                "Opens the installed Minecraft Launcher on Windows when available, or the official download page.",
+                Role::Label,
+            ));
+        } else if matches!(view.state, AccountState::Error) || view.accounts.is_empty() {
             content = content.child(self.account_button(
-                "account-minecraft-download",
-                "Get Minecraft Launcher",
+                "account-open-minecraft-launcher",
+                "Open Minecraft Launcher",
                 false,
                 cx,
-                |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_download),
+                |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_launcher),
             ));
         }
         if !view.accounts.is_empty() {
@@ -605,6 +600,15 @@ impl Popup {
                     this.focus.focus(window);
                     this.update_account(cx, AccountPanel::begin)
                 },
+            ));
+        }
+        if panel.unavailable() {
+            return bar.child(self.account_button(
+                "account-open-minecraft-launcher",
+                "Open Minecraft Launcher",
+                true,
+                cx,
+                |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_launcher),
             ));
         }
         match view.state {
