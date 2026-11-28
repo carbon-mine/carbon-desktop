@@ -8,6 +8,160 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+mod hi_res {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Threading::{
+        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateEventW, CreateWaitableTimerExW, INFINITE,
+        SetEvent, SetWaitableTimer, TIMER_ALL_ACCESS, WaitForMultipleObjects,
+    };
+
+    struct OwnedHandle(HANDLE);
+    unsafe impl Send for OwnedHandle {}
+    unsafe impl Sync for OwnedHandle {}
+
+    impl OwnedHandle {
+        fn raw(&self) -> HANDLE {
+            self.0
+        }
+    }
+
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    pub(super) struct Interrupt {
+        tx: async_channel::Sender<()>,
+        event: Option<Arc<OwnedHandle>>,
+    }
+
+    impl Interrupt {
+        pub(super) fn pair() -> (Self, CancelRx) {
+            let (tx, rx) = async_channel::bounded::<()>(1);
+            let event = unsafe { CreateEventW(None, true, false, None) }
+                .ok()
+                .map(|h| Arc::new(OwnedHandle(h)));
+            let handle_for_rx = event.clone();
+            (
+                Self { tx, event },
+                CancelRx {
+                    rx,
+                    event: handle_for_rx,
+                },
+            )
+        }
+        fn raw_ref(&self) -> Option<HANDLE> {
+            self.event.as_ref().map(|e| e.raw())
+        }
+    }
+
+    impl Drop for Interrupt {
+        fn drop(&mut self) {
+            let _ = self.tx.try_send(());
+            if let Some(event) = self.raw_ref() {
+                unsafe {
+                    let _ = SetEvent(event);
+                }
+            }
+        }
+    }
+
+    pub(super) struct CancelRx {
+        rx: async_channel::Receiver<()>,
+        event: Option<Arc<OwnedHandle>>,
+    }
+
+    pub(super) async fn sleep_or_cancel(
+        duration: Duration,
+        cancel: CancelRx,
+        executor: &gpui::BackgroundExecutor,
+    ) {
+        if let Some(event) = cancel.event.clone()
+            && let Ok(timer) = unsafe {
+                CreateWaitableTimerExW(
+                    None,
+                    None,
+                    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                    TIMER_ALL_ACCESS.0,
+                )
+            }
+            .map(OwnedHandle)
+        {
+            let rx_fallback = cancel.rx;
+            let ok = executor
+                .spawn(async move {
+                    let due_100ns =
+                        -((duration.as_nanos() / 100).max(1).min(i64::MAX as u128) as i64);
+                    let set =
+                        unsafe { SetWaitableTimer(timer.raw(), &due_100ns, 0, None, None, false) };
+                    if set.is_err() {
+                        return false;
+                    }
+                    unsafe {
+                        let _ =
+                            WaitForMultipleObjects(&[timer.raw(), event.raw()], false, INFINITE);
+                    }
+                    true
+                })
+                .await;
+            if ok {
+                return;
+            }
+            let _ = futures::future::select(
+                Box::pin(executor.timer(duration)),
+                Box::pin(rx_fallback.recv()),
+            )
+            .await;
+            return;
+        }
+        let _ = futures::future::select(
+            Box::pin(executor.timer(duration)),
+            Box::pin(cancel.rx.recv()),
+        )
+        .await;
+    }
+}
+
+#[cfg(not(windows))]
+mod hi_res {
+    use std::time::Duration;
+
+    pub(super) struct Interrupt(async_channel::Sender<()>);
+
+    impl Interrupt {
+        pub(super) fn pair() -> (Self, CancelRx) {
+            let (tx, rx) = async_channel::bounded::<()>(1);
+            (Self(tx), CancelRx(rx))
+        }
+    }
+
+    impl Drop for Interrupt {
+        fn drop(&mut self) {
+            let _ = self.0.try_send(());
+        }
+    }
+
+    pub(super) struct CancelRx(async_channel::Receiver<()>);
+
+    pub(super) async fn sleep_or_cancel(
+        duration: Duration,
+        cancel: CancelRx,
+        executor: &gpui::BackgroundExecutor,
+    ) {
+        let _ = futures::future::select(
+            Box::pin(executor.timer(duration)),
+            Box::pin(cancel.0.recv()),
+        )
+        .await;
+    }
+}
+
 struct Scene {
     id: &'static str,
     family: &'static str,
@@ -42,6 +196,14 @@ impl Landscape {
     }
     pub fn attribution(self) -> &'static str {
         self.0.attribution
+    }
+    /// Short world source attribution string without shader/mod capture details.
+    pub fn source_credit(self) -> &'static str {
+        self.0
+            .attribution
+            .split(". Rendered in ")
+            .next()
+            .unwrap_or(self.0.attribution)
     }
     pub fn from_id(id: &str) -> Option<Self> {
         Self::lookup(Self::ALL, id)
@@ -138,6 +300,110 @@ fn decode(jpeg: &[u8]) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new([image::Frame::new(rgba)])))
 }
 
+/// Downsamples, applies multi-pass frosted Gaussian blur and saturation vibrance,
+/// and pads a 1-texel clamped border so bilinear GPU upscaling has no transparent seams.
+pub fn blur_backdrop(source: &RenderImage) -> Option<Arc<RenderImage>> {
+    let size = source.size(0);
+    let sw = u32::from(size.width) as usize;
+    let sh = u32::from(size.height) as usize;
+    let src = source.as_bytes(0)?;
+    if sw == 0 || sh == 0 || src.len() < sw * sh * 4 {
+        return None;
+    }
+    let bw = 120usize.min(sw);
+    let bh = ((bw * sh) / sw).max(1);
+    let n = bw * bh;
+    let (mut b, mut g, mut r) = (vec![0i32; n], vec![0i32; n], vec![0i32; n]);
+    for y in 0..bh {
+        let sy0 = ((y * 4 + 1) * sh / (bh * 4)).min(sh - 1);
+        let sy1 = ((y * 4 + 3) * sh / (bh * 4)).min(sh - 1);
+        let (row0, row1) = (sy0 * sw, sy1 * sw);
+        for x in 0..bw {
+            let sx0 = ((x * 4 + 1) * sw / (bw * 4)).min(sw - 1);
+            let sx1 = ((x * 4 + 3) * sw / (bw * 4)).min(sw - 1);
+            let (mut sb, mut sg, mut sr) = (0i32, 0i32, 0i32);
+            for p in [row0 + sx0, row0 + sx1, row1 + sx0, row1 + sx1] {
+                let off = p * 4;
+                sb += i32::from(src[off]);
+                sg += i32::from(src[off + 1]);
+                sr += i32::from(src[off + 2]);
+            }
+            let out = y * bw + x;
+            b[out] = (sb + 2) >> 2;
+            g[out] = (sg + 2) >> 2;
+            r[out] = (sr + 2) >> 2;
+        }
+    }
+    let (mut tmp_b, mut tmp_g, mut tmp_r) = (vec![0i32; n], vec![0i32; n], vec![0i32; n]);
+    for _ in 0..2 {
+        box_blur_h(&b, &mut tmp_b, bw, bh, 3);
+        box_blur_h(&g, &mut tmp_g, bw, bh, 3);
+        box_blur_h(&r, &mut tmp_r, bw, bh, 3);
+        box_blur_v(&tmp_b, &mut b, bw, bh, 3);
+        box_blur_v(&tmp_g, &mut g, bw, bh, 3);
+        box_blur_v(&tmp_r, &mut r, bw, bh, 3);
+    }
+    let (pw, ph) = (bw + 2, bh + 2);
+    let mut out = vec![255u8; pw * ph * 4];
+    for y in 0..bh {
+        for x in 0..bw {
+            let i = y * bw + x;
+            let (cb, cg, cr) = (b[i], g[i], r[i]);
+            let luma = (218 * cr + 732 * cg + 74 * cb + 512) >> 10;
+            let dst = ((y + 1) * pw + (x + 1)) * 4;
+            out[dst] = (luma + (((cb - luma) * 145 + 50) / 100)).clamp(0, 255) as u8;
+            out[dst + 1] = (luma + (((cg - luma) * 145 + 50) / 100)).clamp(0, 255) as u8;
+            out[dst + 2] = (luma + (((cr - luma) * 145 + 50) / 100)).clamp(0, 255) as u8;
+        }
+    }
+    let stride = pw * 4;
+    for y in 1..=bh {
+        let row = y * stride;
+        out.copy_within(row + 4..row + 8, row);
+        let last = row + bw * 4;
+        out.copy_within(last..last + 4, last + 4);
+    }
+    out.copy_within(stride..stride * 2, 0);
+    out.copy_within(bh * stride..(bh + 1) * stride, (bh + 1) * stride);
+    let img = image::RgbaImage::from_raw(pw as u32, ph as u32, out)?;
+    Some(Arc::new(RenderImage::new([image::Frame::new(img)])))
+}
+
+fn box_blur_h(src: &[i32], dst: &mut [i32], w: usize, h: usize, radius: usize) {
+    let div = (radius * 2 + 1) as i32;
+    let half = div / 2;
+    for y in 0..h {
+        let row = y * w;
+        let mut sum = src[row] * (radius as i32 + 1);
+        for dx in 1..=radius {
+            sum += src[row + dx.min(w - 1)];
+        }
+        for x in 0..w {
+            dst[row + x] = (sum + half) / div;
+            let left = src[row + x.saturating_sub(radius)];
+            let right = src[row + (x + radius + 1).min(w - 1)];
+            sum += right - left;
+        }
+    }
+}
+
+fn box_blur_v(src: &[i32], dst: &mut [i32], w: usize, h: usize, radius: usize) {
+    let div = (radius * 2 + 1) as i32;
+    let half = div / 2;
+    for x in 0..w {
+        let mut sum = src[x] * (radius as i32 + 1);
+        for dy in 1..=radius {
+            sum += src[dy.min(h - 1) * w + x];
+        }
+        for y in 0..h {
+            dst[y * w + x] = (sum + half) / div;
+            let top = src[y.saturating_sub(radius) * w + x];
+            let bottom = src[(y + radius + 1).min(h - 1) * w + x];
+            sum += bottom - top;
+        }
+    }
+}
+
 // GPUI omits a window from App::windows during input callbacks. Retire its atlas
 // allocation after the callback, when the window is back in the app.
 fn retire(image: Option<Arc<RenderImage>>, cx: &mut App) {
@@ -171,6 +437,7 @@ fn after_present(step: usize, due: Instant, now: Instant, period: Duration) -> (
 #[derive(Default)]
 struct Decoded {
     image: Option<Arc<RenderImage>>,
+    blurred: Option<Arc<RenderImage>>,
     video: Option<review_video::Reader>,
     video_failed: bool,
     movie: Option<motion::Reader>,
@@ -185,9 +452,11 @@ pub struct SceneView {
     movie: Option<motion::Reader>,
     movie_failed: bool,
     image: Option<Arc<RenderImage>>,
+    blurred: Option<Arc<RenderImage>>,
+    viewport_px: (u32, u32),
     step: usize,
     poster_pending: bool,
-    interrupt: Option<async_channel::Sender<()>>,
+    interrupt: Option<hi_res::Interrupt>,
     next_due: Option<Instant>,
     playing: bool,
     busy: bool,
@@ -197,10 +466,11 @@ pub struct SceneView {
 }
 
 impl SceneView {
-    pub fn new(landscape: Landscape, cx: &mut Context<Self>) -> Self {
+    pub fn new(landscape: Landscape, initial_viewport: (u32, u32), cx: &mut Context<Self>) -> Self {
         cx.on_release(|view, app| {
             view.decoder_cancel.cancel();
             retire(view.image.take(), app);
+            retire(view.blurred.take(), app);
         })
         .detach();
         let mut view = Self {
@@ -211,6 +481,8 @@ impl SceneView {
             movie: None,
             movie_failed: false,
             image: None,
+            blurred: None,
+            viewport_px: initial_viewport,
             step: 0,
             poster_pending: true,
             interrupt: None,
@@ -223,6 +495,16 @@ impl SceneView {
         };
         view.schedule(cx);
         view
+    }
+
+    pub fn set_viewport(&mut self, viewport: (u32, u32)) {
+        if viewport.0 > 0 && viewport.1 > 0 {
+            self.viewport_px = viewport;
+        }
+    }
+
+    pub fn blurred_image(&self) -> Option<Arc<RenderImage>> {
+        self.blurred.clone()
     }
     pub fn set_landscape(&mut self, landscape: Landscape, cx: &mut Context<Self>) {
         if self.landscape == landscape {
@@ -301,9 +583,12 @@ impl SceneView {
         };
         let previous_reader = self.video.take();
         let previous_movie = self.movie.take();
+        let target_size =
+            (self.viewport_px.0 > 0 && self.viewport_px.1 > 0).then_some(self.viewport_px);
+        let refresh_blur = poster || step.is_multiple_of(3);
         let decoder_cancel = self.decoder_cancel.clone();
         let generation = self.generation;
-        let (interrupt, interrupted) = async_channel::bounded::<()>(1);
+        let (interrupt, interrupted) = hi_res::Interrupt::pair();
         self.interrupt = Some(interrupt);
         self.busy = true;
         cx.spawn(async move |this, cx| {
@@ -313,10 +598,14 @@ impl SceneView {
                 if let Some(movie) = movie {
                     if poster {
                         decoded.image = movie.poster().or_else(|| decode(bytes));
+                        decoded.blurred = decoded.image.as_deref().and_then(blur_backdrop);
                         return decoded;
                     }
-                    match motion::frame(previous_movie, movie, step) {
+                    match motion::frame(previous_movie, movie, step, target_size) {
                         Ok((reader, image)) => {
+                            if refresh_blur {
+                                decoded.blurred = blur_backdrop(&image);
+                            }
                             decoded.image = Some(image);
                             decoded.movie = Some(reader);
                         }
@@ -326,6 +615,9 @@ impl SceneView {
                                 scene.id, error
                             );
                             decoded.image = decode(bytes);
+                            if refresh_blur {
+                                decoded.blurred = decoded.image.as_deref().and_then(blur_backdrop);
+                            }
                             decoded.movie_failed = true;
                         }
                     }
@@ -334,6 +626,7 @@ impl SceneView {
                 if let Some(source) = video_source {
                     if poster {
                         decoded.image = source.poster(scene.id).or_else(|| decode(bytes));
+                        decoded.blurred = decoded.image.as_deref().and_then(blur_backdrop);
                         return decoded;
                     }
                     match review_video::Reader::frame(
@@ -344,6 +637,9 @@ impl SceneView {
                         step,
                     ) {
                         Ok((reader, image)) => {
+                            if refresh_blur {
+                                decoded.blurred = blur_backdrop(&image);
+                            }
                             decoded.image = Some(image);
                             decoded.video = Some(reader);
                         }
@@ -353,32 +649,27 @@ impl SceneView {
                                 scene.id, err
                             );
                             decoded.image = decode(bytes);
+                            if refresh_blur {
+                                decoded.blurred = decoded.image.as_deref().and_then(blur_backdrop);
+                            }
                             decoded.video_failed = true;
                         }
                     }
                     return decoded;
                 }
                 decoded.image = decode(bytes);
+                if refresh_blur {
+                    decoded.blurred = decoded.image.as_deref().and_then(blur_backdrop);
+                }
                 decoded
             });
-            let decoded = if (movie.is_some() || video_source.is_some()) && !poster {
+            let decoded = if video_source.is_some() && !poster {
                 let timeout = cx.background_executor().timer(Duration::from_secs(3));
                 match futures::future::select(decode_job, Box::pin(timeout)).await {
                     futures::future::Either::Left((result, _)) => result,
                     futures::future::Either::Right((_, pending)) => {
-                        if movie.is_some() {
-                            // A blocking Media Foundation read cannot be
-                            // interrupted, so abandon the task and show the
-                            // poster instead of holding the view busy.
-                            drop(pending);
-                            Decoded {
-                                movie_failed: true,
-                                ..Decoded::default()
-                            }
-                        } else {
-                            timeout_cancel.cancel();
-                            pending.await
-                        }
+                        timeout_cancel.cancel();
+                        pending.await
                     }
                 }
             } else {
@@ -386,6 +677,7 @@ impl SceneView {
             };
             let Decoded {
                 image: decoded,
+                blurred,
                 video: reader,
                 video_failed,
                 movie: movie_reader,
@@ -393,11 +685,7 @@ impl SceneView {
             } = decoded;
             let remaining = due.saturating_duration_since(Instant::now());
             if !remaining.is_zero() {
-                futures::future::select(
-                    Box::pin(cx.background_executor().timer(remaining)),
-                    Box::pin(interrupted.recv()),
-                )
-                .await;
+                hi_res::sleep_or_cancel(remaining, interrupted, cx.background_executor()).await;
             }
             let _ = this.update(cx, |view, cx| {
                 view.busy = false;
@@ -412,6 +700,9 @@ impl SceneView {
                     view.movie_failed |= movie_failed;
                     if let Some(image) = decoded {
                         retire(view.image.replace(image), cx);
+                        if let Some(blur) = blurred {
+                            retire(view.blurred.replace(blur), cx);
+                        }
                         view.poster_pending = false;
                         if !poster {
                             let period = Duration::from_secs_f64(1. / f64::from(fps));
@@ -423,6 +714,7 @@ impl SceneView {
                     } else if poster {
                         view.poster_failed = true;
                         retire(view.image.take(), cx);
+                        retire(view.blurred.take(), cx);
                         cx.notify();
                     } else {
                         view.fallback(cx);
@@ -442,7 +734,13 @@ impl SceneView {
 }
 
 impl Render for SceneView {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let scale = window.scale_factor();
+        let viewport = window.viewport_size();
+        self.viewport_px = (
+            (f32::from(viewport.width) * scale).round().max(0.) as u32,
+            (f32::from(viewport.height) * scale).round().max(0.) as u32,
+        );
         div()
             .size_full()
             .overflow_hidden()
@@ -662,5 +960,35 @@ mod tests {
                 assert!(decode(frames.at(frames.count - 1).unwrap()).is_some());
             }
         }
+    }
+    #[test]
+    fn blur_backdrop_smooths_edges_and_pads_clamped_border() {
+        let mut raw = vec![0u8; 32 * 16 * 4];
+        for y in 0..16 {
+            for x in 0..32 {
+                let off = (y * 32 + x) * 4;
+                if x >= 16 {
+                    raw[off..off + 4].copy_from_slice(&[240, 160, 80, 255]);
+                } else {
+                    raw[off + 3] = 255;
+                }
+            }
+        }
+        let img = image::RgbaImage::from_raw(32, 16, raw).unwrap();
+        let source = RenderImage::new([image::Frame::new(img)]);
+        let blurred = blur_backdrop(&source).unwrap();
+        let size = blurred.size(0);
+        assert_eq!((u32::from(size.width), u32::from(size.height)), (34, 18));
+        let bytes = blurred.as_bytes(0).unwrap();
+        let px = |x: usize, y: usize| -> &[u8] {
+            let off = (y * 34 + x) * 4;
+            &bytes[off..off + 4]
+        };
+        assert!(bytes.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+        assert_eq!(px(0, 8), px(1, 8));
+        assert_eq!(px(33, 8), px(32, 8));
+        assert_eq!(px(17, 0), px(17, 1));
+        assert_eq!(px(17, 17), px(17, 16));
+        assert!(px(17, 8)[0] > 40 && px(17, 8)[0] < 200);
     }
 }

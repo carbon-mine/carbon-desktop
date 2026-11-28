@@ -5,12 +5,15 @@ use super::*;
 use accesskit::Role;
 use carbon_profiles::{Profile, TargetKey};
 use gpui::SharedString;
-use gpui::{AnyElement, div, img, px};
+use gpui::{
+    AnyElement, Bounds, BoxShadow, ContentMask, Corners, DevicePixels, ObjectFit, Pixels,
+    RenderImage, Rgba, canvas, div, img, linear_color_stop, linear_gradient, point, px, rgba, size,
+};
 use gpui_component::StyledExt;
 use icons::Icon;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, path::Path};
-use theme::{Palette, Partition, compact_action};
+use std::{cell::Cell, collections::HashSet, path::Path, rc::Rc, sync::Arc};
+use theme::{Palette, Partition, compact_action, glass_action};
 
 const ORDER_FILE: &str = "home-order.json";
 /// Two capped UUID lists need about 10 KiB, so the shared 4 KiB preference cap
@@ -120,6 +123,61 @@ impl HomeOrder {
 }
 
 impl Launcher {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Mirrors Launcher::command with Home floating pill contrast."
+    )]
+    fn home_command<F>(
+        &self,
+        p: Palette,
+        id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
+        primary: bool,
+        disabled: bool,
+        cx: &Context<Self>,
+        action: F,
+    ) -> accessibility::Semantic
+    where
+        F: Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    {
+        let treatment = if primary {
+            Partition::Primary
+        } else {
+            Partition::Neutral
+        };
+        let id = id.into();
+        let label = label.into();
+        let button = if primary {
+            theme::label(
+                compact_action(id.clone(), p, treatment, disabled, cx),
+                label.clone(),
+                p,
+                treatment,
+                disabled,
+            )
+        } else {
+            home_pill_button(id.clone(), false, disabled, cx).child(
+                div()
+                    .text_color(if disabled {
+                        rgba(0xffffff7a)
+                    } else {
+                        rgba(0xf6f7f9ff)
+                    })
+                    .child(label.clone()),
+            )
+        };
+        self.control(
+            button,
+            id,
+            label.as_ref(),
+            Role::Button,
+            disabled,
+            None,
+            cx,
+            action,
+        )
+    }
+
     pub(super) fn surface_tabs(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
         row()
             .gap_1()
@@ -130,27 +188,17 @@ impl Launcher {
 
     fn surface_tab(
         &self,
-        p: Palette,
+        _p: Palette,
         surface: Surface,
         name: &'static str,
         cx: &Context<Self>,
     ) -> accessibility::Semantic {
         let selected = self.surface == surface;
         let id = SharedString::from(format!("surface-{name}"));
-        let button = compact_action(
-            id.clone(),
-            p,
-            if selected {
-                Partition::Selected
-            } else {
-                Partition::Neutral
-            },
-            false,
-            cx,
-        )
-        .min_w(px(72.))
-        .justify_center()
-        .child(name);
+        let button = home_pill_button(id.clone(), selected, false, cx)
+            .min_w(px(72.))
+            .justify_center()
+            .child(name);
         self.control(
             button,
             id,
@@ -177,14 +225,57 @@ impl Launcher {
     ) -> AnyElement {
         let compact = is_narrow(window) || f32::from(window.viewport_size().width) < 760.;
         let shelf_height = home_shelf_height(window);
+        let background = match self.home_world_image() {
+            Some(image) => img(image)
+                .size_full()
+                .object_fit(gpui::ObjectFit::Cover)
+                .into_any_element(),
+            None => self.artwork.view.clone().into_any_element(),
+        };
+        let home_bounds = Rc::new(Cell::new(Bounds::default()));
+        let record_bounds = home_bounds.clone();
+        let (world_blur, scene_view) = self.live_blur_source();
+        let backdrop = BlurBackdrop {
+            home_bounds,
+            world_blur,
+            scene_view,
+        };
         let home = col()
             .id("home")
+            .relative()
             .flex_1()
             .min_h_0()
+            .overflow_hidden()
             .bg(p.surface)
             .track_focus(&self.home_focus)
-            .child(self.home_hero(p, compact, window.viewport_size().width < px(620.), cx))
-            .child(self.home_shelf(p, compact, shelf_height, cx));
+            .child(
+                canvas(
+                    move |bounds, _, _| record_bounds.set(bounds),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .right_0(),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .child(background),
+            )
+            .child(self.home_hero(
+                p,
+                compact,
+                window.viewport_size().width < px(620.),
+                backdrop.clone(),
+                cx,
+            ))
+            .child(self.home_shelf(p, compact, shelf_height, backdrop, cx));
         self.accessibility
             .focus_group(home, "home", "Home", Role::Main, &self.home_focus)
             .into_any_element()
@@ -195,15 +286,9 @@ impl Launcher {
         p: Palette,
         compact: bool,
         narrow_header: bool,
+        backdrop: BlurBackdrop,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let background = match self.home_world_image() {
-            Some(image) => img(image)
-                .size_full()
-                .object_fit(gpui::ObjectFit::Cover)
-                .into_any_element(),
-            None => self.artwork.view.clone().into_any_element(),
-        };
         let ink = Palette::read(Preference::Dark, gpui::WindowAppearance::Dark);
         let identity = row().gap_2().child(icons::brand_mark(true, px(28.))).child(
             div()
@@ -218,7 +303,7 @@ impl Launcher {
                 .gap_1()
                 .child(self.surface_tabs(ink, cx))
                 .when(!self.history.is_empty(), |bar| {
-                    bar.child(self.command(
+                    bar.child(self.home_command(
                         ink,
                         "home-back",
                         "Back",
@@ -231,7 +316,7 @@ impl Launcher {
                     ))
                 });
         let paused = self.artwork.playback.paused;
-        let scenery_button = self.command(
+        let scenery_button = self.home_command(
             ink,
             "home-scenery",
             "Scenery",
@@ -245,7 +330,7 @@ impl Launcher {
         );
         let playback_controls = row()
             .gap_1()
-            .child(self.command(
+            .child(self.home_command(
                 ink,
                 "home-motion",
                 if paused { "Resume" } else { "Pause" },
@@ -260,7 +345,7 @@ impl Launcher {
                     cx.notify();
                 },
             ))
-            .child(self.command(
+            .child(self.home_command(
                 ink,
                 "home-shuffle",
                 "Shuffle",
@@ -272,7 +357,7 @@ impl Launcher {
                     cx.notify();
                 },
             ));
-        let account = self.command(
+        let account = self.home_command(
             ink,
             "home-account",
             self.account.read(cx).toolbar_label(),
@@ -314,29 +399,48 @@ impl Launcher {
                     .child(navigation)
                     .children(scenery_button),
             );
+        let shade_height: f32 = if compact { 124. } else { 146. };
+        let header_shade = [
+            (shade_height, rgba(0x0d11146e)),
+            ((shade_height * 0.68).round(), rgba(0x0d111473)),
+        ]
+        .map(|(height, top)| {
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(height))
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(top, 0.0),
+                    linear_color_stop(rgba(0x0d111400), 1.0),
+                ))
+        });
+        let bottom_band = if compact {
+            col()
+                .w_full()
+                .when_some(self.home_credit(true), |el, credit| {
+                    el.child(row().w_full().justify_end().child(credit))
+                })
+                .child(self.home_launchbox(p, compact, backdrop, cx))
+                .into_any_element()
+        } else {
+            row()
+                .w_full()
+                .items_end()
+                .justify_between()
+                .gap_4()
+                .child(self.home_launchbox(p, compact, backdrop, cx))
+                .children(self.home_credit(false))
+                .into_any_element()
+        };
         col()
             .relative()
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .right_0()
-                    .child(background),
-            )
-            .child(
-                img("brand/home-header-shade.png")
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .w_full()
-                    .h(px(if compact { 124. } else { 146. }))
-                    .object_fit(gpui::ObjectFit::Fill),
-            )
+            .children(header_shade)
             .child(
                 col()
                     .relative()
@@ -346,56 +450,190 @@ impl Launcher {
                     .overflow_y_scroll()
                     .child(heading)
                     .child(div().flex_1().min_h(px(8.)))
-                    .child(self.home_launchbox(p, compact, cx)),
+                    .child(bottom_band),
             )
             .into_any_element()
     }
 
-    fn home_launchbox(&self, p: Palette, compact: bool, cx: &Context<Self>) -> AnyElement {
-        let panel = col()
+    fn home_credit(&self, compact: bool) -> Option<AnyElement> {
+        if self.home_world_image().is_some() {
+            return None;
+        }
+        let credit = self.artwork.playback.scene.source_credit();
+        let pill = div()
+            .flex_initial()
+            .min_w_0()
+            .max_w(px(if compact { 360. } else { 700. }))
+            .mb(px(if compact { 6. } else { 10. }))
+            .mr(home_inset(compact))
+            .px(px(7.))
+            .py(px(3.))
+            .bg(rgba(0x0f121799))
+            .border_1()
+            .border_color(rgba(0xffffff24))
+            .text_size(px(10.5))
+            .text_color(rgba(0xe5e8eed9))
+            .text_ellipsis()
+            .child(credit);
+        Some(
+            self.accessibility
+                .text(pill, "home-scenery-credit", credit, Role::Label)
+                .into_any_element(),
+        )
+    }
+
+    fn home_launchbox(
+        &self,
+        p: Palette,
+        compact: bool,
+        backdrop: BlurBackdrop,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let glass = ShelfGlass::for_palette(p);
+        let (key_alpha, ambient_alpha) = if p.dark {
+            (0x00000024, 0x00000038)
+        } else {
+            (0x00000010, 0x00000018)
+        };
+        let panel = div()
+            .relative()
             .flex_none()
+            .overflow_hidden()
             .mb(px(if compact { 12. } else { 26. }))
             .mx(home_inset(compact))
-            .bg(p.layer)
             .border_1()
-            .border_color(p.stroke)
-            .px_4()
-            .py(px(if compact { 8. } else { 16. }))
-            .gap_2();
+            .border_color(glass.card_border)
+            .shadow(vec![
+                BoxShadow {
+                    color: rgba(ambient_alpha).into(),
+                    offset: point(px(0.), px(12.)),
+                    blur_radius: px(32.),
+                    spread_radius: px(0.),
+                },
+                BoxShadow {
+                    color: rgba(key_alpha).into(),
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(6.),
+                    spread_radius: px(0.),
+                },
+            ])
+            .child(backdrop.layer())
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .bg(glass.card_tint),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(1.))
+                    .bg(glass.card_sheen),
+            )
+            .child(
+                col()
+                    .relative()
+                    .px_4()
+                    .py(px(if compact { 10. } else { 16. }))
+                    .gap(px(if compact { 8. } else { 10. }))
+                    .child(self.home_launchbox_content(p, glass, cx)),
+            );
         panel
-            .when(!compact, |panel| panel.w(px(330.)))
-            .child(self.home_launchbox_content(p, cx))
+            .when(!compact, |panel| panel.w(px(384.)))
             .into_any_element()
     }
 
-    fn home_launchbox_content(&self, p: Palette, cx: &Context<Self>) -> gpui::Div {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Mirrors Launcher::home_command with Home frosted card button contrast."
+    )]
+    fn home_launchbox_command<F>(
+        &self,
+        p: Palette,
+        glass: ShelfGlass,
+        id: impl Into<gpui::ElementId>,
+        label: impl Into<SharedString>,
+        primary: bool,
+        disabled: bool,
+        cx: &Context<Self>,
+        action: F,
+    ) -> accessibility::Semantic
+    where
+        F: Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    {
+        let treatment = if primary {
+            Partition::Primary
+        } else {
+            Partition::Neutral
+        };
+        let id = id.into();
+        let label = label.into();
+        let base = if primary {
+            compact_action(id.clone(), p, treatment, disabled, cx)
+        } else {
+            glass_action(id.clone(), p, treatment, disabled, cx).when(!disabled, |button| {
+                button.border_color(glass.card_control_border)
+            })
+        };
+        let button = theme::label(base, label.clone(), p, treatment, disabled);
+        self.control(
+            button,
+            id,
+            label.as_ref(),
+            Role::Button,
+            disabled,
+            None,
+            cx,
+            action,
+        )
+    }
+
+    fn home_launchbox_content(
+        &self,
+        p: Palette,
+        glass: ShelfGlass,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
         let Some(profile) = self.selected_profile().cloned() else {
             return col()
-                .gap_2()
+                .gap(px(10.))
                 .child(
-                    div()
-                        .text_sm()
-                        .text_color(p.muted)
-                        .child("Welcome to Carbon Desktop"),
+                    col()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_medium()
+                                .text_color(glass.eyebrow)
+                                .child("Welcome to Carbon Desktop"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(19.))
+                                .font_semibold()
+                                .child("Set up your first instance"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(glass.meta)
+                                .child("Start a vanilla profile or import a pack."),
+                        ),
                 )
-                .child(
-                    div()
-                        .text_size(px(20.))
-                        .font_semibold()
-                        .child("Set up your first instance"),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(p.muted)
-                        .child("Start a vanilla profile or import a pack."),
-                )
+                .child(div().h(px(1.)).w_full().bg(glass.divider))
                 .child(
                     row()
                         .flex_wrap()
                         .gap_2()
-                        .child(self.command(
+                        .child(self.home_launchbox_command(
                             p,
+                            glass,
                             "home-first-create",
                             "Create instance",
                             true,
@@ -405,8 +643,9 @@ impl Launcher {
                             cx,
                             |this, window, cx| this.editor(popup::Mode::Create, window, cx),
                         ))
-                        .child(self.command(
+                        .child(self.home_launchbox_command(
                             p,
+                            glass,
                             "home-first-import",
                             "Import pack",
                             false,
@@ -436,78 +675,104 @@ impl Launcher {
         };
         let pinned = self.home_order.is_pinned(profile.id);
         let readiness = self.home_readiness(&profile, cx);
+        let ready = readiness.starts_with("Setup ready");
         let busy = self.popup.is_some() || self.picker_open;
-        let button = compact_action("home-pick", p, Partition::Neutral, false, cx)
+        let picker = glass_action("home-pick", p, Partition::Neutral, busy, cx)
             .w_full()
-            .h(px(42.))
-            .border_color(p.control_line)
+            .h(px(40.))
+            .when(!busy, |button| {
+                button.border_color(glass.card_control_border)
+            })
             .justify_start()
             .gap_2()
             .pl_2()
             .pr(px(34.))
             .child(
-                Icon::Builtin(carbon_profiles::icons::displayed(&profile)).render(px(24.), p.ink),
+                Icon::Builtin(carbon_profiles::icons::displayed(&profile)).render(px(22.), p.ink),
             )
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_size(px(19.))
+                    .text_size(px(18.))
                     .font_semibold()
                     .truncate()
                     .child(pick_text),
             );
         col()
-            .gap_2()
-            .child(div().text_sm().text_color(p.muted).child(eyebrow))
+            .gap(px(10.))
             .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .child(self.control(
-                        button,
-                        "home-pick",
-                        &pick_label,
-                        Role::Button,
-                        busy,
-                        None,
-                        cx,
-                        |this, window, cx| this.open_home_switcher(window, cx),
-                    ))
+                col()
+                    .gap(px(6.))
                     .child(
                         div()
-                            .absolute()
-                            .right(px(12.))
-                            .top(px(13.))
-                            .size(px(16.))
+                            .text_xs()
+                            .font_medium()
+                            .text_color(glass.eyebrow)
+                            .child(eyebrow),
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .child(self.control(
+                                picker,
+                                "home-pick",
+                                &pick_label,
+                                Role::Button,
+                                busy,
+                                None,
+                                cx,
+                                |this, window, cx| this.open_home_switcher(window, cx),
+                            ))
                             .child(
-                                Icon::ChevronDown
-                                    .render(px(16.), if busy { p.muted } else { p.ink }),
+                                div()
+                                    .absolute()
+                                    .right(px(12.))
+                                    .top(px(12.))
+                                    .size(px(16.))
+                                    .child(Icon::ChevronDown.render(
+                                        px(16.),
+                                        if busy { p.muted } else { glass.eyebrow },
+                                    )),
                             ),
-                    ),
+                    )
+                    .child(div().text_xs().text_color(glass.meta).child(metadata)),
             )
-            .child(div().text_sm().text_color(p.muted).child(metadata))
-            .child(self.accessibility.text(
-                div().text_sm().text_color(p.muted).child(readiness),
-                "home-readiness",
-                readiness,
-                Role::Label,
-            ))
+            .child(div().h(px(1.)).w_full().bg(glass.divider))
+            .child(
+                row()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_none().size(px(6.)).bg(if ready {
+                        p.accent
+                    } else {
+                        glass.status_muted
+                    }))
+                    .child(self.accessibility.text(
+                        div().text_xs().text_color(glass.meta).child(readiness),
+                        "home-readiness",
+                        readiness,
+                        Role::Label,
+                    )),
+            )
             .child(
                 row()
                     .flex_wrap()
                     .gap_2()
-                    .child(self.command(
+                    .child(self.home_launchbox_command(
                         p,
+                        glass,
                         "home-open",
                         "Open instance",
                         true,
-                        self.popup.is_some() || self.picker_open,
+                        busy,
                         cx,
                         |this, window, cx| this.open_selected_from_home(window, cx),
                     ))
-                    .child(self.command(
+                    .child(self.home_launchbox_command(
                         p,
+                        glass,
                         "home-pin",
                         if pinned {
                             "Unpin instance"
@@ -515,14 +780,22 @@ impl Launcher {
                             "Pin instance"
                         },
                         false,
-                        self.popup.is_some() || self.picker_open,
+                        busy,
                         cx,
                         |this, _, cx| this.toggle_selected_pin(cx),
                     )),
             )
     }
 
-    fn home_shelf(&self, p: Palette, compact: bool, height: f32, cx: &Context<Self>) -> AnyElement {
+    fn home_shelf(
+        &self,
+        p: Palette,
+        compact: bool,
+        height: f32,
+        backdrop: BlurBackdrop,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let glass = ShelfGlass::for_palette(p);
         let ordered = self.home_order.ordered_ids(&self.profiles);
         let count = self.profiles.len();
         let visible = if compact { 2 } else { 4 };
@@ -531,7 +804,7 @@ impl Launcher {
             let Some(profile) = self.profiles.iter().find(|profile| profile.id == *id) else {
                 continue;
             };
-            tiles = tiles.child(self.home_tile(profile, p, compact, cx));
+            tiles = tiles.child(self.home_tile(profile, p, glass, compact, cx));
         }
         let body = if ordered.is_empty() {
             col()
@@ -547,17 +820,50 @@ impl Launcher {
         } else {
             tiles.into_any_element()
         };
+        let disabled = self.popup.is_some() || self.picker_open;
+        let open_library = self.control(
+            theme::label(
+                glass_action("home-open-library", p, Partition::Neutral, disabled, cx)
+                    .border_color(if p.dark {
+                        rgba(0xffffff44)
+                    } else {
+                        rgba(0x00000038)
+                    }),
+                "Open library",
+                p,
+                Partition::Neutral,
+                disabled,
+            ),
+            "home-open-library",
+            "Open library",
+            Role::Button,
+            disabled,
+            None,
+            cx,
+            |this, window, cx| this.open_library(window, cx),
+        );
         col()
+            .relative()
             .flex_none()
             .h(px(height))
             .w_full()
+            .overflow_hidden()
             .justify_center()
             .gap_2()
             .px(home_inset(compact))
             .py(px(10.))
-            .bg(p.surface)
             .border_t_1()
-            .border_color(p.stroke)
+            .border_color(glass.top_border)
+            .child(backdrop.layer())
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .bg(glass.tint),
+            )
             .child(
                 row()
                     .w_full()
@@ -579,15 +885,7 @@ impl Launcher {
                                     .child(instance_count(count)),
                             ),
                     )
-                    .child(self.command(
-                        p,
-                        "home-open-library",
-                        "Open library",
-                        false,
-                        self.popup.is_some() || self.picker_open,
-                        cx,
-                        |this, window, cx| this.open_library(window, cx),
-                    )),
+                    .child(open_library),
             )
             .child(body)
             .into_any_element()
@@ -597,6 +895,7 @@ impl Launcher {
         &self,
         profile: &Profile,
         p: Palette,
+        glass: ShelfGlass,
         compact: bool,
         cx: &Context<Self>,
     ) -> accessibility::Semantic {
@@ -604,7 +903,7 @@ impl Launcher {
         let selected = self.personal == Some(id);
         let kind = profile_kind(profile);
         let label = format!("{}, {kind}", profile.name);
-        let button = compact_action(
+        let button = glass_action(
             SharedString::from(format!("home-shelf-{id}")),
             p,
             if selected {
@@ -629,6 +928,7 @@ impl Launcher {
                 .min_w_0()
                 .child(home_mark(
                     p,
+                    glass,
                     Icon::Builtin(carbon_profiles::icons::displayed(profile)),
                 ))
                 .child(
@@ -931,13 +1231,180 @@ fn profile_kind(profile: &Profile) -> String {
     }
 }
 
-fn home_mark(p: Palette, icon: Icon) -> gpui::Div {
+/// Shared Home frosted-glass backdrop painter aligned to the full Home bounds.
+#[derive(Clone)]
+struct BlurBackdrop {
+    home_bounds: Rc<Cell<Bounds<Pixels>>>,
+    world_blur: Option<Arc<RenderImage>>,
+    scene_view: gpui::Entity<scenery::SceneView>,
+}
+
+impl BlurBackdrop {
+    fn layer(&self) -> AnyElement {
+        let home_bounds = self.home_bounds.clone();
+        let world_blur = self.world_blur.clone();
+        let scene_view = self.scene_view.clone();
+        canvas(
+            |_, _, _| {},
+            move |panel_bounds, _, window, cx| {
+                let Some(blurred) = world_blur
+                    .as_ref()
+                    .cloned()
+                    .or_else(|| scene_view.read(cx).blurred_image())
+                else {
+                    return;
+                };
+                let full = home_bounds.get();
+                if f32::from(full.size.width) <= 0. || f32::from(full.size.height) <= 0. {
+                    return;
+                }
+                let raw_size = blurred.size(0);
+                let inner_w = u32::from(raw_size.width).saturating_sub(2).max(1);
+                let inner_h = u32::from(raw_size.height).saturating_sub(2).max(1);
+                let cover = ObjectFit::Cover.get_bounds(
+                    full,
+                    size(DevicePixels(inner_w as i32), DevicePixels(inner_h as i32)),
+                );
+                let texel_w = cover.size.width / inner_w as f32;
+                let texel_h = cover.size.height / inner_h as f32;
+                let padded = Bounds {
+                    origin: point(cover.origin.x - texel_w, cover.origin.y - texel_h),
+                    size: size(
+                        cover.size.width + texel_w * 2.,
+                        cover.size.height + texel_h * 2.,
+                    ),
+                };
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: panel_bounds,
+                    }),
+                    |window| {
+                        let _ = window.paint_image(padded, Corners::default(), blurred, 0, false);
+                    },
+                );
+            },
+        )
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .into_any_element()
+    }
+}
+
+/// Uniform frosted-glass surface tint, rim, and typography tokens for Home.
+#[derive(Clone, Copy)]
+struct ShelfGlass {
+    tint: Rgba,
+    top_border: Rgba,
+    mark_fill: Rgba,
+    mark_border: Rgba,
+    card_tint: Rgba,
+    card_border: Rgba,
+    card_sheen: Rgba,
+    card_control_border: Rgba,
+    divider: Rgba,
+    eyebrow: Rgba,
+    meta: Rgba,
+    status_muted: Rgba,
+}
+
+impl ShelfGlass {
+    fn for_palette(p: Palette) -> Self {
+        if p.dark {
+            Self {
+                tint: rgba(0x14151888),
+                top_border: rgba(0xffffff38),
+                mark_fill: rgba(0x10111470),
+                mark_border: rgba(0xffffff24),
+                card_tint: rgba(0x0f1217a6),
+                card_border: rgba(0xffffff38),
+                card_sheen: rgba(0xffffff2c),
+                card_control_border: rgba(0xffffff34),
+                divider: rgba(0xffffff1a),
+                eyebrow: rgba(0xd0d4dcff),
+                meta: rgba(0xbec3ccff),
+                status_muted: rgba(0xffffff5c),
+            }
+        } else {
+            Self {
+                tint: rgba(0xf3f4f8b8),
+                top_border: rgba(0x00000024),
+                mark_fill: rgba(0xffffff8a),
+                mark_border: rgba(0x00000024),
+                card_tint: rgba(0xf4f5f8cc),
+                card_border: rgba(0x00000024),
+                card_sheen: rgba(0xffffffb0),
+                card_control_border: rgba(0x00000028),
+                divider: rgba(0x00000014),
+                eyebrow: rgba(0x4b5058ff),
+                meta: rgba(0x52565eff),
+                status_muted: rgba(0x00000038),
+            }
+        }
+    }
+}
+
+fn home_pill_button(
+    id: impl Into<gpui::ElementId>,
+    selected: bool,
+    disabled: bool,
+    cx: &App,
+) -> gpui_component::button::Button {
+    use gpui_component::{
+        Disableable, Selectable, Sizable,
+        button::{Button, ButtonCustomVariant, ButtonVariants},
+    };
+    let (bg, hover, active, border, ink) = if selected {
+        (
+            rgba(0xf4f5f7ee),
+            rgba(0xffffffff),
+            rgba(0xdde0e4ff),
+            rgba(0xffffffff),
+            rgba(0x14161aff),
+        )
+    } else if disabled {
+        (
+            rgba(0x10131880),
+            rgba(0x10131880),
+            rgba(0x10131880),
+            rgba(0xffffff22),
+            rgba(0x9ca3afff),
+        )
+    } else {
+        (
+            rgba(0x0f1217b8),
+            rgba(0x1b2028db),
+            rgba(0x272d38eb),
+            rgba(0xffffff42),
+            rgba(0xf6f7f9ff),
+        )
+    };
+    let variant = ButtonCustomVariant::new(cx)
+        .color(bg.into())
+        .foreground(ink.into())
+        .hover(hover.into())
+        .active(active.into());
+    Button::new(id)
+        .custom(variant)
+        .selected(selected)
+        .disabled(disabled)
+        .small()
+        .rounded(px(0.))
+        .h(px(32.))
+        .border_1()
+        .border_color(border)
+        .text_color(ink)
+}
+
+fn home_mark(p: Palette, glass: ShelfGlass, icon: Icon) -> gpui::Div {
     div()
         .flex_none()
         .size(px(28.))
-        .bg(p.surface)
+        .bg(glass.mark_fill)
         .border_1()
-        .border_color(p.stroke)
+        .border_color(glass.mark_border)
         .flex()
         .items_center()
         .justify_center()

@@ -509,11 +509,7 @@ impl Launcher {
                     } else if let Some(id) = this
                         .profiles
                         .iter()
-                        .find(|item| {
-                            format!("{} {}", item.name, item.version.id())
-                                .to_lowercase()
-                                .contains(&query)
-                        })
+                        .find(|item| view::matches_profile_query(item, &query))
                         .map(|item| item.id)
                     {
                         this.select_personal(id, cx);
@@ -569,7 +565,7 @@ impl Launcher {
         #[cfg(not(windows))]
         let initial_message = "No active tasks".to_owned();
         let home_order = home::HomeOrder::load(&root.path);
-        let artwork = artwork::HomeArtwork::new(&root.path, cx);
+        let artwork = artwork::HomeArtwork::new(&root.path, window, cx);
         let mut launcher = Self {
             #[cfg(target_os = "linux")]
             reduced_motion: true,

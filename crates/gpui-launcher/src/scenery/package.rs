@@ -211,41 +211,49 @@ mod tests {
 
     #[test]
     fn a_valid_package_exposes_its_views() {
-        let root = package(&[("riverside", "riverside.jpg", "riverside.mp4")]);
+        let id = crate::scenery::Landscape::ALL[0].0.id;
+        let poster = format!("{id}.jpg");
+        let motion = format!("{id}.mp4");
+        let root = package(&[(id, &poster, &motion)]);
         let package = Package::load(root.path()).unwrap();
-        let movie = package.view("riverside").unwrap();
+        let movie = package.view(id).unwrap();
         assert_eq!((movie.fps, movie.frames), (30, 240));
         assert!(movie.motion().exists());
     }
 
     #[test]
     fn unsafe_or_incomplete_packages_are_rejected() {
-        let root = package(&[("riverside", "riverside.jpg", "riverside.mp4")]);
+        let id = crate::scenery::Landscape::ALL[0].0.id;
+        let poster = format!("{id}.jpg");
+        let motion = format!("{id}.mp4");
+        let root = package(&[(id, &poster, &motion)]);
         let manifest = fs::read_to_string(root.path().join("manifest.json")).unwrap();
         let cases = [
-            manifest.replace("riverside.jpg", "../riverside.jpg"),
-            manifest.replace("riverside.jpg", "C:/riverside.jpg"),
-            manifest.replace("riverside.mp4", "riverside.mkv"),
+            manifest.replace(&poster, &format!("../{poster}")),
+            manifest.replace(&poster, &format!("C:/{poster}")),
+            manifest.replace(&motion, &format!("{id}.mkv")),
             manifest.replace("\"frames\":240", "\"frames\":0"),
             manifest.replace("\"fps\":30", "\"fps\":61"),
-            manifest.replace("riverside", "unknown-scene"),
-            manifest.replace("\"motion\":\"riverside.mp4\",", ""),
+            manifest.replace(id, "unknown-scene"),
+            manifest.replace(&format!("\"motion\":\"{motion}\","), ""),
         ];
         for case in cases {
             fs::write(root.path().join("manifest.json"), case).unwrap();
             assert!(Package::load(root.path()).is_err());
         }
-        fs::remove_file(root.path().join("riverside.mp4")).unwrap();
+        fs::remove_file(root.path().join(&motion)).unwrap();
         fs::write(root.path().join("manifest.json"), manifest).unwrap();
         assert!(Package::load(root.path()).is_err());
     }
 
     #[test]
     fn duplicate_scenes_are_rejected() {
-        let root = package(&[
-            ("riverside", "riverside.jpg", "riverside.mp4"),
-            ("riverside", "riverside-2.jpg", "riverside-2.mp4"),
-        ]);
+        let id = crate::scenery::Landscape::ALL[0].0.id;
+        let poster = format!("{id}.jpg");
+        let motion = format!("{id}.mp4");
+        let poster2 = format!("{id}-2.jpg");
+        let motion2 = format!("{id}-2.mp4");
+        let root = package(&[(id, &poster, &motion), (id, &poster2, &motion2)]);
         assert!(Package::load(root.path()).is_err());
     }
 }
