@@ -224,7 +224,7 @@ mod mf {
                 })
                 .map_err(|error| format!("Cannot start scenery decode worker: {error}"))?;
 
-            match ready_rx.recv_timeout(Duration::from_secs(3)) {
+            match ready_rx.recv_timeout(Duration::from_secs(15)) {
                 Ok(Ok(())) => Ok(Self {
                     path,
                     next: step,
@@ -241,7 +241,7 @@ mod mf {
                 Err(_) => {
                     stop.store(true, Ordering::Release);
                     drop(rx);
-                    Err("Scenery decode worker did not start within three seconds".into())
+                    Err("Scenery decode worker did not start within fifteen seconds".into())
                 }
             }
         }
