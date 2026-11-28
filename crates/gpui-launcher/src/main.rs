@@ -372,6 +372,7 @@ fn end_label(outcome: &carbon_session::RunOutcome) -> String {
         RunEnd::Completed => "The protected sample completed.",
         RunEnd::StopRequested => "The protected sample stopped after your request.",
         RunEnd::StopForced => "The protected sample did not close in time, so Carbon ended it.",
+        RunEnd::SampleFailed => "The protected sample exited after reporting a failure of its own.",
         RunEnd::Unsettled => "The protected sample ended without a confirmed outcome.",
     }
     .to_owned();
@@ -2305,6 +2306,14 @@ mod tests {
             "The protected sample did not close in time, so Carbon ended it."
         );
         assert_eq!(
+            end_label(&outcome(RunEnd::SampleFailed, Some(true))),
+            "The protected sample exited after reporting a failure of its own."
+        );
+        assert_eq!(
+            end_label(&outcome(RunEnd::SampleFailed, None)),
+            "The protected sample exited after reporting a failure of its own. Its process boundary could not be observed."
+        );
+        assert_eq!(
             end_label(&outcome(RunEnd::Completed, None)),
             "The protected sample completed. Its process boundary could not be observed."
         );
@@ -2338,6 +2347,8 @@ mod tests {
         assert!(!settled(record(RunEnd::Completed, Some(true))).exit_blocked(None));
         assert!(!settled(record(RunEnd::StopRequested, Some(true))).exit_blocked(None));
         assert!(!settled(record(RunEnd::StopForced, Some(true))).exit_blocked(None));
+        // A sample that reported its own failure still left an empty boundary.
+        assert!(!settled(record(RunEnd::SampleFailed, Some(true))).exit_blocked(None));
         // A failed post-launch check still observed an empty boundary.
         assert!(!settled(record(RunEnd::Unsettled, Some(true))).exit_blocked(None));
         assert!(settled(record(RunEnd::StopRequested, Some(false))).exit_blocked(None));

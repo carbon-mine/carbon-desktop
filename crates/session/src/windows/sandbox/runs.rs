@@ -41,6 +41,9 @@ struct Status {
     /// The close bound expired and this process terminated the remaining tree
     /// itself, so the terminal record must not read as a graceful close.
     forced: bool,
+    /// The root exited on its own but reported a non-zero status after the
+    /// completion claim had been made, so the record must not claim a sample.
+    failed: bool,
     /// The owner has retired the run; no stop may claim it any more.
     retired: bool,
 }
@@ -202,6 +205,18 @@ impl RunGuard {
         status.unsettled = true;
     }
 
+    /// Withdraws the completion claim after the drained sample reported its own
+    /// failure. The empty boundary is already confirmed, so the record reports
+    /// `SampleFailed` rather than an unconfirmed outcome. A stop that claimed the
+    /// run first keeps its own end, and a later [`Self::unsettle`] still wins.
+    pub(super) fn fail(&self) {
+        let mut status = lock_status(&self.entry);
+        if status.completed && !status.retired {
+            status.completed = false;
+            status.failed = true;
+        }
+    }
+
     /// True when a stop request was observed before the run finished.
     pub(super) fn stopped(&self) -> bool {
         matches!(phase(&self.entry), RunPhase::Stopping | RunPhase::Draining)
@@ -226,6 +241,10 @@ impl Drop for RunGuard {
             RunEnd::StopForced
         } else if matches!(status.phase, RunPhase::Stopping | RunPhase::Draining) {
             RunEnd::StopRequested
+        } else if status.failed {
+            // The drained root reported its own non-zero status, so the record
+            // must not claim a completed sample.
+            RunEnd::SampleFailed
         } else if status.completed {
             RunEnd::Completed
         } else {
@@ -263,6 +282,7 @@ pub(super) fn register(run: Uuid, instance: Uuid, job: Arc<Handle>) -> RunGuard 
             completed: false,
             unsettled: false,
             forced: false,
+            failed: false,
             retired: false,
         }),
         job,
@@ -781,6 +801,72 @@ mod tests {
         guard.unsettle();
         drop(guard);
         assert_eq!(outcome(run).unwrap().end, RunEnd::Unsettled);
+    }
+
+    #[test]
+    fn a_drained_sample_that_reported_its_own_failure_is_not_a_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        let subscription = subscribe(run).unwrap();
+        next_phase(&subscription, RunPhase::Running);
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        next_phase(&subscription, RunPhase::Finishing);
+        // The drained root reported a non-zero status, so the completion claim is
+        // withdrawn without turning the confirmed drain into an unknown outcome.
+        guard.fail();
+        drop(guard);
+        next_end(&subscription, RunEnd::SampleFailed);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::SampleFailed);
+        assert_eq!(record.drained, Some(true));
+    }
+
+    #[test]
+    fn a_failure_that_cannot_be_confirmed_stays_unsettled() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        guard.fail();
+        // A later step could not confirm the tree settled, so the unknown outcome
+        // must win over the reported sample failure.
+        guard.unsettle();
+        drop(guard);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::Unsettled);
+    }
+
+    #[test]
+    fn a_reported_failure_cannot_replace_a_stop_that_claimed_the_run() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        assert_eq!(stop_soon(run).unwrap().phase, RunPhase::Draining);
+        wait_drained(run);
+        // The stop claimed the run first, so no later sample result may rewrite
+        // its terminal record.
+        guard.fail();
+        drop(guard);
+        assert_eq!(outcome(run).unwrap().end, RunEnd::StopForced);
     }
 
     #[test]

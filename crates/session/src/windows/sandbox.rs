@@ -565,7 +565,9 @@ pub(super) fn launch(
             return Err(error);
         }
         if exit != 0 {
-            run.unsettle();
+            // The drained root reported its own failure, so the record reports a
+            // sample that did not settle instead of an unconfirmed outcome.
+            run.fail();
             return Err(Error::other(format!(
                 "The fixed Java session exited {exit:#x}"
             )));
