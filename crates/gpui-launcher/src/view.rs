@@ -795,29 +795,18 @@ impl Launcher {
                     Role::Status,
                 ),
             )
-            .child(
-                row()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(self.command(
-                        p,
-                        "world-open-instance",
-                        "Open backing instance",
-                        false,
-                        self.busy(),
-                        cx,
-                        move |this, _, cx| this.select_personal(id.instance, cx),
-                    ))
-                    .child(self.command(
-                        p,
-                        "world-switch-instances",
-                        "Switch to Instances mode",
-                        false,
-                        self.busy(),
-                        cx,
-                        |this, _, cx| this.apply_library_mode(LibraryMode::Instances, cx),
-                    )),
-            )
+            .child(row().flex_wrap().gap_2().child(self.command(
+                p,
+                "world-open-instance",
+                "Open in Instances mode",
+                false,
+                self.busy(),
+                cx,
+                move |this, _, cx| {
+                    this.apply_library_mode(LibraryMode::Instances, cx);
+                    this.select_personal(id.instance, cx);
+                },
+            )))
             .into_any_element()
     }
 

@@ -862,7 +862,6 @@ impl Launcher {
                 Icon::Builtin(carbon_profiles::icons::displayed(profile))
             });
         let busy = self.popup.is_some() || self.picker_open;
-        let instance = world.id.instance;
         let readiness = world.issue.as_ref().map_or(
             "Direct world launch is unavailable until protected launch is qualified.".to_owned(),
             |issue| format!("Save scan needs attention. {issue}"),
@@ -928,23 +927,6 @@ impl Launcher {
                         busy,
                         cx,
                         |this, window, cx| this.open_selected_world_from_home(window, cx),
-                    ))
-                    .child(self.home_launchbox_command(
-                        p,
-                        glass,
-                        "home-world-instance",
-                        "Open instance",
-                        false,
-                        busy,
-                        cx,
-                        move |this, window, cx| {
-                            this.open_profile_from_home(
-                                instance,
-                                "home-world-instance".into(),
-                                window,
-                                cx,
-                            )
-                        },
                     ))
                     .child(self.home_launchbox_command(
                         p,
