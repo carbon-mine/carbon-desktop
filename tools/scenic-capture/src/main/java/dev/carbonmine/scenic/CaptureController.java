@@ -23,9 +23,11 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -46,6 +48,7 @@ public final class CaptureController {
     }
 
     private static CaptureConfig config;
+    private static Path savesDir;
     private static boolean automated = false;
     private static Phase phase = Phase.IDLE;
     private static int worldIndex = 0;
@@ -74,10 +77,13 @@ public final class CaptureController {
     private static final int SETTLE_SWEEP_FRAMES = 140;
     private static final int SETTLE_HOLD_FRAMES = 120;
     private static final int SETTLE_MAX_FRAMES = 720;
+    private static final String DISPOSABLE_MARKER = ".carbon-capture-disposable";
 
     private static Process ffmpegProc;
+    private static Thread ffmpegErrThread;
     private static OutputStream ffmpegStdin;
     private static Path currentOutput;
+    private static Path currentFinalOutput;
     private static boolean currentDirectEncode;
     private static ByteBuffer readbackBuffer;
     private static byte[] transferBytes;
@@ -86,6 +92,7 @@ public final class CaptureController {
     private CaptureController() {}
 
     public static void init(Path gameDir) {
+        savesDir = gameDir.resolve("saves");
         String prop = System.getProperty("carbon.capture.config");
         Path cfgPath = (prop != null && !prop.isBlank())
                 ? Path.of(prop)
@@ -97,9 +104,9 @@ public final class CaptureController {
         try {
             config = GSON.fromJson(Files.readString(cfgPath), CaptureConfig.class);
             if (config != null && config.worlds != null && !config.worlds.isEmpty()) {
+                Files.createDirectories(Path.of(config.outputDir));
                 automated = true;
                 phase = Phase.WAITING_FOR_WORLD;
-                Files.createDirectories(Path.of(config.outputDir));
                 LOGGER.info("Loaded {} capture worlds (mode={}, {}x{} @ {}fps)",
                         config.worlds.size(), config.mode, config.width, config.height, config.fps);
             }
@@ -166,8 +173,16 @@ public final class CaptureController {
         }
         if (phase == Phase.WAITING_FOR_WORLD || phase == Phase.DISCONNECTING) {
             CaptureConfig.WorldJob job = config.worlds.get(worldIndex);
+            if (!isDisposableWorld(job.world)) {
+                LOGGER.error("Refusing to open world '{}': capture runs must use a disposable copy. "
+                                + "Create {}/{} and an empty marker file named {}.",
+                        job.world, savesDir, job.world, DISPOSABLE_MARKER);
+                phase = Phase.DONE;
+                client.scheduleStop();
+                return;
+            }
             viewIndex = 0;
-            LOGGER.info("Launching world {}/{}: {}", worldIndex + 1, config.worlds.size(), job.world);
+            LOGGER.info("Launching disposable world {}/{}: {}", worldIndex + 1, config.worlds.size(), job.world);
             phase = Phase.INITIAL_LOAD_SETTLE;
             settleTicksRemaining = 40;
             client.createIntegratedServerLoader().start(job.world, () -> {
@@ -576,7 +591,7 @@ public final class CaptureController {
             }
             LOGGER.info("Saved scout screenshot: {} ({}x{})", out, fb.textureWidth, fb.textureHeight);
         } catch (Exception e) {
-            LOGGER.error("Failed to save scout screenshot for {}", id, e);
+            throw new RuntimeException("Failed to save scout screenshot for " + id, e);
         }
     }
 
@@ -585,7 +600,10 @@ public final class CaptureController {
             Path outputDir = Path.of(config.outputDir, config.directEncode ? "raw-avc" : "raw");
             Files.createDirectories(outputDir);
             if (config.directEncode) requireFreeSpace(outputDir, config.minimumFreeMiB, vp.id);
-            Path output = outputDir.resolve(vp.id + (config.directEncode ? ".mp4" : ".mkv"));
+            Path finalOutput = outputDir.resolve(vp.id + (config.directEncode ? ".mp4" : ".mkv"));
+            Path output = config.directEncode
+                    ? outputDir.resolve("." + vp.id + ".tmp.mp4")
+                    : finalOutput;
             int w = config.width;
             int h = config.height;
             int neededBytes = w * h * 4;
@@ -635,12 +653,14 @@ public final class CaptureController {
             }
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectErrorStream(false);
-            ffmpegProc = pb.start();
-            ffmpegStdin = ffmpegProc.getOutputStream();
+            Process process = pb.start();
+            ffmpegProc = process;
+            ffmpegStdin = process.getOutputStream();
             currentOutput = output;
+            currentFinalOutput = finalOutput;
             currentDirectEncode = config.directEncode;
-            Thread errThread = new Thread(() -> {
-                try (var br = new BufferedReader(new InputStreamReader(ffmpegProc.getErrorStream()))) {
+            ffmpegErrThread = new Thread(() -> {
+                try (var br = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
                     String line;
                     while ((line = br.readLine()) != null) {
                         ffmpegErrors.add(line);
@@ -648,12 +668,21 @@ public final class CaptureController {
                     }
                 } catch (IOException ignored) {}
             }, "carbon-ffmpeg-stderr");
-            errThread.setDaemon(true);
-            errThread.start();
+            ffmpegErrThread.setDaemon(true);
+            ffmpegErrThread.start();
         } catch (Exception e) {
             abortFfmpeg(vp.id);
             throw new RuntimeException("Failed to start FFmpeg for " + vp.id, e);
         }
+    }
+
+    private static boolean isDisposableWorld(String world) {
+        if (savesDir == null || world == null || world.isBlank()
+                || world.contains("/") || world.contains("\\")
+                || ".".equals(world) || "..".equals(world)) {
+            return false;
+        }
+        return Files.isRegularFile(savesDir.resolve(world).resolve(DISPOSABLE_MARKER));
     }
 
     private static void requireFreeSpace(Path directory, int minimumMiB, String id) throws IOException {
@@ -698,14 +727,21 @@ public final class CaptureController {
                 ffmpegStdin = null;
             }
             if (ffmpegProc != null) {
-                int code = ffmpegProc.waitFor();
+                Process process = ffmpegProc;
+                if (!process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    throw new RuntimeException("FFmpeg did not finish within 30 seconds for " + id);
+                }
+                int code = process.exitValue();
+                joinFfmpegErrorThread();
                 ffmpegProc = null;
                 if (code != 0) {
                     throw new RuntimeException("FFmpeg exited with code " + code + " for " + id + ": " + String.join("; ", ffmpegErrors));
                 }
                 if (currentDirectEncode) {
                     verifyDirectOutput(output, id, totalFramesToCapture);
-                    LOGGER.info("Finished verified direct H.264 capture for {} at {}", id, output);
+                    publishDirectOutput(output, currentFinalOutput, id);
+                    LOGGER.info("Finished verified direct H.264 capture for {} at {}", id, currentFinalOutput);
                 } else {
                     LOGGER.info("Finished lossless capture for {}", id);
                 }
@@ -715,7 +751,20 @@ public final class CaptureController {
             throw new RuntimeException("Failed finishing FFmpeg for " + id, e);
         } finally {
             currentOutput = null;
+            currentFinalOutput = null;
             currentDirectEncode = false;
+        }
+    }
+
+    private static void publishDirectOutput(Path temporary, Path finalOutput, String id) throws IOException {
+        try {
+            Files.move(temporary, finalOutput,
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temporary, finalOutput, StandardCopyOption.REPLACE_EXISTING);
+        }
+        if (!Files.isRegularFile(finalOutput)) {
+            throw new IOException("Verified capture was not published for " + id + " at " + finalOutput);
         }
     }
 
@@ -738,6 +787,7 @@ public final class CaptureController {
                 Thread.currentThread().interrupt();
                 ffmpegProc.destroyForcibly();
             }
+            joinFfmpegErrorThread();
             ffmpegProc = null;
         }
         if (output != null) {
@@ -748,8 +798,20 @@ public final class CaptureController {
             }
         }
         currentOutput = null;
+        currentFinalOutput = null;
         currentDirectEncode = false;
         LOGGER.warn("Aborted FFmpeg capture for {} and removed any partial output", id);
+    }
+
+    private static void joinFfmpegErrorThread() {
+        Thread thread = ffmpegErrThread;
+        if (thread == null || thread == Thread.currentThread()) return;
+        try {
+            thread.join(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        ffmpegErrThread = null;
     }
 
     private static void verifyDirectOutput(Path output, String id, int expectedFrames) throws Exception {
@@ -770,8 +832,29 @@ public final class CaptureController {
                 output.toString())
                 .redirectErrorStream(true)
                 .start();
-        String text = new String(process.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-        int code = process.waitFor();
+        StringBuilder probeOutput = new StringBuilder();
+        Thread reader = new Thread(() -> {
+            try (var br = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    probeOutput.append(line).append('\n');
+                }
+            } catch (IOException ignored) {
+            }
+        }, "carbon-ffprobe-reader");
+        reader.start();
+        if (!process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            reader.join(5000);
+            throw new IllegalStateException("ffprobe timed out for " + id);
+        }
+        reader.join(5000);
+        if (reader.isAlive()) {
+            process.destroyForcibly();
+            throw new IllegalStateException("ffprobe output did not close for " + id);
+        }
+        String text = probeOutput.toString();
+        int code = process.exitValue();
         if (code != 0) {
             throw new IllegalStateException("ffprobe failed for " + id + ": " + text);
         }

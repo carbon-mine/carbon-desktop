@@ -70,7 +70,7 @@ def supports_nvenc(ffmpeg: str) -> bool:
             timeout=10,
         )
         return probe.returncode == 0
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 
@@ -279,8 +279,8 @@ def main() -> int:
     output_dir = Path(cfg["outputDir"])
     raw_dir = output_dir / "raw"
     direct_dir = output_dir / "raw-avc"
-    out_w = int(cfg.get("outputWidth") or cfg["width"])
-    out_h = int(cfg.get("outputHeight") or cfg["height"])
+    out_w = int(cfg.get("outputWidth") or 2560)
+    out_h = int(cfg.get("outputHeight") or 1440)
     ffmpeg = cfg.get("ffmpegPath", "ffmpeg")
     ffprobe = str(Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe"))
     if not Path(ffprobe).exists():
@@ -293,13 +293,16 @@ def main() -> int:
             vid = vp["id"]
             if args.only and vid not in args.only:
                 continue
-            capture_input = raw_dir / f"{vid}.mkv"
-            if not capture_input.exists():
-                capture_input = direct_dir / f"{vid}.mp4"
+            if cfg.get("directEncode"):
+                preferred = direct_dir / f"{vid}.mp4"
+                fallback = raw_dir / f"{vid}.mkv"
+            else:
+                preferred = raw_dir / f"{vid}.mkv"
+                fallback = direct_dir / f"{vid}.mp4"
+            capture_input = preferred if preferred.exists() else fallback
             if not capture_input.exists():
                 raise FileNotFoundError(
-                    f"Missing capture for {vid}: expected {raw_dir / (vid + '.mkv')} "
-                    f"or {direct_dir / (vid + '.mp4')}"
+                    f"Missing capture for {vid}: expected {preferred} or {fallback}"
                 )
             process_clip(
                 capture_input=capture_input,
