@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::{current_user, wide, win, Handle};
+use crate::ResourceLimit;
 #[cfg(test)]
 use std::path::Path;
 use std::{
@@ -15,7 +16,8 @@ use windows_sys::{
     core::BOOL,
     Win32::{
         Foundation::{
-            GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, HWND, LPARAM,
+            CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA,
+            HWND, INVALID_HANDLE_VALUE, LPARAM,
         },
         Security::{
             AddAccessAllowedAce, GetLengthSid, InitializeAcl, InitializeSecurityDescriptor,
@@ -26,6 +28,7 @@ use windows_sys::{
             JobObjects::*,
             SystemServices::JOB_OBJECT_QUERY,
             Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+            IO::{CreateIoCompletionPort, GetQueuedCompletionStatus},
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
@@ -34,6 +37,10 @@ use windows_sys::{
 };
 
 pub(super) const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT` from winnt.h. `windows-sys` exposes the
+/// job structures but not the notification identifiers.
+const JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT: u32 = 3;
 
 /// A durable OS identity for one protected run's process tree. The launcher is
 /// the only process that names the job; a lost owner's job is destroyed by
@@ -83,10 +90,38 @@ pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Arc<Handle>> {
     if handle.is_null() {
         return Err(io::Error::last_os_error());
     }
-    let job = Arc::new(Handle(handle));
     // An existing name means another process owns this run's boundary. Refuse
-    // rather than adopt or reconfigure a job this launcher did not create.
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+    // rather than adopt or reconfigure a job this launcher did not create. The
+    // error is captured before any other call can replace it.
+    let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    // The completion port is the only way to observe a boundary refusing a
+    // further process, so it is created with the job and owned by it.
+    let events = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, null_mut(), 0, 1) };
+    if events.is_null() {
+        let error = io::Error::last_os_error();
+        unsafe { CloseHandle(handle) };
+        return Err(error);
+    }
+    let mut association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+        CompletionKey: null_mut(),
+        CompletionPort: events,
+    };
+    if let Err(error) = unsafe {
+        win(SetInformationJobObject(
+            handle,
+            JobObjectAssociateCompletionPortInformation,
+            std::ptr::from_mut(&mut association).cast(),
+            size_of_val(&association) as u32,
+        ))
+    } {
+        unsafe {
+            CloseHandle(events);
+            CloseHandle(handle);
+        }
+        return Err(error);
+    }
+    let job = Arc::new(Handle(handle, Some(events)));
+    if already_exists {
         return Err(io::Error::other(
             "The protected run's OS job object already exists",
         ));
@@ -104,6 +139,29 @@ pub(super) fn create(process_limit: u32, run: Uuid) -> io::Result<Arc<Handle>> {
         ))?;
     }
     Ok(job)
+}
+
+/// Reads the boundary's queued OS notifications without blocking and reports a
+/// refusal caused by the run's qualified active-process limit. Other lifecycle
+/// messages are drained so the queue cannot grow, but this slice records only
+/// the limit refusal a payload can already observe.
+pub(super) fn refusal(job: &Handle) -> Option<ResourceLimit> {
+    let events = job.1?;
+    let mut refusal = None;
+    loop {
+        let mut message = 0u32;
+        let mut key = 0usize;
+        let mut overlapped = null_mut();
+        let received = unsafe {
+            GetQueuedCompletionStatus(events, &mut message, &mut key, &mut overlapped, 0)
+        };
+        if received == 0 || message == 0 {
+            return refusal;
+        }
+        if message == JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT {
+            refusal = Some(ResourceLimit::ActiveProcess);
+        }
+    }
 }
 
 fn active_processes(job: &Handle) -> io::Result<u32> {
@@ -183,7 +241,7 @@ fn still_member(job: &Handle, pid: u32) -> bool {
     if process.is_null() {
         return member_pids(job).is_ok_and(|pids| pids.contains(&pid));
     }
-    let process = Handle(process);
+    let process = Handle(process, None);
     let mut member = 0;
     unsafe { IsProcessInJob(process.0, job.0, &mut member) != 0 && member != 0 }
 }
@@ -246,7 +304,7 @@ pub(super) fn boundary_empty(run: Uuid) -> io::Result<bool> {
             _ => Err(error),
         };
     }
-    let job = Handle(handle);
+    let job = Handle(handle, None);
     Ok(active_processes(&job)? == 0)
 }
 
@@ -647,5 +705,37 @@ mod tests {
             Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
         );
         drop(job);
+    }
+
+    #[test]
+    fn a_qualified_limit_refuses_an_extra_member_and_reports_the_reason() {
+        let root = tempfile::tempdir().unwrap();
+        let job = create(1, Uuid::new_v4()).unwrap();
+        let mut first = fixture(root.path(), "child").spawn().unwrap();
+        if let Err(error) = unsafe { win(AssignProcessToJobObject(job.0, first.as_raw_handle())) } {
+            first.kill().ok();
+            first.wait().ok();
+            panic!("Could not admit the first fixture: {error}");
+        }
+        wait_for(&root.path().join("ready"));
+        // Admitting the only allowed member is not a refusal.
+        assert_eq!(refusal(&job), None);
+        // The boundary is now at its qualified limit, so a second member is refused.
+        let mut second = fixture(root.path(), "child").spawn().unwrap();
+        let refused = unsafe { win(AssignProcessToJobObject(job.0, second.as_raw_handle())) };
+        second.kill().ok();
+        second.wait().ok();
+        assert!(refused.is_err(), "the boundary admitted a second member");
+        // The OS reports the refusal on the boundary's own completion port, so the
+        // record can name the reason instead of inferring it from a missing process.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut reason = refusal(&job);
+        while reason.is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+            reason = refusal(&job);
+        }
+        assert_eq!(reason, Some(ResourceLimit::ActiveProcess));
+        fs::write(root.path().join("finish"), []).unwrap();
+        assert!(first.wait().unwrap().success());
     }
 }

@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
     ptr::{null, null_mut},
     sync::Arc,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 use windows_sys::Win32::{
@@ -48,12 +49,18 @@ fn hr(value: i32) -> io::Result<()> {
     }
 }
 
+/// One owned Win32 handle. A run's job additionally owns the completion port
+/// that receives the boundary's own notifications, so refusing a further
+/// process is an observed OS event rather than an inference.
 #[derive(Debug)]
-pub(super) struct Handle(HANDLE);
+pub(super) struct Handle(HANDLE, Option<HANDLE>);
 impl Drop for Handle {
     fn drop(&mut self) {
         unsafe {
             CloseHandle(self.0);
+            if let Some(events) = self.1 {
+                CloseHandle(events);
+            }
         }
     }
 }
@@ -175,7 +182,7 @@ fn token_data(process: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec
     unsafe {
         let mut token = null_mut();
         win(OpenProcessToken(process, TOKEN_QUERY, &mut token))?;
-        let token = Handle(token);
+        let token = Handle(token, None);
         let mut bytes = 0;
         GetTokenInformation(token.0, class, null_mut(), 0, &mut bytes);
         if bytes == 0 {
@@ -428,8 +435,8 @@ pub(super) fn launch(
             &mut info,
         ))?;
         observation.boundary_empty = false;
-        let process = Handle(info.hProcess);
-        let thread = Handle(info.hThread);
+        let process = Handle(info.hProcess, None);
+        let thread = Handle(info.hThread, None);
         if run.stopped() {
             // A stop accepted before process creation must not let the payload
             // run: the suspended root is now a member of that stopped job.
@@ -499,12 +506,26 @@ pub(super) fn launch(
             return Err(error);
         }
         run.running();
-        let deadline = if observation.smoke {
+        let deadline = Duration::from_millis(if observation.smoke {
             30_000
         } else {
             30 * 60_000
+        });
+        // The wait is sliced so the boundary's own notifications are read while
+        // the sample runs: a refused helper is then an observed OS event.
+        let started = Instant::now();
+        let wait = loop {
+            let wait = WaitForSingleObject(process.0, 250);
+            if wait != WAIT_TIMEOUT {
+                break wait;
+            }
+            if let Some(limit) = job::refusal(&job) {
+                run.limited(limit);
+            }
+            if started.elapsed() >= deadline {
+                break WAIT_TIMEOUT;
+            }
         };
-        let wait = WaitForSingleObject(process.0, deadline);
         if wait != WAIT_OBJECT_0 {
             if run.stopped() {
                 // The stop request terminated the root; drain what remains of its tree.
@@ -548,6 +569,9 @@ pub(super) fn launch(
             }
             observation.boundary_empty = true;
             return Err(error);
+        }
+        if let Some(limit) = job::refusal(&job) {
+            run.limited(limit);
         }
         if !run.finish() {
             // A stop request claimed the run before the owner observed the empty
