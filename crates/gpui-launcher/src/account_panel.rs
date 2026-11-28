@@ -112,17 +112,9 @@ impl AccountPanel {
         }
     }
 
-    pub fn open_minecraft_launcher(&mut self, cx: &mut Context<Self>) {
-        self.launcher_error = Self::open_minecraft_launcher_action().err();
+    pub fn open_minecraft_download(&mut self, cx: &mut Context<Self>) {
+        self.launcher_error = carbon_account::desktop::open_minecraft_download().err();
         cx.notify();
-    }
-
-    fn open_minecraft_launcher_action() -> Result<(), String> {
-        #[cfg(windows)]
-        if crate::official_launcher::activate_official_minecraft_launcher().is_ok() {
-            return Ok(());
-        }
-        carbon_account::desktop::open_minecraft_download()
     }
 
     pub fn custom_client_allowed(&self) -> bool {
