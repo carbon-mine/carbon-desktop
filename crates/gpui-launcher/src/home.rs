@@ -199,9 +199,10 @@ impl Launcher {
         let selected = self.surface == surface;
         let busy = self.popup.is_some() || self.picker_open;
         let id = SharedString::from(format!("surface-{name}"));
-        let button = home_pill_button(id.clone(), selected, busy, cx)
+        let button = home_pill_button(id.clone(), selected, false, cx)
             .min_w(px(72.))
             .justify_center()
+            .when(busy, |button| button.cursor_default())
             .child(name);
         self.control(
             button,
@@ -1637,12 +1638,12 @@ mod tests {
         }
     }
 
-    fn composite(fill: Rgba, backdrop: Rgba) -> [f32; 3] {
+    fn composite(fill: Rgba, backdrop: [f32; 3]) -> [f32; 3] {
         let alpha = fill.a;
         [
-            fill.r * alpha + backdrop.r * (1. - alpha),
-            fill.g * alpha + backdrop.g * (1. - alpha),
-            fill.b * alpha + backdrop.b * (1. - alpha),
+            fill.r * alpha + backdrop[0] * (1. - alpha),
+            fill.g * alpha + backdrop[1] * (1. - alpha),
+            fill.b * alpha + backdrop[2] * (1. - alpha),
         ]
     }
 
@@ -1670,19 +1671,16 @@ mod tests {
 
     #[test]
     fn recents_meta_keeps_contrast_over_the_brightest_supported_scene() {
-        for (preference, appearance, shelf) in [
+        for (preference, appearance, scene) in [
             (
                 Preference::Light,
                 gpui::WindowAppearance::Light,
-                rgba(0xb8b9bcff),
+                [0., 0., 0.],
             ),
-            (
-                Preference::Dark,
-                gpui::WindowAppearance::Dark,
-                rgba(0x434446ff),
-            ),
+            (Preference::Dark, gpui::WindowAppearance::Dark, [1., 1., 1.]),
         ] {
             let glass = ShelfGlass::for_palette(Palette::read(preference, appearance));
+            let shelf = composite(glass.tint, scene);
             let fills = [
                 glass.recents_rest,
                 glass.recents_hover,
