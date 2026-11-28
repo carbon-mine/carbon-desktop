@@ -32,38 +32,46 @@ $uia = [System.Windows.Automation.AutomationElement]
 $scope = [System.Windows.Automation.TreeScope]
 $conditionTrue = [System.Windows.Automation.Condition]::TrueCondition
 
-try {
-    $null = [System.Drawing.Bitmap].Assembly
-    $probeBmp = New-Object System.Drawing.Bitmap(1,1)
-    $probeG = [System.Drawing.Graphics]::FromImage($probeBmp)
-    $probeG.Dispose(); $probeBmp.Dispose()
-} catch {}
-$drawingRefs = @([System.Drawing.Bitmap].Assembly.Location)
-try { $drawingRefs += [System.Drawing.Graphics].Assembly.Location } catch {}
-try {
-    $gdiPlus = [AppDomain]::CurrentDomain.GetAssemblies() |
-        Where-Object { $_.GetName().Name -like '*GdiPlus*' } |
-        ForEach-Object { $_.Location } |
-        Where-Object { $_ }
-    $drawingRefs += $gdiPlus
-} catch {}
-$drawingRefs = @($drawingRefs | Where-Object { $_ } | Select-Object -Unique)
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Drawing;
-using System.Drawing.Imaging;
 
 public static class CarbonCaptureNative {
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFO {
+        public BITMAPINFOHEADER bmiHeader;
+        public uint bmiColors;
+    }
+
+    public sealed class CaptureData {
+        public int Width;
+        public int Height;
+        public byte[] Bgra;
+    }
+
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("user32.dll")] public static extern IntPtr GetWindowDC(IntPtr hWnd);
@@ -75,12 +83,21 @@ public static class CarbonCaptureNative {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+    [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
+    [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, int dwRop);
 
     public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOACTIVATE = 0x0010;
     public const int SW_RESTORE = 9;
     public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
     public const uint PW_RENDERFULLCONTENT = 0x00000002;
+    private const uint DIB_RGB_COLORS = 0;
+    private const uint BI_RGB = 0;
+    private const int SRCCOPY = 0x00CC0020;
 
     public static IntPtr FindMainWindow(uint processId, string titleContains) {
         IntPtr found = IntPtr.Zero;
@@ -102,7 +119,7 @@ public static class CarbonCaptureNative {
         return found;
     }
 
-    public static Bitmap Capture(IntPtr hwnd) {
+    public static CaptureData Capture(IntPtr hwnd) {
         RECT rect;
         int hr = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out rect, Marshal.SizeOf(typeof(RECT)));
         if (hr != 0) {
@@ -110,39 +127,48 @@ public static class CarbonCaptureNative {
         }
         int width = Math.Max(1, rect.Right - rect.Left);
         int height = Math.Max(1, rect.Bottom - rect.Top);
-        var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-        using (var g = Graphics.FromImage(bmp)) {
-            IntPtr hdc = g.GetHdc();
-            bool ok = false;
-            try {
-                ok = PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT);
-            } finally {
-                g.ReleaseHdc(hdc);
-            }
-            if (!ok) {
-                g.Clear(Color.Transparent);
-                IntPtr windowDc = GetWindowDC(hwnd);
-                if (windowDc == IntPtr.Zero) throw new InvalidOperationException("GetWindowDC failed");
-                try {
-                    IntPtr hdc2 = g.GetHdc();
-                    try {
-                        const int SRCCOPY = 0x00CC0020;
-                        ok = BitBlt(hdc2, 0, 0, width, height, windowDc, 0, 0, SRCCOPY);
-                    } finally {
-                        g.ReleaseHdc(hdc2);
-                    }
-                } finally {
-                    ReleaseDC(hwnd, windowDc);
-                }
-                if (!ok) throw new InvalidOperationException("PrintWindow and BitBlt capture failed");
-            }
-        }
-        return bmp;
-    }
 
-    [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, int dwRop);
+        IntPtr screenDc = GetWindowDC(hwnd);
+        if (screenDc == IntPtr.Zero) throw new InvalidOperationException("GetWindowDC failed");
+        IntPtr memDc = IntPtr.Zero;
+        IntPtr dib = IntPtr.Zero;
+        IntPtr old = IntPtr.Zero;
+        IntPtr bits = IntPtr.Zero;
+        try {
+            memDc = CreateCompatibleDC(screenDc);
+            if (memDc == IntPtr.Zero) throw new InvalidOperationException("CreateCompatibleDC failed");
+
+            var bmi = new BITMAPINFO();
+            bmi.bmiHeader.biSize = (uint)Marshal.SizeOf(typeof(BITMAPINFOHEADER));
+            bmi.bmiHeader.biWidth = width;
+            bmi.bmiHeader.biHeight = -height;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+            bmi.bmiHeader.biSizeImage = (uint)(width * height * 4);
+
+            dib = CreateDIBSection(screenDc, ref bmi, DIB_RGB_COLORS, out bits, IntPtr.Zero, 0);
+            if (dib == IntPtr.Zero || bits == IntPtr.Zero) throw new InvalidOperationException("CreateDIBSection failed");
+            old = SelectObject(memDc, dib);
+
+            bool ok = PrintWindow(hwnd, memDc, PW_RENDERFULLCONTENT);
+            if (!ok) {
+                ok = BitBlt(memDc, 0, 0, width, height, screenDc, 0, 0, SRCCOPY);
+            }
+            if (!ok) throw new InvalidOperationException("PrintWindow and BitBlt capture failed");
+
+            var bytes = new byte[width * height * 4];
+            Marshal.Copy(bits, bytes, 0, bytes.Length);
+            return new CaptureData { Width = width, Height = height, Bgra = bytes };
+        } finally {
+            if (old != IntPtr.Zero && memDc != IntPtr.Zero) SelectObject(memDc, old);
+            if (dib != IntPtr.Zero) DeleteObject(dib);
+            if (memDc != IntPtr.Zero) DeleteDC(memDc);
+            ReleaseDC(hwnd, screenDc);
+        }
+    }
 }
-'@ -ReferencedAssemblies $drawingRefs
+'@
 
 function Wait-Until([scriptblock]$Condition, [string]$Message, [int]$TimeoutSeconds = 30) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -229,8 +255,16 @@ function Get-FileSha256([string]$Path) {
 }
 
 function Save-Capture([IntPtr]$Hwnd, [string]$Path) {
-    $bmp = [CarbonCaptureNative]::Capture($Hwnd)
+    $cap = [CarbonCaptureNative]::Capture($Hwnd)
+    $bmp = New-Object System.Drawing.Bitmap($cap.Width, $cap.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     try {
+        $rect = [System.Drawing.Rectangle]::new(0, 0, $cap.Width, $cap.Height)
+        $data = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::WriteOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        try {
+            [System.Runtime.InteropServices.Marshal]::Copy($cap.Bgra, 0, $data.Scan0, $cap.Bgra.Length)
+        } finally {
+            $bmp.UnlockBits($data)
+        }
         $dir = Split-Path -Parent $Path
         [IO.Directory]::CreateDirectory($dir) | Out-Null
         $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
