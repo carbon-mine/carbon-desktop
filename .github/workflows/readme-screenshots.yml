@@ -101,11 +101,13 @@ jobs:
 
       - name: Capture README screenshots
         shell: pwsh
+        env:
+          SOURCE_REF: ${{ github.ref }}
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\debug\carbon-desktop-gpui.exe'
           $out = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
           $manifest = Join-Path $out 'manifest.json'
-          & ./scripts/capture-readme-screenshots.ps1 -Executable $exe -OutputDir $out -ManifestPath $manifest -CommitSha $env:CAPTURE_SHA -SourceRef '${{ github.ref }}'
+          & ./scripts/capture-readme-screenshots.ps1 -Executable $exe -OutputDir $out -ManifestPath $manifest -CommitSha $env:CAPTURE_SHA -SourceRef $env:SOURCE_REF
 
       - name: Verify manifest and image files
         shell: pwsh
@@ -125,18 +127,19 @@ jobs:
           }
           Write-Host "Verified $($ids.Count) screenshots"
 
-      - name: Prepare Pages artifact
-        if: steps.meta.outputs.should_deploy == 'true'
-        shell: pwsh
-        run: |
-          $src = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
-          $site = Join-Path $env:RUNNER_TEMP 'readme-screenshots-site'
-          if (Test-Path $site) { Remove-Item -Recurse -Force $site }
-          New-Item -ItemType Directory -Force -Path $site | Out-Null
-          Copy-Item -LiteralPath (Join-Path $src '*.png') -Destination $site
-          $images = @(Get-ChildItem -LiteralPath $site -File)
-          if ($images.Count -eq 0) { throw 'No screenshot images found for Pages artifact' }
-          if ($images | Where-Object { $_.Extension -ne '.png' }) { throw 'Pages artifact must be image-only' }
+      - name: Prepare Pages artifact
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
+          $site = Join-Path $env:RUNNER_TEMP 'readme-screenshots-site'
+          if (Test-Path $site) { Remove-Item -Recurse -Force $site }
+          New-Item -ItemType Directory -Force -Path $site | Out-Null
+          $images = @(Get-ChildItem -LiteralPath $src -Filter *.png -File -ErrorAction Stop)
+          if ($images.Count -eq 0) { throw 'No screenshot images found for Pages artifact' }
+          $images | Copy-Item -Destination $site
+          $siteImages = @(Get-ChildItem -LiteralPath $site -File)
+          if ($siteImages.Count -eq 0) { throw 'No screenshot images copied to Pages artifact' }
+          if ($siteImages | Where-Object { $_.Extension -ne '.png' }) { throw 'Pages artifact must be image-only' }
 
       - name: Upload screenshot artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

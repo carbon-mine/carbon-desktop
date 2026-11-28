@@ -12,12 +12,9 @@
   </p>
 </div>
 
-<picture>
-  <source srcset="https://carbon-mine.github.io/carbon-desktop/library-wide.png">
-  <img src="docs/images/gpui-library.png" alt="Carbon Desktop library showing local instances in a wide window">
-</picture>
+![Carbon Desktop library showing local instances in a wide window](docs/images/gpui-library.png)
 
-*A wide library view in the GPUI edition. The automated screenshot is published from protected main; the bundled `docs/images/gpui-library.png` image is the documented fallback until the first public publish is verified.*
+*A wide library view in the GPUI edition. Automated capture is wired for GitHub Pages publishing from protected main; the bundled `docs/images/gpui-library.png` image is the rendered image until the first public publish is verified and README URLs are switched in a follow-up.*
 
 ## What you can do
 
@@ -28,18 +25,8 @@
 
 <table>
   <tr>
-    <td>
-      <picture>
-        <source srcset="https://carbon-mine.github.io/carbon-desktop/library-compact.png">
-        <img src="docs/images/gpui-narrow-library.png" width="390" alt="Carbon Desktop library list in a compact window">
-      </picture>
-    </td>
-    <td>
-      <picture>
-        <source srcset="https://carbon-mine.github.io/carbon-desktop/instance-compact.png">
-        <img src="docs/images/gpui-narrow-instance.png" width="390" alt="Carbon Desktop selected instance details in a compact window">
-      </picture>
-    </td>
+    <td><img src="docs/images/gpui-narrow-library.png" width="390" alt="Carbon Desktop library list in a compact window"></td>
+    <td><img src="docs/images/gpui-narrow-instance.png" width="390" alt="Carbon Desktop selected instance details in a compact window"></td>
   </tr>
   <tr>
     <td align="center">Search and select an instance.</td>
@@ -47,7 +34,7 @@
   </tr>
 </table>
 
-*Compact screenshots are published from protected main to GitHub Pages; the bundled `docs/images/gpui-narrow-library.png` and `docs/images/gpui-narrow-instance.png` images remain the documented fallback until the first public publish is verified.*
+*Compact screenshots use the bundled `docs/images/gpui-narrow-library.png` and `docs/images/gpui-narrow-instance.png` images until the first GitHub Pages publish is verified and README URLs are switched in a follow-up.*
 
 ## Quick start
 

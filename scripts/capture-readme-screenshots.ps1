@@ -515,6 +515,9 @@ try {
             Invoke-UiaElement $back
             Start-Sleep -Milliseconds 500
         }
+        $listControl = Find-UiaElement $root 'Find an instance'
+        if ($null -eq $listControl) { throw 'library-compact: expected library list control "Find an instance"' }
+        if (Find-UiaElementLike $root '*Back to library*') { throw 'library-compact: unexpected detail control "Back to library"' }
     }
 
     # instance-compact: select a known instance in compact view and assert detail pane.
@@ -546,6 +549,9 @@ try {
         if ($null -eq $detail) {
             throw "instance-compact: expected detail view ('Back to library') after selecting instance; invoked=$invoked"
         }
+        if (Find-UiaElement $root 'Find an instance') {
+            throw 'instance-compact: still in the library list ("Find an instance" present)'
+        }
     }
 
     # Reject duplicate screens (guards against stale/wrong-state captures).
@@ -553,6 +559,14 @@ try {
     $unique = @($hashes | Select-Object -Unique)
     if ($unique.Count -ne $hashes.Count) {
         throw "Duplicate screenshot hashes detected: $($hashes -join ', ')"
+    }
+    $wideShot = $captures | Where-Object { $_.id -eq 'library-wide' } | Select-Object -First 1
+    $compactShot = $captures | Where-Object { $_.id -eq 'library-compact' } | Select-Object -First 1
+    if ($null -eq $wideShot -or $null -eq $compactShot) { throw 'Missing wide/compact screenshots for width check' }
+    if ([int]$wideShot.width -lt 900) { throw "library-wide width too small: $($wideShot.width)" }
+    if ([int]$compactShot.width -gt 700) { throw "library-compact width too large: $($compactShot.width)" }
+    if (([int]$wideShot.width - [int]$compactShot.width) -lt 200) {
+        throw "Wide/compact width separation too small: wide=$($wideShot.width) compact=$($compactShot.width)"
     }
     $detailShot = $captures | Where-Object { $_.id -eq 'instance-compact' } | Select-Object -First 1
     if ($null -eq $detailShot) { throw 'Missing instance-compact capture' }

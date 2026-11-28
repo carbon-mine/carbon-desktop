@@ -1994,6 +1994,10 @@ fn main() -> anyhow::Result<()> {
             "--fixture-root and --seed-fixtures are separate from --comparison-review, --temporary-review and --seed-review."
         );
     }
+    // Capture-only: allow window resizing for deterministic screenshot capture.
+    // Must never be set by an installed build. Requires explicit --fixture-root.
+    let screenshot_mode = fixture_root.is_some()
+        && std::env::var_os("CARBON_README_SCREENSHOT").is_some_and(|value| value == "1");
     let (data, start) = if let Some(set) = fixture_set {
         let set = dev_fixtures::Set::parse(
             set.to_str()
@@ -2063,7 +2067,6 @@ fn main() -> anyhow::Result<()> {
         let (initial, display_id) = shell::initial_bounds(&data.path, cx);
         #[cfg(target_os = "linux")]
         let fitted_size = initial.get_bounds().size;
-        let screenshot_mode = std::env::var_os("CARBON_README_SCREENSHOT").is_some();
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
@@ -2085,7 +2088,7 @@ fn main() -> anyhow::Result<()> {
                 ..Default::default()
             },
             |window, cx| {
-                shell::configure_main_window(window);
+                shell::configure_main_window(window, screenshot_mode);
                 popup::set_app_icon(window);
                 let view = cx.new(|cx| {
                     #[cfg(target_os = "linux")]

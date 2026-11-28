@@ -14,11 +14,16 @@ mod linux;
 mod windows;
 mod work_area;
 
-pub fn configure_main_window(window: &mut Window) {
+/// Capture-only window resizing is gated in `main.rs` and must never be set
+/// by an installed build.
+pub fn configure_main_window(window: &mut Window, allow_resize: bool) {
     #[cfg(windows)]
-    windows::configure_fixed_window(window);
+    windows::configure_fixed_window(window, allow_resize);
     #[cfg(not(windows))]
-    fixed_platform::configure(window);
+    {
+        let _ = allow_resize;
+        fixed_platform::configure(window);
+    }
 }
 
 /// Compositors choose whether to honor native size hints. GPUI exposes the
