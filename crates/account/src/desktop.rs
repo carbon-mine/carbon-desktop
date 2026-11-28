@@ -544,6 +544,11 @@ fn configured_client() -> Option<Uuid> {
         .filter(|id| !id.is_nil())
 }
 
+/// Reports whether this build or the app-owned per-install setting has a public client ID.
+pub fn sign_in_configured(root: &Path) -> bool {
+    resolve_client(configured_client(), client::load(root)).is_some()
+}
+
 fn resolve_client(
     compiled: Option<Uuid>,
     custom: Option<Uuid>,

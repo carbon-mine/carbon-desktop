@@ -199,13 +199,25 @@ impl Popup {
                             compact_action(
                                 "account-client-confirm-use",
                                 p,
-                                Partition::Neutral,
+                                if account.client_confirmed {
+                                    Partition::Selected
+                                } else {
+                                    Partition::Neutral
+                                },
                                 false,
                                 cx,
                             ),
-                            CLIENT_CONFIRM,
+                            if account.client_confirmed {
+                                "Confirmed: I control and was approved to use this public client ID"
+                            } else {
+                                CLIENT_CONFIRM
+                            },
                             p,
-                            Partition::Neutral,
+                            if account.client_confirmed {
+                                Partition::Selected
+                            } else {
+                                Partition::Neutral
+                            },
                             false,
                         ),
                         "account-client-confirm-use",
@@ -314,16 +326,23 @@ impl Popup {
                 ),
             );
         }
-        if panel.unavailable()
-            || matches!(view.state, AccountState::Error)
-            || view.accounts.is_empty()
-        {
+        if panel.unavailable() {
+            content = content.child(self.accessibility.text(
+                div()
+                    .text_sm()
+                    .text_color(self.palette.muted)
+                    .child("Opens the installed Minecraft Launcher, or the official download page if it is not installed."),
+                "account-launcher-fallback",
+                "Opens the installed Minecraft Launcher, or the official download page if it is not installed.",
+                Role::Label,
+            ));
+        } else if matches!(view.state, AccountState::Error) || view.accounts.is_empty() {
             content = content.child(self.account_button(
-                "account-minecraft-download",
-                "Get Minecraft Launcher",
+                "account-open-minecraft-launcher",
+                "Open Minecraft Launcher",
                 false,
                 cx,
-                |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_download),
+                |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_launcher),
             ));
         }
         if !view.accounts.is_empty() {
@@ -471,6 +490,7 @@ impl Popup {
         let result = dialog
             .panel
             .update(cx, |panel, _| panel.set_custom_client(&value));
+        let mut invalid = false;
         if let Some(dialog) = &mut self.account {
             match result {
                 Ok(()) => {
@@ -484,10 +504,18 @@ impl Popup {
                         false,
                     ));
                 }
-                Err(error) => dialog.client_notice = Some((error, true)),
+                Err(error) => {
+                    dialog.client_notice = Some((error, true));
+                    dialog
+                        .client_input
+                        .update(cx, |input, cx| input.focus(window, cx));
+                    invalid = true;
+                }
             }
         }
-        self.focus.focus(window);
+        if !invalid {
+            self.focus.focus(window);
+        }
         cx.notify();
     }
 
@@ -564,6 +592,15 @@ impl Popup {
                 },
             ));
         }
+        if panel.unavailable() {
+            return bar.child(self.account_button(
+                "account-open-minecraft-launcher",
+                "Open Minecraft Launcher",
+                true,
+                cx,
+                |this, _, cx| this.update_account(cx, AccountPanel::open_minecraft_launcher),
+            ));
+        }
         match view.state {
             AccountState::AwaitingBrowser => bar.child(self.account_button(
                 "account-open-browser",
@@ -577,14 +614,12 @@ impl Popup {
     }
 
     pub(super) fn account_dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(dialog) = &mut self.account
-            && dialog.client_entry
+        if self
+            .account
+            .as_ref()
+            .is_some_and(|dialog| dialog.client_entry)
         {
-            dialog.client_entry = false;
-            dialog.client_confirmed = false;
-            dialog.client_notice = None;
-            self.focus.focus(window);
-            cx.notify();
+            self.close_client_entry(window, cx);
             return;
         }
         if let Some(dialog) = &mut self.account

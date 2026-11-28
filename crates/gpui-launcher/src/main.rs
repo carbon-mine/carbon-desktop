@@ -7,6 +7,8 @@ mod artwork;
 mod data;
 mod dev_fixtures;
 mod home_playback;
+#[cfg(windows)]
+mod official_launcher;
 use carbon_desktop_gpui::scenery;
 mod home;
 mod icons;
