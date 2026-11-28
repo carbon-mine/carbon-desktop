@@ -1,4 +1,5 @@
 //! Microsoft account verification and independent synthetic entitlement fixtures.
+mod client;
 pub mod desktop;
 mod device;
 pub mod play;
@@ -12,7 +13,7 @@ pub use device::{
 
 /// Stable explanation shared with the native Play command.
 pub fn fixture_play_blocker() -> &'static str {
-    "Live Minecraft entitlement is unavailable. This build has no approved account registration or session broker."
+    "Live Minecraft entitlement is unavailable. Account sign-in is not configured for this build or a session broker is unavailable."
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,7 +212,7 @@ mod tests {
         for mode in [Request::Online, COMPLETE] {
             assert_eq!(accounts.play_blocker(mode, 11), RegistrationMissing);
         }
-        assert!(fixture_play_blocker().contains("no approved account registration"));
+        assert!(fixture_play_blocker().contains("not configured"));
     }
 
     #[test]

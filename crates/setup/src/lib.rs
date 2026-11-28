@@ -102,10 +102,7 @@ pub fn report(root: &Path, meta: carbon_vanilla::PreparedVersion) -> Result<Setu
     if client_file.version != meta.version {
         return Err("The selected version changed. Recheck setup.".into());
     }
-    let blocked_reasons = vec![
-        "Microsoft sign-in is waiting for Carbon’s application registration.",
-        "The protected Minecraft game runner is still in development.",
-    ];
+    let blocked_reasons = vec!["Protected Minecraft launch is unavailable in this build."];
     let game_files_cached = carbon_vanilla::has_game_install(root, meta.profile_id)?;
     let game_files_prepared =
         game_files_cached && carbon_vanilla::has_instance_view(root, meta.profile_id)?;

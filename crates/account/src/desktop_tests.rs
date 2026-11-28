@@ -1,5 +1,8 @@
 use super::*;
-use crate::vault::MemoryCredentials;
+use crate::{
+    client,
+    vault::{MemoryCredentials, SavedAccounts, SavedProfile},
+};
 use serde_json::{json, to_value};
 
 const FOREST: Uuid = Uuid::from_u128(2);
@@ -14,6 +17,9 @@ fn isolated() -> Accounts {
             state: Mutex::new(State::new()),
             changed: Condvar::new(),
         }))),
+        root: None,
+        compiled: Some(CLIENT),
+        source: Some(RegistrationSource::Compiled),
     }
 }
 
@@ -25,6 +31,176 @@ fn ticket(accounts: &Accounts, expected: Job) -> Ticket {
 
 fn synthetic(id: Uuid, token: &str) -> AuthenticatedAccount {
     AuthenticatedAccount::synthetic(id, if id == FOREST { "Forest" } else { "Coast" }, token)
+}
+
+#[test]
+fn compiled_configuration_wins_over_a_stored_custom_client() {
+    let root = tempfile::tempdir().unwrap();
+    let custom = Uuid::from_u128(9);
+    client::store(root.path(), custom).unwrap();
+
+    let accounts = Accounts::start(Some(root.path()), Some(CLIENT));
+    assert_eq!(accounts.owner.0.registration, Some(CLIENT));
+    assert_eq!(accounts.source, Some(RegistrationSource::Compiled));
+    assert!(accounts.compiled_client_configured());
+    assert!(!accounts.custom_client_allowed());
+    assert!(!accounts.custom_client_configured());
+    assert_eq!(client::load(root.path()), Some(custom));
+    assert!(accounts.set_custom_client(&custom.to_string()).is_err());
+    assert!(
+        accounts.clear_custom_client().is_err(),
+        "a compiled build cannot clear a per-install setting either"
+    );
+    assert_eq!(client::load(root.path()), Some(custom));
+}
+
+#[test]
+fn custom_client_is_validated_persisted_and_used_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let no_config = Accounts::start(Some(root.path()), None);
+    assert_eq!(no_config.snapshot().state, AccountState::Unavailable);
+    assert!(no_config.custom_client_allowed());
+    assert!(!no_config.custom_client_active());
+
+    assert!(no_config.set_custom_client("not-a-uuid").is_err());
+    assert!(no_config
+        .set_custom_client(&Uuid::nil().to_string())
+        .is_err());
+    assert!(client::load(root.path()).is_none());
+
+    let custom = Uuid::from_u128(7);
+    no_config
+        .set_custom_client(&format!("  {custom}  "))
+        .unwrap();
+    let bytes = std::fs::read_to_string(root.path().join("account-client.json")).unwrap();
+    assert_eq!(bytes, format!(r#"{{"clientId":"{custom}"}}"#));
+    assert!(!bytes.contains("token") && !bytes.contains("secret"));
+    assert!(no_config.custom_client_configured());
+    assert!(
+        !no_config.custom_client_active(),
+        "a restart applies the setting"
+    );
+    assert!(no_config.custom_client_pending_restart());
+    drop(no_config);
+
+    let restarted = Accounts::start(Some(root.path()), None);
+    assert_eq!(restarted.owner.0.registration, Some(custom));
+    assert_eq!(restarted.source, Some(RegistrationSource::Custom));
+    assert!(restarted.custom_client_active());
+    assert!(restarted.custom_client_configured());
+    assert!(!restarted.custom_client_pending_restart());
+
+    restarted.clear_custom_client().unwrap();
+    assert!(client::load(root.path()).is_none());
+    assert!(!restarted.custom_client_configured());
+    assert!(
+        restarted.custom_client_active(),
+        "the running worker keeps its original registration until restart"
+    );
+    assert!(restarted.custom_client_pending_restart());
+    drop(restarted);
+
+    let cleared = Accounts::start(Some(root.path()), None);
+    assert_eq!(cleared.owner.0.registration, None);
+    assert_eq!(cleared.snapshot().state, AccountState::Unavailable);
+    assert!(!cleared.custom_client_pending_restart());
+}
+
+#[test]
+fn stored_client_setting_is_bounded_and_ignores_unusable_values() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("account-client.json");
+    assert!(client::load(root.path()).is_none(), "missing setting");
+
+    let custom = Uuid::from_u128(11);
+    let mut oversized = format!(r#"{{"clientId":"{custom}"}}"#);
+    oversized.push_str(&" ".repeat(2048));
+    let invalid = [
+        String::new(),
+        "{".into(),
+        "null".into(),
+        r#"{"clientId":null}"#.into(),
+        r#"{"clientId":"00000000-0000-0000-0000-000000000000"}"#.into(),
+        r#"{"clientId":"00000000-0000-0000-0000-000000000002","extra":true}"#.into(),
+        r#"{"id":"00000000-0000-0000-0000-000000000002"}"#.into(),
+        "x".repeat(2048),
+        oversized,
+    ];
+    for text in invalid {
+        std::fs::write(&path, &text).unwrap();
+        assert!(client::load(root.path()).is_none(), "accepted {text:?}");
+    }
+
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(
+        client::load(root.path()).is_none(),
+        "a directory is not a setting file"
+    );
+    std::fs::remove_dir(&path).unwrap();
+
+    std::fs::write(&path, format!(r#"{{"clientId":"{custom}"}}"#)).unwrap();
+    assert_eq!(client::load(root.path()), Some(custom));
+}
+
+#[test]
+fn a_changed_client_cannot_reuse_the_previous_vault_namespace() {
+    let root = tempfile::tempdir().unwrap();
+    let credentials = MemoryCredentials::default();
+    let first_client = Uuid::from_u128(1);
+    let second_client = Uuid::from_u128(2);
+    let first = credentials.vault(root.path(), first_client);
+    let second = credentials.vault(root.path(), second_client);
+    first
+        .add(
+            SavedProfile {
+                id: FOREST,
+                name: "Forest".into(),
+            },
+            "private-token",
+        )
+        .unwrap();
+    assert_eq!(
+        first.read(FOREST).unwrap().unwrap().as_str(),
+        "private-token"
+    );
+
+    // The second registration lists the same public account row but must not
+    // resolve the credential slot keyed to the first registration and app root.
+    let registry = root
+        .path()
+        .join(format!("accounts-{}.json", second_client.simple()));
+    let rows = SavedAccounts {
+        active: Some(FOREST),
+        accounts: vec![SavedProfile {
+            id: FOREST,
+            name: "Forest".into(),
+        }],
+    };
+    std::fs::write(&registry, serde_json::to_vec(&rows).unwrap()).unwrap();
+    assert!(second.load().unwrap().includes(FOREST));
+    assert!(
+        second.read(FOREST).unwrap().is_none(),
+        "credential slots include the client ID, not only the app root"
+    );
+}
+
+#[test]
+fn unavailable_and_signed_out_copy_avoids_application_review_wording() {
+    let root = tempfile::tempdir().unwrap();
+    let unavailable = Accounts::start(Some(root.path()), None).snapshot();
+    assert_eq!(unavailable.state, AccountState::Unavailable);
+    let signed_out = State::new().view().message;
+    for text in [unavailable.message.as_str(), signed_out.as_str()] {
+        let text = text.to_lowercase();
+        for forbidden in ["approv", "review", "pending", "development", "waiting"] {
+            assert!(!text.contains(forbidden), "{forbidden:?} in {text:?}");
+        }
+    }
+    assert_eq!(
+        MINECRAFT_DOWNLOAD_URL,
+        "https://www.minecraft.net/en-us/download"
+    );
 }
 
 #[test]

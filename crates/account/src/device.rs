@@ -41,13 +41,13 @@ pub enum AccountError {
 impl fmt::Display for AccountError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::InvalidRegistration => "Configure Carbon's approved Microsoft application to sign in.",
-            Self::RegistrationRejected => "Microsoft did not accept Carbon's application registration. Check its settings and approval.",
+            Self::InvalidRegistration => "Enter a public client ID to configure Minecraft sign-in.",
+            Self::RegistrationRejected => "Microsoft rejected sign-in for the configured client. Check the client configuration or use the Minecraft Launcher.",
             Self::Cancelled => "Microsoft sign-in was cancelled.",
             Self::Expired => "The sign-in authorization expired. Start sign-in again.",
             Self::Declined => "Microsoft sign-in was declined.",
             Self::Finished => "That sign-in attempt has ended. Start sign-in again.",
-            Self::InvalidChallenge => "The sign-in attempt belongs to another application registration.",
+            Self::InvalidChallenge => "The sign-in attempt belongs to a different client configuration.",
             Self::InvalidRefreshToken => "The saved Microsoft authorization is unreadable. Sign in again.",
             Self::RefreshRejected => "Microsoft no longer accepts the saved authorization. Sign in again.",
             Self::TemporarilyUnavailable => "The sign-in service is temporarily unavailable. Check your connection and retry.",
@@ -56,7 +56,7 @@ impl fmt::Display for AccountError {
             Self::XboxProfileRequired => "This Microsoft account needs an Xbox profile to continue.",
             Self::XboxRestricted => "Xbox restricted this account. Check the account's age, family, region or other Xbox settings.",
             Self::XboxRejected => "Xbox did not authorize this account. Check the Xbox account and try again.",
-            Self::MinecraftRejected => "Minecraft Services did not accept this sign-in. Check the account and Carbon's Minecraft API approval.",
+            Self::MinecraftRejected => "Minecraft Services rejected sign-in for the configured client. Check the client configuration or use the Minecraft Launcher.",
             Self::NotEntitled => "Minecraft Services did not confirm a Minecraft: Java Edition entitlement for this account.",
             Self::MinecraftProfileRequired => "Set up a Minecraft: Java Edition profile for this account, then try again.",
         })
@@ -149,7 +149,7 @@ pub struct DeviceClient {
 }
 
 impl DeviceClient {
-    /// Use the app's own approved Microsoft public-client application registration.
+    /// Use the configured public-client application registration.
     pub fn new(client_id: Uuid) -> Result<Self, AccountError> {
         if client_id.is_nil() {
             return Err(AccountError::InvalidRegistration);
