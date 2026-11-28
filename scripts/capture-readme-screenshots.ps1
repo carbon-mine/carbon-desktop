@@ -523,6 +523,12 @@ try {
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestOut -Encoding utf8
     Write-Host "Wrote manifest $manifestOut"
 }
+catch {
+    Write-Host "CAPTURE ERROR: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+    Write-Host "SCRIPT STACK: $($_.ScriptStackTrace)"
+    if ($_.Exception.InnerException) { Write-Host "INNER: $($_.Exception.InnerException.Message)" }
+    throw
+}
 finally {
     if ($null -ne $process -and -not $process.HasExited) {
         try { $process.CloseMainWindow() | Out-Null } catch { }
