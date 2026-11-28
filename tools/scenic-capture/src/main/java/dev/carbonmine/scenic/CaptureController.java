@@ -296,6 +296,18 @@ public final class CaptureController {
 
     public static void onAfterWorldRender(MinecraftClient client) {
         if (!automated || client.world == null) return;
+        try {
+            renderCapturedFrame(client);
+        } catch (RuntimeException e) {
+            LOGGER.error("Scenic capture failed; cleaning up and stopping", e);
+            abortFfmpeg("capture");
+            deterministicTimeActive = false;
+            phase = Phase.DONE;
+            client.scheduleStop();
+        }
+    }
+
+    private static void renderCapturedFrame(MinecraftClient client) {
         if (phase == Phase.VIEWPOINT_SETTLE) {
             CaptureConfig.Viewpoint vp = config.worlds.get(worldIndex).viewpoints.get(viewIndex);
             settleFramesRendered++;
@@ -639,6 +651,7 @@ public final class CaptureController {
             errThread.setDaemon(true);
             errThread.start();
         } catch (Exception e) {
+            abortFfmpeg(vp.id);
             throw new RuntimeException("Failed to start FFmpeg for " + vp.id, e);
         }
     }
@@ -698,18 +711,45 @@ public final class CaptureController {
                 }
             }
         } catch (Exception e) {
-            if (output != null) {
-                try {
-                    Files.deleteIfExists(output);
-                } catch (IOException cleanupError) {
-                    LOGGER.error("Could not remove partial capture {}", output, cleanupError);
-                }
-            }
+            abortFfmpeg(id);
             throw new RuntimeException("Failed finishing FFmpeg for " + id, e);
         } finally {
             currentOutput = null;
             currentDirectEncode = false;
         }
+    }
+
+    private static void abortFfmpeg(String id) {
+        Path output = currentOutput;
+        if (ffmpegStdin != null) {
+            try {
+                ffmpegStdin.close();
+            } catch (IOException ignored) {
+            }
+            ffmpegStdin = null;
+        }
+        if (ffmpegProc != null) {
+            ffmpegProc.destroy();
+            try {
+                if (!ffmpegProc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    ffmpegProc.destroyForcibly();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                ffmpegProc.destroyForcibly();
+            }
+            ffmpegProc = null;
+        }
+        if (output != null) {
+            try {
+                Files.deleteIfExists(output);
+            } catch (IOException cleanupError) {
+                LOGGER.error("Could not remove partial capture {}", output, cleanupError);
+            }
+        }
+        currentOutput = null;
+        currentDirectEncode = false;
+        LOGGER.warn("Aborted FFmpeg capture for {} and removed any partial output", id);
     }
 
     private static void verifyDirectOutput(Path output, String id, int expectedFrames) throws Exception {
@@ -722,9 +762,10 @@ public final class CaptureController {
         Process process = new ProcessBuilder(
                 probe,
                 "-v", "error",
+                "-count_frames",
                 "-select_streams", "v:0",
                 "-show_entries",
-                "stream=codec_name,pix_fmt,width,height,nb_frames,r_frame_rate,color_range,color_space,color_primaries,color_transfer",
+                "stream=codec_name,pix_fmt,width,height,nb_frames,nb_read_frames,r_frame_rate,color_range,color_space,color_primaries,color_transfer",
                 "-of", "json",
                 output.toString())
                 .redirectErrorStream(true)
@@ -743,12 +784,27 @@ public final class CaptureController {
         requireField(stream, "pix_fmt", "yuv420p", id);
         requireField(stream, "width", String.valueOf(outWidth()), id);
         requireField(stream, "height", String.valueOf(outHeight()), id);
-        requireField(stream, "nb_frames", String.valueOf(expectedFrames), id);
+        requireFrameCount(stream, expectedFrames, id);
         requireField(stream, "r_frame_rate", config.fps + "/1", id);
         requireField(stream, "color_range", "tv", id);
         requireField(stream, "color_space", "bt709", id);
         requireField(stream, "color_primaries", "bt709", id);
         requireField(stream, "color_transfer", "iec61966-2-1", id);
+    }
+
+    private static void requireFrameCount(JsonObject stream, int expected, String id) {
+        String count = stream.has("nb_read_frames") && !stream.get("nb_read_frames").isJsonNull()
+                ? stream.get("nb_read_frames").getAsString()
+                : null;
+        if (count == null || "N/A".equals(count)) {
+            count = stream.has("nb_frames") && !stream.get("nb_frames").isJsonNull()
+                    ? stream.get("nb_frames").getAsString()
+                    : null;
+        }
+        if (count == null || "N/A".equals(count) || !String.valueOf(expected).equals(count)) {
+            throw new IllegalStateException("Direct capture " + id + " has frame count " + count
+                    + ", expected " + expected);
+        }
     }
 
     private static void requireField(JsonObject stream, String field, String expected, String id) {

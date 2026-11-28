@@ -227,14 +227,18 @@ def process_clip(
 
     # 3. Verify H.264 stream metadata matches Carbon Desktop's expectations
     probe = subprocess.check_output(
-        [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(mp4_tmp)],
+        [ffprobe, "-v", "error", "-count_frames", "-show_streams", "-of", "json", str(mp4_tmp)],
         text=True,
     )
     streams = json.loads(probe)["streams"]
     s = streams[0]
+    encoded_frames = s.get("nb_read_frames")
+    if not encoded_frames or encoded_frames == "N/A":
+        encoded_frames = s.get("nb_frames")
     assert len(streams) == 1 and s["codec_name"] == "h264" and s["pix_fmt"] == "yuv420p"
     assert s["width"] == width and s["height"] == height
-    assert int(s["nb_frames"]) == frames and s["r_frame_rate"] == f"{fps}/1"
+    assert encoded_frames and encoded_frames != "N/A" and int(encoded_frames) == frames
+    assert s["r_frame_rate"] == f"{fps}/1"
     assert s["color_range"] == "tv" and s["color_space"] == "bt709"
     assert s["color_primaries"] == "bt709" and s["color_transfer"] == "iec61966-2-1"
 
