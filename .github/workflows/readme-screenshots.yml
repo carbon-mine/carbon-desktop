@@ -99,18 +99,13 @@ jobs:
         shell: bash
         run: cargo build --locked -p carbon-desktop-gpui
 
-      - name: Capture README screenshots
-        shell: pwsh
-        run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\debug\carbon-desktop-gpui.exe'
-          $out = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
-          $manifest = Join-Path $out 'manifest.json'
-          ./scripts/capture-readme-screenshots.ps1 `
-            -Executable $exe `
-            -OutputDir $out `
-            -ManifestPath $manifest `
-            -CommitSha $env:CAPTURE_SHA `
-            -SourceRef '${{ github.ref }}'
+      - name: Capture README screenshots
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\debug\carbon-desktop-gpui.exe'
+          $out = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
+          $manifest = Join-Path $out 'manifest.json'
+          & ./scripts/capture-readme-screenshots.ps1 -Executable $exe -OutputDir $out -ManifestPath $manifest -CommitSha $env:CAPTURE_SHA -SourceRef '${{ github.ref }}'
 
       - name: Verify manifest and image files
         shell: pwsh
