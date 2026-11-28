@@ -13,6 +13,15 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi, GLib
 
+UNAVAILABLE_ACCOUNT = (
+    "Minecraft account sign-in is not configured. "
+    "Use account setup or the Minecraft Launcher."
+)
+LAUNCHER_FALLBACK = (
+    "Opens the installed Minecraft Launcher on Windows when available, "
+    "or the official download page."
+)
+
 
 def descendants(element):
     yield element
@@ -119,21 +128,28 @@ def run(executable, evidence, activate_x11, expect_unavailable_account=False):
             main = wait(lambda: window("Carbon Desktop"), "Carbon GPUI did not register a frame.")
             foreground("Carbon Desktop")
             if expect_unavailable_account:
-                account = wait(lambda: named(main, "Microsoft account", "push button"),
+                account = wait(lambda: named(main, "Minecraft account", "push button"),
                                "Missing neutral account button for an unconfigured build.")
                 assert named(main, "Sign in with Microsoft", "push button") is None
                 activate(account)
                 dialog = wait(lambda: window("Minecraft account"), "Account frame missing.")
                 foreground("Minecraft account")
-                wait(lambda: named(dialog, "Microsoft sign-in unavailable", "heading"),
+                wait(lambda: named(dialog, "Minecraft account", "heading"),
+                     "Account dialog did not identify itself as the account window.")
+                wait(lambda: named(dialog, UNAVAILABLE_ACCOUNT),
                      "Account dialog did not explain unavailable sign-in.")
+                assert named(dialog, "Sign in with Microsoft", "push button") is None
+                wait(lambda: named(dialog, LAUNCHER_FALLBACK),
+                     "Account dialog did not describe the launcher fallback.")
+                assert named(dialog, "Open Minecraft Launcher", "push button") is not None
                 assert named(dialog, "Open Microsoft browser") is None
                 close = wait(lambda: named(dialog, "Close", "push button"),
                              "Unavailable account dialog has no Close action.")
                 activate(close)
                 wait(lambda: window("Minecraft account") is None, "Account dialog did not close.")
                 foreground("Carbon Desktop")
-                print("PASS unconfigured account button, explanation, and Close.")
+                print("PASS unconfigured account button, explanation, "
+                      "launcher fallback, and Close.")
             search = wait(lambda: named(main, "Find an instance"), "Missing actual GPUI search.")
             main_count = describe(main, evidence / "linux-main-tree.json")
             assert main_count >= 100

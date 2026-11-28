@@ -11,12 +11,16 @@ pub struct AccountPanel {
     pub launcher_error: Option<String>,
     dialog_visible: bool,
     monitoring: bool,
+    client_configured: bool,
+    client_pending_restart: bool,
 }
 
 impl AccountPanel {
     pub fn new(root: &Path) -> Self {
         let service = Accounts::new(root);
         let snapshot = service.snapshot();
+        let client_configured = service.custom_client_configured();
+        let client_pending_restart = service.custom_client_pending_restart();
         Self {
             service,
             snapshot,
@@ -24,15 +28,26 @@ impl AccountPanel {
             launcher_error: None,
             dialog_visible: false,
             monitoring: false,
+            client_configured,
+            client_pending_restart,
         }
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.service.snapshot();
-        if self.snapshot != snapshot {
-            self.snapshot = snapshot;
+        let client_configured = self.service.custom_client_configured();
+        let client_pending_restart = self.service.custom_client_pending_restart();
+        let snapshot_changed = self.snapshot != snapshot;
+        let client_changed = self.client_configured != client_configured
+            || self.client_pending_restart != client_pending_restart;
+        self.snapshot = snapshot;
+        self.client_configured = client_configured;
+        self.client_pending_restart = client_pending_restart;
+        if snapshot_changed {
             self.browser_error = None;
             self.launcher_error = None;
+        }
+        if snapshot_changed || client_changed {
             cx.notify();
         }
         if !self.monitoring && self.needs_poll() {
@@ -134,19 +149,47 @@ impl AccountPanel {
     }
 
     pub fn custom_client_configured(&self) -> bool {
-        self.service.custom_client_configured()
+        self.client_configured
     }
 
+    /// The stored opt-in differs from the registration this process is using.
     pub fn custom_client_pending_restart(&self) -> bool {
-        self.service.custom_client_pending_restart()
+        self.client_pending_restart
     }
 
-    pub fn set_custom_client(&self, value: &str) -> Result<(), String> {
-        self.service.set_custom_client(value)
+    /// Registration edits must not race an in-flight account operation.
+    pub fn client_setting_editable(&self) -> bool {
+        !self.pending()
     }
 
-    pub fn clear_custom_client(&self) -> Result<(), String> {
-        self.service.clear_custom_client()
+    /// Plain copy for the paused account actions while a restart is required.
+    pub fn restart_message(&self) -> &'static str {
+        if self.client_configured {
+            "Account actions wait for a restart. Restart Carbon Desktop to apply the saved public client ID."
+        } else {
+            "Account actions wait for a restart. Restart Carbon Desktop to finish removing the per-install public client ID."
+        }
+    }
+
+    pub fn set_custom_client(&mut self, value: &str) -> Result<(), String> {
+        let result = self.service.set_custom_client(value);
+        if result.is_ok() {
+            self.sync_client_setting();
+        }
+        result
+    }
+
+    pub fn clear_custom_client(&mut self) -> Result<(), String> {
+        let result = self.service.clear_custom_client();
+        if result.is_ok() {
+            self.sync_client_setting();
+        }
+        result
+    }
+
+    fn sync_client_setting(&mut self) {
+        self.client_configured = self.service.custom_client_configured();
+        self.client_pending_restart = self.service.custom_client_pending_restart();
     }
 
     pub fn signed_in(&self) -> bool {
@@ -184,7 +227,8 @@ impl AccountPanel {
     }
 
     pub fn can_add(&self) -> bool {
-        self.snapshot.removal_retry.is_none()
+        !self.client_pending_restart
+            && self.snapshot.removal_retry.is_none()
             && matches!(
                 self.snapshot.state,
                 AccountState::SignedOut | AccountState::SignedIn | AccountState::Error
@@ -192,11 +236,15 @@ impl AccountPanel {
     }
 
     pub fn can_check(&self) -> bool {
-        !self.pending() && !self.unavailable() && self.snapshot.removal_retry.is_none()
+        !self.client_pending_restart
+            && !self.pending()
+            && !self.unavailable()
+            && self.snapshot.removal_retry.is_none()
     }
 
     pub fn can_sign_out(&self, id: Uuid) -> bool {
-        !self.pending()
+        !self.client_pending_restart
+            && !self.pending()
             && self.account(id).is_some()
             && self.snapshot.removal_retry.is_none_or(|retry| retry == id)
     }
@@ -204,6 +252,8 @@ impl AccountPanel {
     pub fn play_hint(&self) -> &'static str {
         if self.unavailable() {
             "Minecraft account sign-in is not configured. Open account setup or use the Minecraft Launcher."
+        } else if self.client_pending_restart {
+            "Restart Carbon Desktop to apply the public client ID setting before using Minecraft accounts. Protected game launch is unavailable in this build."
         } else if self.signed_in() {
             "This account is signed in. Protected game launch is unavailable in this build."
         } else if self.active_account().is_some() {
@@ -283,34 +333,39 @@ mod tests {
     }
 
     #[test]
-    fn custom_client_setting_stays_local_and_clears_without_an_account_vault() {
+    fn a_saved_client_change_pauses_account_mutations_until_restart() {
         let root = tempfile::tempdir().unwrap();
-        let panel = AccountPanel::new(root.path());
-        assert!(
-            panel.custom_client_allowed(),
-            "this test build has no compiled client configuration"
-        );
-        assert!(!panel.custom_client_configured());
-        assert!(!panel.custom_client_active());
+        let mut panel = AccountPanel::new(root.path());
+        let account = Uuid::new_v4();
+        panel.snapshot.accounts = vec![AccountSummary {
+            id: account,
+            name: "Forest".into(),
+            verified: true,
+        }];
+        panel.snapshot.active_account = Some(account);
+        panel.snapshot.state = AccountState::SignedIn;
+        assert!(panel.can_add());
+        assert!(panel.can_check());
+        assert!(panel.can_sign_out(account));
 
-        let error = panel.set_custom_client("not-a-uuid").unwrap_err();
-        assert_eq!(error, "Enter a public client ID as a UUID.");
-        assert!(!error.contains("not-a-uuid"));
-        assert!(!panel.custom_client_configured());
-
-        let client = Uuid::new_v4();
-        panel.set_custom_client(&client.to_string()).unwrap();
-        assert!(panel.custom_client_configured());
+        panel.client_configured = true;
+        panel.client_pending_restart = true;
         assert!(
-            !panel.custom_client_active(),
-            "a restart applies the setting"
+            !panel.can_add(),
+            "an Add command cannot run under the previous registration"
         );
+        assert!(!panel.can_check());
+        assert!(!panel.can_sign_out(account));
         assert!(panel.custom_client_pending_restart());
-        assert_eq!(panel.toolbar_label(), "Minecraft account");
+        assert!(panel.play_hint().starts_with("Restart Carbon Desktop"));
+        assert!(panel.restart_message().contains("apply the saved"));
 
-        panel.clear_custom_client().unwrap();
-        assert!(!panel.custom_client_configured());
-        assert!(!panel.custom_client_active());
-        assert!(!panel.custom_client_pending_restart());
+        panel.client_pending_restart = false;
+        panel.snapshot.state = AccountState::AwaitingBrowser;
+        assert!(
+            !panel.client_setting_editable(),
+            "a registration edit must not race an account operation"
+        );
+        assert!(!panel.can_check());
     }
 }

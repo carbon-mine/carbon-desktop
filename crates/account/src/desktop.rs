@@ -422,6 +422,9 @@ impl Accounts {
             .root
             .as_deref()
             .ok_or_else(|| "This session does not keep per-install account settings.".to_owned())?;
+        if self.compiled.is_some() {
+            return Err("This build already has a compiled client configuration.".to_owned());
+        }
         client::clear(root)
             .map_err(|_| "The per-install client setting could not be cleared.".to_owned())
     }

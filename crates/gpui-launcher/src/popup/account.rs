@@ -14,18 +14,25 @@ use gpui_component::{
 use uuid::Uuid;
 
 const CLIENT_HELP: &str = "Enter a public client ID you control that Minecraft approved for sign-in from this Carbon Desktop deployment. This is a public application ID, not a client secret or token.";
+const CLIENT_HELP_LINES: [&str; 2] = [
+    "Enter the public client ID you control that Minecraft approved for sign-in from this deployment.",
+    "This is a public application ID, not a client secret or token.",
+];
 const CLIENT_CONFIRM: &str = "I confirm this public client ID is mine and is approved for Minecraft sign-in from this deployment.";
-const CLIENT_RESTART: &str =
-    "A per-install public client ID is saved. Restart Carbon Desktop to apply it.";
-const CLIENT_CLEARED_RESTART: &str =
-    "The per-install public client ID was removed. Restart Carbon Desktop to stop using it.";
+const CLIENT_CONFIRM_LABEL: &str = "I control this ID and Minecraft approved it.";
+const CLIENT_CONFIRMED_LABEL: &str = "Confirmed: this ID is mine and approved.";
+const CLIENT_SCOPE: [&str; 2] = [
+    "Saved accounts stay with the public client ID they signed in with.",
+    "They appear again when Carbon Desktop uses that public client ID.",
+];
 
 pub(super) struct AccountDialog {
     pub panel: Entity<AccountPanel>,
     confirm_sign_out: Option<Uuid>,
     client_input: Entity<InputState>,
     client_entry: bool,
-    client_confirmed: bool,
+    /// The exact entry the user confirmed, so an edited ID needs confirming again.
+    client_confirmed: Option<String>,
     client_notice: Option<(String, bool)>,
 }
 
@@ -42,10 +49,17 @@ impl AccountDialog {
         cx.subscribe_in(
             &client_input,
             window,
-            |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.save_client_entry(window, cx);
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.save_client_entry(window, cx),
+                InputEvent::Change => {
+                    if let Some(dialog) = &mut this.account
+                        && dialog.client_confirmed.take().is_some()
+                    {
+                        dialog.client_notice = None;
+                        cx.notify();
+                    }
                 }
+                InputEvent::Focus | InputEvent::Blur => {}
             },
         )
         .detach();
@@ -54,7 +68,7 @@ impl AccountDialog {
             confirm_sign_out: None,
             client_input,
             client_entry: false,
-            client_confirmed: false,
+            client_confirmed: None,
             client_notice: None,
         }
     }
@@ -115,6 +129,20 @@ impl Popup {
                     } else {
                         Role::Status
                     },
+                ),
+            );
+        }
+        if panel.custom_client_pending_restart() {
+            let restart = panel.restart_message();
+            content = content.child(
+                self.accessibility.text(
+                    div()
+                        .text_sm()
+                        .text_color(self.palette.muted)
+                        .child(restart),
+                    "account-client-restart",
+                    restart,
+                    Role::Status,
                 ),
             );
         }
@@ -181,19 +209,29 @@ impl Popup {
                 );
             }
             if account.client_entry {
+                let confirmed = account.client_confirmed.is_some();
+                let editable = panel.client_setting_editable();
                 content = content
-                    .child(self.accessibility.text(
-                        div().text_sm().text_color(p.muted).child(CLIENT_HELP),
-                        "account-client-help",
-                        CLIENT_HELP,
-                        Role::Label,
-                    ))
+                    .child(
+                        self.accessibility.text(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .text_sm()
+                                .text_color(p.muted)
+                                .child(CLIENT_HELP_LINES[0])
+                                .child(CLIENT_HELP_LINES[1]),
+                            "account-client-help",
+                            CLIENT_HELP,
+                            Role::Label,
+                        ),
+                    )
                     .child(self.accessibility.input(
                         Input::new(&account.client_input).small().bordered(true),
                         "Public client ID",
                         Role::TextInput,
                         &account.client_input,
-                        false,
+                        !editable,
                         cx,
                     ))
                     .child(self.control(
@@ -201,7 +239,7 @@ impl Popup {
                             compact_action(
                                 "account-client-confirm-use",
                                 p,
-                                if account.client_confirmed {
+                                if confirmed {
                                     Partition::Selected
                                 } else {
                                     Partition::Neutral
@@ -209,13 +247,13 @@ impl Popup {
                                 false,
                                 cx,
                             ),
-                            if account.client_confirmed {
-                                "Confirmed: I control and was approved to use this public client ID"
+                            if confirmed {
+                                CLIENT_CONFIRMED_LABEL
                             } else {
-                                CLIENT_CONFIRM
+                                CLIENT_CONFIRM_LABEL
                             },
                             p,
-                            if account.client_confirmed {
+                            if confirmed {
                                 Partition::Selected
                             } else {
                                 Partition::Neutral
@@ -226,17 +264,19 @@ impl Popup {
                         CLIENT_CONFIRM,
                         Role::CheckBox,
                         false,
-                        Some(account.client_confirmed),
+                        Some(confirmed),
                         cx,
                         |this, _, cx| {
                             if let Some(dialog) = &mut this.account {
-                                dialog.client_confirmed = !dialog.client_confirmed;
+                                let value = dialog.client_input.read(cx).value().trim().to_owned();
+                                dialog.client_confirmed =
+                                    if value.is_empty() { None } else { Some(value) };
                                 dialog.client_notice = None;
                             }
                             cx.notify();
                         },
                     ));
-                let disabled = !account.client_confirmed;
+                let disabled = !confirmed || !editable;
                 content = content.child(
                     div()
                         .flex()
@@ -274,6 +314,7 @@ impl Popup {
                 );
             } else {
                 let has_setting = panel.custom_client_configured();
+                let editable = panel.client_setting_editable();
                 if panel.custom_client_active() {
                     content = content.child(
                         self.accessibility.text(
@@ -287,35 +328,39 @@ impl Popup {
                         ),
                     );
                 }
+                content = content.child(
+                    self.accessibility.text(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .text_sm()
+                            .text_color(p.muted)
+                            .child(CLIENT_SCOPE[0])
+                            .child(CLIENT_SCOPE[1]),
+                        "account-client-scope",
+                        format!("{} {}", CLIENT_SCOPE[0], CLIENT_SCOPE[1]),
+                        Role::Label,
+                    ),
+                );
                 let (id, name) = if has_setting {
                     ("account-client-change", "Change approved client ID…")
                 } else {
                     ("account-client-open", "Use an approved client ID…")
                 };
-                content =
-                    content.child(
-                        self.account_button(id, name, false, cx, |this, window, cx| {
-                            this.open_client_entry(window, cx)
-                        }),
-                    );
-                if panel.custom_client_pending_restart() {
-                    let restart = if has_setting {
-                        CLIENT_RESTART
-                    } else {
-                        CLIENT_CLEARED_RESTART
-                    };
-                    content = content.child(self.accessibility.text(
-                        div().text_sm().text_color(p.muted).child(restart),
-                        "account-client-restart",
-                        restart,
-                        Role::Status,
-                    ));
-                }
+                content = content.child(self.account_button_when(
+                    id,
+                    name,
+                    false,
+                    !editable,
+                    cx,
+                    |this, window, cx| this.open_client_entry(window, cx),
+                ));
                 if has_setting {
-                    content = content.child(self.account_button(
+                    content = content.child(self.account_button_when(
                         "account-client-clear",
                         "Clear approved client ID",
                         false,
+                        !editable,
                         cx,
                         |this, window, cx| this.clear_client_setting(window, cx),
                     ));
@@ -458,9 +503,15 @@ impl Popup {
     }
 
     fn open_client_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = &self.account else {
+            return;
+        };
+        if !dialog.panel.read(cx).client_setting_editable() {
+            return;
+        }
         if let Some(dialog) = &mut self.account {
             dialog.client_entry = true;
-            dialog.client_confirmed = false;
+            dialog.client_confirmed = None;
             dialog.client_notice = None;
             dialog
                 .client_input
@@ -472,7 +523,7 @@ impl Popup {
     fn close_client_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(dialog) = &mut self.account {
             dialog.client_entry = false;
-            dialog.client_confirmed = false;
+            dialog.client_confirmed = None;
             dialog
                 .client_input
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -486,26 +537,33 @@ impl Popup {
         let Some(dialog) = &self.account else {
             return;
         };
-        if !dialog.client_confirmed {
+        if !dialog.panel.read(cx).client_setting_editable() {
+            return;
+        }
+        let value = dialog.client_input.read(cx).value().to_string();
+        let entered = value.trim();
+        if dialog.client_confirmed.as_deref() != Some(entered) {
             if let Some(dialog) = &mut self.account {
                 dialog.client_notice = Some((
-                    "Confirm authorized use before saving this public client ID.".into(),
+                    "Confirm this public client ID again after editing it.".into(),
                     true,
                 ));
+                dialog
+                    .client_input
+                    .update(cx, |input, cx| input.focus(window, cx));
             }
             cx.notify();
             return;
         }
-        let value = dialog.client_input.read(cx).value().to_string();
         let result = dialog
             .panel
-            .update(cx, |panel, _| panel.set_custom_client(&value));
+            .update(cx, |panel, _| panel.set_custom_client(entered));
         let mut invalid = false;
         if let Some(dialog) = &mut self.account {
             match result {
                 Ok(()) => {
                     dialog.client_entry = false;
-                    dialog.client_confirmed = false;
+                    dialog.client_confirmed = None;
                     dialog
                         .client_input
                         .update(cx, |input, cx| input.set_value("", window, cx));
@@ -530,26 +588,29 @@ impl Popup {
     }
 
     fn clear_client_setting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let result = self.account.as_ref().map(|dialog| {
-            dialog
-                .panel
-                .update(cx, |panel, _| panel.clear_custom_client())
-        });
+        let Some(dialog) = &self.account else {
+            return;
+        };
+        if !dialog.panel.read(cx).client_setting_editable() {
+            return;
+        }
+        let result = dialog
+            .panel
+            .update(cx, |panel, _| panel.clear_custom_client());
         if let Some(dialog) = &mut self.account {
             match result {
-                Some(Ok(())) => {
+                Ok(()) => {
                     dialog.client_entry = false;
-                    dialog.client_confirmed = false;
+                    dialog.client_confirmed = None;
                     dialog.client_input.update(cx, |input, cx| {
                         input.set_value("", window, cx);
                     });
                     dialog.client_notice = Some((
-                        "Removed the per-install public client ID. Restart Carbon Desktop to stop using it. Saved accounts and instances are unchanged.".into(),
+                        "Removed the per-install public client ID. Restart Carbon Desktop to stop using it. Saved instances are unchanged.".into(),
                         false,
                     ));
                 }
-                Some(Err(error)) => dialog.client_notice = Some((error, true)),
-                None => {}
+                Err(error) => dialog.client_notice = Some((error, true)),
             }
         }
         self.focus.focus(window);
@@ -661,6 +722,18 @@ impl Popup {
         cx: &Context<Self>,
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
+        self.account_button_when(id, name, primary, false, cx, action)
+    }
+
+    fn account_button_when(
+        &self,
+        id: impl Into<ElementId>,
+        name: &'static str,
+        primary: bool,
+        disabled: bool,
+        cx: &Context<Self>,
+        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> impl IntoElement {
         let p = self.palette;
         let id = id.into();
         let treatment = if primary {
@@ -670,16 +743,16 @@ impl Popup {
         };
         self.control(
             label(
-                compact_action(id.clone(), p, treatment, false, cx).min_w(px(72.)),
+                compact_action(id.clone(), p, treatment, disabled, cx).min_w(px(72.)),
                 name,
                 p,
                 treatment,
-                false,
+                disabled,
             ),
             id,
             name,
             Role::Button,
-            false,
+            disabled,
             None,
             cx,
             action,
