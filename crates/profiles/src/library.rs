@@ -178,7 +178,10 @@ pub fn library_mode(root: &Path) -> Result<LibraryMode, String> {
 /// the shared library lock.
 pub fn set_library_mode(root: &Path, mode: LibraryMode) -> Result<LibraryMode, String> {
     let (_lock, _library) = storage::open(root)?;
-    if read_mode(root)? == mode {
+    // An unreadable preference is reported by `library_mode` and preserved
+    // until an explicit Settings choice replaces it. Starting the app never
+    // rewrites it.
+    if read_mode(root).ok() == Some(mode) {
         return Ok(mode);
     }
     let stored = StoredMode { version: 1, mode };
@@ -306,15 +309,19 @@ mod tests {
     }
 
     #[test]
-    fn invalid_mode_is_preserved_and_cannot_be_overwritten() {
+    fn invalid_mode_is_reported_and_preserved_until_an_explicit_choice() {
         let temp = root();
         let root = temp.path();
         crate::seed_review_library(root, false).unwrap();
         let path = root.join("personal/library-mode.json");
         fs::write(&path, b"not a mode").unwrap();
         assert!(library_mode(root).is_err());
-        assert!(set_library_mode(root, LibraryMode::Worlds).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"not a mode");
+        assert_eq!(
+            set_library_mode(root, LibraryMode::Instances).unwrap(),
+            LibraryMode::Instances
+        );
+        assert_eq!(library_mode(root).unwrap(), LibraryMode::Instances);
     }
 
     #[test]

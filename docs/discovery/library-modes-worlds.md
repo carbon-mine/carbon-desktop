@@ -166,9 +166,10 @@ separate explicitly compatible instance.
 ## Staged acceptance
 
 1. **Mode and persistence (CDESK-102)**: missing file means Worlds; explicit
-   Instances round-trips; malformed/unknown data is preserved and reported; a
-   mode write does not touch profile, target or save files; tests cover two
-   writers and restart-equivalent reads.
+   Instances round-trips; malformed/unknown data is preserved and reported
+   until an explicit Settings choice repairs it; a mode write does not touch
+   profile, target or save files; tests cover two writers and restart-equivalent
+   reads.
 2. **Inventory (CDESK-103)**: projection returns exact backing IDs, duplicate
    names, imported/server-bound sources, partial scans and missing folders;
    tests use synthetic save directories only.

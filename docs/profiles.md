@@ -27,9 +27,10 @@ The native library has two presentation modes. **Worlds** is the default;
 preference in `personal/library-mode.json` and is read with
 `carbon_profiles::library_mode(root)` and written with
 `carbon_profiles::set_library_mode(root, mode)`. A missing file means Worlds.
-Malformed or unsupported data is reported and preserved rather than silently
-replaced. Switching modes must not change a profile, target preference, world
-label, save, ownership record or entitlement decision.
+Malformed or unsupported data is reported and preserved on reads rather than
+silently replaced; an explicit Settings mode choice is the repair action.
+Switching modes must not change a profile, target preference, world label, save,
+ownership record or entitlement decision.
 
 `carbon_profiles::world_library(root)` projects worlds from the existing save
 directories of every saved profile. A projected world has:
