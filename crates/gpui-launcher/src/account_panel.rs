@@ -346,7 +346,9 @@ impl AccountPanel {
     }
 
     pub fn toolbar_label(&self) -> &'static str {
-        if self.unavailable() || !self.snapshot.accounts.is_empty() || self.pending() {
+        if self.is_simulated() {
+            "Test account"
+        } else if self.unavailable() || !self.snapshot.accounts.is_empty() || self.pending() {
             "Minecraft account"
         } else {
             "Sign in"

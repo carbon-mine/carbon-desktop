@@ -1076,7 +1076,11 @@ impl Launcher {
         } else if settled && self.account.read(cx).unavailable() {
             "Sign-in unavailable"
         } else if settled && self.account.read(cx).signed_in() {
-            "Launch unavailable"
+            if self.account.read(cx).is_simulated() {
+                "Test account · launch unavailable"
+            } else {
+                "Launch unavailable"
+            }
         } else if settled && self.account.read(cx).active_account().is_some() {
             "Account check required"
         } else if settled {

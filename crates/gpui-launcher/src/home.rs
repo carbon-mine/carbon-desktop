@@ -1211,7 +1211,11 @@ impl Launcher {
         } else if settled && account.unavailable() {
             "Sign-in unavailable"
         } else if settled && account.signed_in() {
-            "Setup ready · protected launch is unavailable"
+            if account.is_simulated() {
+                "Test account · protected launch is unavailable"
+            } else {
+                "Setup ready · protected launch is unavailable"
+            }
         } else if settled && account.active_account().is_some() {
             "Account check required"
         } else if settled {

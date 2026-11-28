@@ -70,7 +70,7 @@ target\debug\carbon-desktop-gpui.exe `
   --fixture-root "$env:LOCALAPPDATA\CarbonDesktopOpenCode\dev-account-workflows\fixtures"
 ```
 
-Open **Minecraft account** from the toolbar. The dialog is headed by a
+Open **Test account** from the toolbar. The dialog is headed by a
 **Test account simulation** panel. The ordinary Home/Library content is still
 shown; fixture instances remain honestly **Setup required**.
 
