@@ -269,8 +269,13 @@ impl Popup {
                         |this, _, cx| {
                             if let Some(dialog) = &mut this.account {
                                 let value = dialog.client_input.read(cx).value().trim().to_owned();
-                                dialog.client_confirmed =
-                                    if value.is_empty() { None } else { Some(value) };
+                                dialog.client_confirmed = if value.is_empty()
+                                    || dialog.client_confirmed.as_deref() == Some(value.as_str())
+                                {
+                                    None
+                                } else {
+                                    Some(value)
+                                };
                                 dialog.client_notice = None;
                             }
                             cx.notify();
@@ -567,10 +572,7 @@ impl Popup {
                     dialog
                         .client_input
                         .update(cx, |input, cx| input.set_value("", window, cx));
-                    dialog.client_notice = Some((
-                        "Saved. Restart Carbon Desktop to use this public client ID.".into(),
-                        false,
-                    ));
+                    dialog.client_notice = Some(("Public client ID saved.".into(), false));
                 }
                 Err(error) => {
                     dialog.client_notice = Some((error, true));
@@ -605,10 +607,8 @@ impl Popup {
                     dialog.client_input.update(cx, |input, cx| {
                         input.set_value("", window, cx);
                     });
-                    dialog.client_notice = Some((
-                        "Removed the per-install public client ID. Restart Carbon Desktop to stop using it. Saved instances are unchanged.".into(),
-                        false,
-                    ));
+                    dialog.client_notice =
+                        Some(("Per-install public client ID cleared.".into(), false));
                 }
                 Err(error) => dialog.client_notice = Some((error, true)),
             }
