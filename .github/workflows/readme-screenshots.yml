@@ -139,7 +139,47 @@ jobs:
           $images | Copy-Item -Destination $site
           $siteImages = @(Get-ChildItem -LiteralPath $site -File)
           if ($siteImages.Count -eq 0) { throw 'No screenshot images copied to Pages artifact' }
-          if ($siteImages | Where-Object { $_.Extension -ne '.png' }) { throw 'Pages artifact must be image-only' }
+
+          # Publish a small, path-free manifest so the live site states which commit its
+          # images came from. Runner paths, fixture roots and executable paths stay out.
+          $manifest = Get-Content -LiteralPath (Join-Path $src 'manifest.json') -Raw | ConvertFrom-Json
+          $generatedAt = $manifest.generatedAt
+          if ($generatedAt -is [datetime]) { $generatedAt = $generatedAt.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+          else { $generatedAt = [string]$generatedAt }
+          $screenshots = @($manifest.screenshots | ForEach-Object {
+            [ordered]@{
+              id = [string]$_.id
+              file = [string]$_.file
+              alt = [string]$_.alt
+              width = [int]$_.width
+              height = [int]$_.height
+              bytes = [long]$_.bytes
+              sha256 = [string]$_.sha256
+            }
+          })
+          $published = [ordered]@{
+            schema = 'carbon-readme-screenshots-public/v1'
+            repository = [string]$manifest.repository
+            commit = [string]$manifest.commit
+            sourceRef = [string]$manifest.sourceRef
+            generatedAt = $generatedAt
+            appearance = [string]$manifest.appearance
+            screenshots = $screenshots
+          }
+          $manifestOut = Join-Path $site 'manifest.json'
+          $published | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestOut -Encoding utf8
+
+          $check = Get-Content -LiteralPath $manifestOut -Raw | ConvertFrom-Json
+          if ([string]$check.commit -ne [string]$manifest.commit) { throw 'Published manifest commit mismatch' }
+          if (@($check.screenshots).Count -ne $images.Count) { throw 'Published manifest screenshot count mismatch' }
+          foreach ($image in $images) {
+            $entry = @($check.screenshots | Where-Object { $_.file -eq $image.Name })
+            if ($entry.Count -ne 1) { throw "Published manifest is missing file $($image.Name)" }
+          }
+          $unexpected = @($siteImages + (Get-Item -LiteralPath $manifestOut) |
+            Where-Object { $_.Extension -notin @('.png') -and $_.Name -ne 'manifest.json' })
+          if ($unexpected.Count -gt 0) { throw "Pages artifact must contain only screenshots and manifest.json (found $($unexpected.Name -join ', '))" }
+          Write-Host "Pages artifact: $($images.Count) images and manifest.json for commit $($manifest.commit)"
 
       - name: Upload screenshot artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
