@@ -863,6 +863,10 @@ impl Launcher {
             });
         let busy = self.popup.is_some() || self.picker_open;
         let instance = world.id.instance;
+        let readiness = world.issue.as_ref().map_or(
+            "Direct world launch is unavailable until protected launch is qualified.".to_owned(),
+            |issue| format!("Save scan needs attention. {issue}"),
+        );
         col()
             .gap(px(10.))
             .child(
@@ -899,15 +903,17 @@ impl Launcher {
                     .items_center()
                     .gap_2()
                     .child(div().flex_none().size(px(6.)).bg(glass.status_muted))
-                    .child(self.accessibility.text(
-                        div()
-                            .text_xs()
-                            .text_color(glass.meta)
-                            .child("Direct world launch is unavailable until protected launch is qualified."),
-                        "home-world-readiness",
-                        "Direct world launch is unavailable until protected launch is qualified.",
-                        Role::Label,
-                    )),
+                    .child(
+                        self.accessibility.text(
+                            div()
+                                .text_xs()
+                                .text_color(glass.meta)
+                                .child(readiness.clone()),
+                            "home-world-readiness",
+                            readiness,
+                            Role::Label,
+                        ),
+                    ),
             )
             .child(
                 row()

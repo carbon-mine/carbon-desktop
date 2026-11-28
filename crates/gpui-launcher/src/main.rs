@@ -791,6 +791,7 @@ impl Launcher {
 
     fn apply_library_mode(&mut self, mode: LibraryMode, cx: &mut Context<Self>) {
         self.library_mode = mode;
+        self.library_mode_issue = None;
         if mode == LibraryMode::Worlds {
             self.ensure_world_selection(cx);
         }

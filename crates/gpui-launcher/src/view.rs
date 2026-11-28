@@ -852,8 +852,9 @@ impl Launcher {
             .child(div().text_xl().font_semibold().child(title))
             .child(div().text_color(p.muted).child(description))
             .when(issue_count > 0, |body| {
+                let verb = if issue_count == 1 { "needs" } else { "need" };
                 body.child(div().text_sm().text_color(p.warning).child(format!(
-                    "{issue_count} instance save scan{} need attention. The affected worlds remain listed with their issue.",
+                    "{issue_count} instance save scan{} {verb} attention. The affected worlds remain listed with their issue.",
                     if issue_count == 1 { "" } else { "s" }
                 )))
             })

@@ -427,9 +427,9 @@ impl Popup {
     }
 
     fn save_settings_mode(&mut self, mode: LibraryMode, cx: &mut Context<Self>) {
-        if self.settings == Some(mode) {
-            return;
-        }
+        // Calling this for the already-selected mode is deliberate: a read
+        // error may have fallen back to Worlds, and an explicit click is the
+        // repair action. A valid unchanged preference is a no-op in the store.
         match carbon_profiles::set_library_mode(&self.root_path, mode) {
             Ok(mode) => {
                 self.settings = Some(mode);
