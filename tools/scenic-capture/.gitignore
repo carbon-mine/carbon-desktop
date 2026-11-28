@@ -1,0 +1,9 @@
+.gradle/
+build/
+renders/
+scenic-renders/
+__pycache__/
+*.pyc
+*.mkv
+*.mp4
+*.png

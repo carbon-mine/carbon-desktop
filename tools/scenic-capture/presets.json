@@ -1,0 +1,348 @@
+{
+  "mode": "capture",
+  "width": 3840,
+  "height": 2160,
+  "outputWidth": 2560,
+  "outputHeight": 1440,
+  "fps": 60,
+  "ffmpegPath": "ffmpeg",
+  "outputDir": "scenic-renders",
+  "directEncode": false,
+  "directEncodeCrf": 12,
+  "minimumFreeMiB": 1536,
+  "worlds": [
+    {
+      "world": "tuscany_hills",
+      "shader": "photon_v1.4.zip",
+      "timeOfDay": 750,
+      "weather": "clear",
+      "settleSeconds": 4.0,
+      "commands": [
+        "forceload add 1130 760 1148 820",
+        "forceload add 1375 760 1398 825",
+        "forceload add 1255 715 1275 735",
+        "fill 1130 198 760 1148 216 820 air replace minecraft:beacon",
+        "fill 1375 198 760 1398 216 825 air replace minecraft:beacon",
+        "fill 1255 198 715 1275 216 735 air replace minecraft:beacon",
+        "setblock 1135 205 768 air",
+        "setblock 1387 205 768 air",
+        "kill @e[type=minecraft:armor_stand]",
+        "forceload remove all"
+      ],
+      "viewpoints": [
+        {
+          "id": "tuscany-villas",
+          "motion": "orbit",
+          "eye": [
+            1328,
+            246,
+            780
+          ],
+          "target": [
+            1268,
+            204,
+            725
+          ],
+          "radiusV": 0.4,
+          "fov": 54,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "orbitRadius": 78.0,
+          "sweepDeg": 9.5,
+          "radiusH": 0.0,
+          "phaseOffsetDeg": 90.0
+        },
+        {
+          "id": "tuscany-hills",
+          "motion": "orbit",
+          "eye": [
+            1194,
+            255,
+            804
+          ],
+          "target": [
+            1268,
+            202,
+            742
+          ],
+          "radiusH": 0.0,
+          "radiusDepth": 0.5,
+          "radiusV": 0.45,
+          "fov": 53,
+          "shader": "ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2",
+          "timeOfDay": 11850,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "orbitRadius": 94.0,
+          "sweepDeg": 8.5,
+          "phaseOffsetDeg": 90.0
+        }
+      ]
+    },
+    {
+      "world": "cherry_city",
+      "shader": "ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2",
+      "timeOfDay": 1150,
+      "weather": "clear",
+      "settleSeconds": 4.0,
+      "commands": [
+        "forceload add -78 26 -40 85",
+        "forceload add 80 26 118 85",
+        "fill -78 22 26 -40 31 85 air replace minecraft:beacon",
+        "fill 80 22 26 118 31 85 air replace minecraft:beacon",
+        "setblock -44 26 34 air",
+        "setblock 84 26 76 air",
+        "kill @e[type=minecraft:armor_stand]",
+        "forceload remove all"
+      ],
+      "viewpoints": [
+        {
+          "id": "cherry-plaza",
+          "motion": "orbit",
+          "eye": [
+            18,
+            50,
+            80
+          ],
+          "target": [
+            19,
+            30,
+            50
+          ],
+          "radiusV": 0.4,
+          "fov": 55,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "sweepDeg": 11.5,
+          "radiusH": 0.0,
+          "phaseOffsetDeg": 90.0
+        },
+        {
+          "id": "cherry-avenue",
+          "motion": "orbit",
+          "eye": [
+            54,
+            59,
+            16
+          ],
+          "target": [
+            20,
+            31,
+            54
+          ],
+          "radiusH": 0.0,
+          "radiusDepth": 0.8,
+          "radiusV": 0.5,
+          "fov": 52,
+          "shader": "photon_v1.4.zip",
+          "timeOfDay": 11200,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "orbitRadius": 44.0,
+          "sweepDeg": 14.0,
+          "phaseOffsetDeg": 90.0
+        }
+      ]
+    },
+    {
+      "world": "kingdom",
+      "shader": "photon_v1.4.zip",
+      "timeOfDay": 1000,
+      "weather": "clear",
+      "settleSeconds": 4.0,
+      "commands": [
+        "forceload add -105 0 -105 0",
+        "setblock -104 57 0 air",
+        "kill @e[type=minecraft:armor_stand]",
+        "forceload remove all"
+      ],
+      "viewpoints": [
+        {
+          "id": "kingdom-keep",
+          "motion": "orbit",
+          "eye": [
+            56,
+            22,
+            -132
+          ],
+          "target": [
+            43,
+            29,
+            -198
+          ],
+          "radiusV": 0.35,
+          "fov": 45,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "orbitRadius": 68.0,
+          "sweepDeg": 10.0,
+          "radiusH": 0.0,
+          "phaseOffsetDeg": 90.0
+        },
+        {
+          "id": "kingdom-courtyard",
+          "motion": "orbit",
+          "eye": [
+            -56,
+            22,
+            132
+          ],
+          "target": [
+            -43,
+            29,
+            198
+          ],
+          "radiusV": 0.35,
+          "fov": 45,
+          "shader": "ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2",
+          "timeOfDay": 11750,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "orbitRadius": 68.0,
+          "sweepDeg": 10.0,
+          "radiusH": 0.0,
+          "phaseOffsetDeg": 90.0
+        }
+      ]
+    },
+    {
+      "world": "mistral_bay",
+      "shader": "ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2",
+      "timeOfDay": 1500,
+      "weather": "clear",
+      "settleSeconds": 4.0,
+      "commands": [
+        "kill @e[type=minecraft:armor_stand]",
+        "forceload add 10 -10 130 160",
+        "fill 28 38 -5 54 62 24 air",
+        "fill 28 38 25 54 62 55 air",
+        "fill 28 38 56 54 62 85 air",
+        "fill 28 38 86 54 62 115 air",
+        "fill 63 43 35 72 52 44 air",
+        "fill 12 43 139 20 52 148 air",
+        "fill 35 50 33 46 66 44 air",
+        "fill 35 50 139 46 66 150 air",
+        "fill 105 44 78 130 68 106 air",
+        "forceload remove all"
+      ],
+      "viewpoints": [
+        {
+          "id": "mistral-canyon",
+          "motion": "lateral",
+          "eye": [
+            41,
+            21,
+            120
+          ],
+          "target": [
+            41,
+            14,
+            46
+          ],
+          "radiusH": 2.3,
+          "radiusDepth": 0.5,
+          "radiusV": 0.25,
+          "fov": 44,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "phaseOffsetDeg": 90.0
+        },
+        {
+          "id": "mistral-lagoon",
+          "motion": "orbit",
+          "eye": [
+            24,
+            18,
+            66
+          ],
+          "target": [
+            46,
+            13,
+            108
+          ],
+          "radiusV": 0.35,
+          "fov": 45,
+          "shader": "photon_v1.4.zip",
+          "timeOfDay": 11500,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "orbitRadius": 48.0,
+          "sweepDeg": 11.0,
+          "radiusH": 0.0,
+          "phaseOffsetDeg": 90.0
+        }
+      ]
+    },
+    {
+      "world": "nordic_village",
+      "shader": "photon_v1.4.zip",
+      "timeOfDay": 1050,
+      "weather": "clear",
+      "settleSeconds": 4.0,
+      "commands": [
+        "kill @e[type=minecraft:armor_stand]",
+        "kill @e[type=minecraft:item]"
+      ],
+      "viewpoints": [
+        {
+          "id": "nordic-fjord",
+          "motion": "orbit",
+          "eye": [
+            5,
+            25,
+            -18
+          ],
+          "target": [
+            -21,
+            40,
+            68
+          ],
+          "radiusV": 0.35,
+          "fov": 58,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "orbitRadius": 90.0,
+          "sweepDeg": 10.0,
+          "radiusH": 0.0,
+          "phaseOffsetDeg": 90.0
+        }
+      ]
+    },
+    {
+      "world": "hobbit_hill",
+      "shader": "Bliss_v2.1.2_(Chocapic13_Shaders_edit).zip",
+      "timeOfDay": 1150,
+      "weather": "clear",
+      "settleSeconds": 4.0,
+      "commands": [
+        "kill @e[type=minecraft:armor_stand]",
+        "kill @e[type=minecraft:sheep]"
+      ],
+      "viewpoints": [
+        {
+          "id": "hobbit-gorge",
+          "motion": "lateral",
+          "eye": [
+            32,
+            62,
+            -162
+          ],
+          "target": [
+            36,
+            63,
+            -228
+          ],
+          "radiusH": 2.6,
+          "radiusDepth": 0.6,
+          "radiusV": 0.25,
+          "fov": 54,
+          "shader": "ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2",
+          "timeOfDay": 11700,
+          "frames": 1440,
+          "overlapFrames": 60,
+          "phaseOffsetDeg": 90.0
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "carbon_scenic_recorder",
+  "version": "${version}",
+  "name": "Carbon Scenic Recorder",
+  "description": "Deterministic 1440p circular-camera capture automation for Carbon Desktop backdrops.",
+  "authors": ["Carbon Desktop contributors"],
+  "license": "MPL-2.0",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.carbonmine.scenic.CarbonScenicMod"
+    ]
+  },
+  "mixins": [
+    "carbon_scenic.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
