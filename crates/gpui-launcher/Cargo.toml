@@ -5,6 +5,12 @@ edition = "2024"
 publish = false
 license = "MPL-2.0"
 
+[features]
+default = []
+# Non-default developer/test boundary. Enables the in-process account
+# simulation and its explicit --dev-account-simulation startup flag.
+dev-account-simulation = ["carbon-account/dev-simulation"]
+
 [dependencies]
 anyhow = "1"
 accesskit = "=0.25.2"

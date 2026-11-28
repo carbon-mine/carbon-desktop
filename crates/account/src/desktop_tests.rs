@@ -16,6 +16,7 @@ fn isolated() -> Accounts {
             registration: Some(CLIENT),
             state: Mutex::new(State::new()),
             changed: Condvar::new(),
+            backend: Backend::Real,
         }))),
         root: None,
         compiled: Some(CLIENT),
@@ -557,6 +558,194 @@ fn failed_vault_removals_preserve_denials_and_block_only_affected_slots() {
     );
     assert_eq!(accounts.snapshot().removal_retry, Some(FOREST));
     assert_eq!(accounts.play_blocker(mode), PlayBlocker::EntitlementDenied);
+}
+
+#[cfg(feature = "dev-simulation")]
+#[test]
+fn simulated_accounts_refuse_an_unmarked_root_without_writing_it() {
+    use crate::simulation::Simulation;
+
+    let root = tempfile::tempdir().unwrap();
+    let accounts = Accounts::simulated(root.path(), Simulation::new());
+    assert!(accounts.is_simulated());
+    assert_eq!(accounts.snapshot().state, AccountState::Unavailable);
+    assert!(accounts.simulation().is_none());
+    assert!(!root.path().join("synthetic-credentials.json").exists());
+    assert!(!root.path().join("account-vault.lock").exists());
+}
+
+#[cfg(feature = "dev-simulation")]
+#[test]
+fn simulated_accounts_ignore_real_client_settings_and_stay_on_the_test_store() {
+    use crate::simulation::Simulation;
+
+    let library = tempfile::tempdir().unwrap();
+    let root = library.path().join("dev-account-simulation");
+    std::fs::create_dir_all(&root).unwrap();
+    let stored = Uuid::from_u128(9);
+    client::store(library.path(), stored).unwrap();
+    crate::simulation::mark_root(&root).unwrap();
+    let accounts = Accounts::simulated(&root, Simulation::new());
+    wait_for(&accounts, |view| view.state == AccountState::SignedOut);
+    assert!(accounts.is_simulated());
+    assert!(!accounts.custom_client_allowed());
+    assert!(!accounts.custom_client_configured());
+    assert!(!accounts.custom_client_pending_restart());
+    assert_eq!(
+        accounts.owner.0.registration,
+        Some(crate::simulation::CLIENT_ID)
+    );
+    assert!(accounts.set_custom_client(&stored.to_string()).is_err());
+    assert!(accounts.clear_custom_client().is_err());
+    assert_eq!(client::load(library.path()), Some(stored));
+    assert!(
+        !root.join("account-client.json").exists(),
+        "synthetic mode must not copy or rewrite the real client setting"
+    );
+}
+
+#[cfg(feature = "dev-simulation")]
+fn wait_for(accounts: &Accounts, predicate: impl Fn(&AccountView) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        if predicate(&accounts.snapshot()) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the simulated account state: {:?} {}",
+            accounts.snapshot().state,
+            accounts.snapshot().message
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[cfg(feature = "dev-simulation")]
+#[test]
+fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
+    use crate::simulation::{EntitlementState, Persona, Simulation};
+
+    let root = tempfile::tempdir().unwrap();
+    let simulation = Simulation::new();
+    crate::simulation::mark_root(root.path()).unwrap();
+    let accounts = Accounts::simulated(root.path(), simulation.clone());
+    wait_for(&accounts, |view| view.state == AccountState::SignedOut);
+
+    accounts.begin();
+    wait_for(&accounts, |view| {
+        view.state == AccountState::AwaitingBrowser
+    });
+    assert_eq!(simulation.pending_persona(), Some(Persona::Forest));
+    assert!(
+        accounts
+            .snapshot()
+            .message
+            .contains("Simulated authorization"),
+        "the pending step must not ask for a real browser"
+    );
+    assert!(!accounts.snapshot().message.contains("Open the browser"));
+    assert!(
+        accounts.open_browser().is_err(),
+        "the simulated service must reject a real browser action"
+    );
+    accounts.cancel();
+    wait_for(&accounts, |view| view.state == AccountState::SignedOut);
+    assert_eq!(simulation.phase(), crate::simulation::SimulationPhase::Idle);
+    assert_eq!(simulation.pending_persona(), None);
+
+    accounts.begin();
+    wait_for(&accounts, |view| {
+        view.state == AccountState::AwaitingBrowser
+    });
+    assert!(simulation.approve());
+    wait_for(&accounts, |view| view.state == AccountState::SignedIn);
+    assert_eq!(
+        accounts.snapshot().active_account,
+        Some(Persona::Forest.profile_id())
+    );
+    assert_eq!(
+        accounts.snapshot().message,
+        "Synthetic test account verified."
+    );
+    assert!(
+        root.path().join("synthetic-credentials.json").is_file(),
+        "the simulation keeps credentials in its test root, not the OS vault"
+    );
+
+    simulation.set_next_persona(Persona::Coast);
+    accounts.begin();
+    wait_for(&accounts, |view| {
+        view.state == AccountState::AwaitingBrowser
+    });
+    assert!(simulation.approve());
+    wait_for(&accounts, |view| {
+        view.state == AccountState::SignedIn
+            && view.active_account == Some(Persona::Coast.profile_id())
+    });
+    assert_eq!(accounts.snapshot().accounts.len(), 2);
+
+    accounts.switch(Persona::Forest.profile_id());
+    wait_for(&accounts, |view| {
+        view.state == AccountState::SignedIn
+            && view.active_account == Some(Persona::Forest.profile_id())
+    });
+
+    assert!(matches!(
+        accounts.prepare_launch(PlayMode::OfflineSinglePlayer, None),
+        Err(PlayBlocker::SimulationUnavailable)
+    ));
+    assert!(matches!(
+        accounts.prepare_launch(PlayMode::OnlineMultiplayer, None),
+        Err(PlayBlocker::SimulationUnavailable)
+    ));
+
+    drop(accounts);
+    let restarted_simulation = Simulation::new();
+    let restarted = Accounts::simulated(root.path(), restarted_simulation.clone());
+    assert_eq!(restarted_simulation.next_persona(), Persona::Forest);
+    assert_eq!(
+        restarted_simulation.entitlement(Persona::Forest),
+        EntitlementState::Granted
+    );
+    wait_for(&restarted, |view| {
+        view.state == AccountState::SignedIn
+            && view.active_account == Some(Persona::Forest.profile_id())
+    });
+    assert_eq!(restarted.snapshot().accounts.len(), 2);
+
+    let decision = crate::play::synthetic_decision_for_test(
+        Persona::Forest.profile_id(),
+        crate::simulation::CLIENT_ID,
+    );
+    let mut started = false;
+    assert_eq!(
+        restarted
+            .with_launch_authority(decision, None, || started = true)
+            .err(),
+        Some(PlayBlocker::SimulationUnavailable)
+    );
+    assert!(!started, "synthetic admission must never start a process");
+
+    restarted_simulation.set_entitlement(Persona::Forest, EntitlementState::Denied);
+    restarted.refresh_selected();
+    wait_for(&restarted, |view| view.state == AccountState::Error);
+    assert_eq!(
+        restarted.play_blocker(PlayMode::OfflineSinglePlayer),
+        PlayBlocker::SimulationUnavailable
+    );
+
+    restarted.sign_out_account(Persona::Coast.profile_id());
+    wait_for(&restarted, |view| {
+        view.accounts
+            .iter()
+            .all(|account| account.id != Persona::Coast.profile_id())
+    });
+    assert!(restarted
+        .snapshot()
+        .accounts
+        .iter()
+        .any(|account| account.id == Persona::Forest.profile_id()));
 }
 
 #[test]

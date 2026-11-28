@@ -3,6 +3,8 @@ mod client;
 pub mod desktop;
 mod device;
 pub mod play;
+#[cfg(feature = "dev-simulation")]
+pub mod simulation;
 mod transport;
 mod vault;
 

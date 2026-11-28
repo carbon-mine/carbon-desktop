@@ -4,6 +4,11 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+# Non-default developer/test boundary for the in-process account simulation.
+dev-simulation = []
+
 [dependencies]
 hex = "0.4"
 open = "5.4.5"

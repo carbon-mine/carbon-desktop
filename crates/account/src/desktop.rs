@@ -58,6 +58,16 @@ pub struct Accounts {
 enum RegistrationSource {
     Compiled,
     Custom,
+    #[cfg(feature = "dev-simulation")]
+    Simulated,
+}
+
+enum Backend {
+    Real,
+    #[cfg(feature = "dev-simulation")]
+    Simulated(crate::simulation::Simulation),
+    #[cfg(feature = "dev-simulation")]
+    SimulatedUnavailable,
 }
 
 struct Owner(Arc<Core>);
@@ -75,6 +85,7 @@ struct Core {
     registration: Option<Uuid>,
     state: Mutex<State>,
     changed: Condvar,
+    backend: Backend,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -284,6 +295,39 @@ impl Core {
         }
     }
 
+    fn device_client(&self, client_id: Uuid) -> Result<DeviceClient, AccountError> {
+        match &self.backend {
+            Backend::Real => DeviceClient::new(client_id),
+            #[cfg(feature = "dev-simulation")]
+            Backend::Simulated(simulation) => {
+                DeviceClient::with_transport(client_id, simulation.transport())
+            }
+            #[cfg(feature = "dev-simulation")]
+            Backend::SimulatedUnavailable => Err(AccountError::TemporarilyUnavailable),
+        }
+    }
+
+    fn is_simulated(&self) -> bool {
+        #[cfg(feature = "dev-simulation")]
+        {
+            matches!(
+                self.backend,
+                Backend::Simulated(_) | Backend::SimulatedUnavailable
+            )
+        }
+        #[cfg(not(feature = "dev-simulation"))]
+        {
+            false
+        }
+    }
+
+    fn cancel_simulation(&self) {
+        #[cfg(feature = "dev-simulation")]
+        if let Backend::Simulated(simulation) = &self.backend {
+            simulation.cancel_pending();
+        }
+    }
+
     fn complete(&self, ticket: Ticket, status: AccountState, message: impl Into<String>) {
         let mut state = self.state();
         if state.current(ticket) {
@@ -323,12 +367,54 @@ impl Accounts {
         Self::start(None, configured_client())
     }
 
+    pub fn snapshot(&self) -> AccountView {
+        self.owner.0.state().view()
+    }
+
     fn start(root: Option<&Path>, compiled: Option<Uuid>) -> Self {
         let root = root.map(Path::to_path_buf);
         let custom = root.as_deref().and_then(client::load);
         let selection = resolve_client(compiled, custom);
         let client_id = selection.map(|(client_id, _)| client_id);
         let source = selection.map(|(_, source)| source);
+        Self::start_backend(root, compiled, client_id, source, Backend::Real)
+    }
+
+    /// Start the real lifecycle with the deterministic in-process provider.
+    /// Compiled only with the non-default `dev-simulation` feature and called
+    /// only after the GPUI developer startup gates accept a fixture root.
+    #[cfg(feature = "dev-simulation")]
+    pub fn simulated(root: &Path, simulation: crate::simulation::Simulation) -> Self {
+        if !crate::simulation::root_is_marked(root) {
+            let accounts = Self::start_backend(
+                Some(root.to_path_buf()),
+                None,
+                None,
+                None,
+                Backend::SimulatedUnavailable,
+            );
+            accounts.owner.0.state().finish(
+                AccountState::Unavailable,
+                "The developer simulation root is not marked. Start it through the guarded GPUI developer flag.",
+            );
+            return accounts;
+        }
+        Self::start_backend(
+            Some(root.to_path_buf()),
+            None,
+            Some(crate::simulation::CLIENT_ID),
+            Some(RegistrationSource::Simulated),
+            Backend::Simulated(simulation),
+        )
+    }
+
+    fn start_backend(
+        root: Option<PathBuf>,
+        compiled: Option<Uuid>,
+        client_id: Option<Uuid>,
+        source: Option<RegistrationSource>,
+        backend: Backend,
+    ) -> Self {
         let mut state = State::new();
         match client_id {
             None => state.finish(
@@ -345,6 +431,7 @@ impl Accounts {
             registration: client_id,
             state: Mutex::new(state),
             changed: Condvar::new(),
+            backend,
         });
         if let Some(client_id) = client_id {
             let worker = Arc::clone(&core);
@@ -368,8 +455,29 @@ impl Accounts {
         }
     }
 
-    pub fn snapshot(&self) -> AccountView {
-        self.owner.0.state().view()
+    /// True for the opt-in developer provider. Production builds cannot reach
+    /// this state because the feature and startup gates are both required.
+    pub fn is_simulated(&self) -> bool {
+        #[cfg(feature = "dev-simulation")]
+        {
+            matches!(
+                self.owner.0.backend,
+                Backend::Simulated(_) | Backend::SimulatedUnavailable
+            )
+        }
+        #[cfg(not(feature = "dev-simulation"))]
+        {
+            false
+        }
+    }
+
+    /// Developer controls for the simulated provider, when this instance uses it.
+    #[cfg(feature = "dev-simulation")]
+    pub fn simulation(&self) -> Option<&crate::simulation::Simulation> {
+        match &self.owner.0.backend {
+            Backend::Simulated(simulation) => Some(simulation),
+            Backend::Real | Backend::SimulatedUnavailable => None,
+        }
     }
 
     /// A compiled Carbon configuration always takes precedence over local opt-in.
@@ -379,7 +487,7 @@ impl Accounts {
 
     /// Per-install configuration is offered only when this build has no compiled ID.
     pub fn custom_client_allowed(&self) -> bool {
-        self.compiled.is_none() && self.root.is_some()
+        self.compiled.is_none() && self.root.is_some() && !self.is_simulated()
     }
 
     /// The worker currently running in this process was started from the local setting.
@@ -395,11 +503,17 @@ impl Accounts {
     /// The stored opt-in differs from the registration used by the running worker.
     pub fn custom_client_pending_restart(&self) -> bool {
         self.compiled.is_none()
+            && !self.is_simulated()
             && self.root.as_deref().and_then(client::load) != self.owner.0.registration
     }
 
     /// Validate and persist only a public application ID. Errors never echo input.
     pub fn set_custom_client(&self, value: &str) -> Result<(), String> {
+        if self.is_simulated() {
+            return Err(
+                "The developer simulation does not read or write a client setting.".to_owned(),
+            );
+        }
         let root = self
             .root
             .as_deref()
@@ -418,6 +532,11 @@ impl Accounts {
 
     /// Forget the local opt-in without touching profiles, saves or vault entries.
     pub fn clear_custom_client(&self) -> Result<(), String> {
+        if self.is_simulated() {
+            return Err(
+                "The developer simulation does not read or write a client setting.".to_owned(),
+            );
+        }
         let root = self
             .root
             .as_deref()
@@ -431,6 +550,9 @@ impl Accounts {
 
     /// Reports a fixed, redacted reason for this build's unavailable play mode.
     pub fn play_blocker(&self, mode: PlayMode) -> PlayBlocker {
+        if self.is_simulated() {
+            return PlayBlocker::SimulationUnavailable;
+        }
         let core = &self.owner.0;
         let state = core.state();
         play::missing_evidence(core.launch_selection(&state), mode)
@@ -443,6 +565,9 @@ impl Accounts {
         mode: PlayMode,
         installation: Option<Installation>,
     ) -> Result<LaunchDecision, PlayBlocker> {
+        if self.is_simulated() {
+            return Err(PlayBlocker::SimulationUnavailable);
+        }
         let core = &self.owner.0;
         let state = core.state();
         play::issue(
@@ -463,6 +588,9 @@ impl Accounts {
         installation: Option<Installation>,
         start: impl FnOnce() -> T,
     ) -> Result<T, PlayBlocker> {
+        if self.is_simulated() {
+            return Err(PlayBlocker::SimulationUnavailable);
+        }
         let core = &self.owner.0;
         let state = core.state();
         play::admit(
@@ -494,6 +622,7 @@ impl Accounts {
         let core = &self.owner.0;
         let mut state = core.state();
         if state.cancellable() {
+            core.cancel_simulation();
             let status = state.stable_status();
             state.finish(status, AccountError::Cancelled.to_string());
             core.changed.notify_one();
@@ -529,6 +658,12 @@ impl Accounts {
     }
 
     pub fn open_browser(&self) -> Result<(), String> {
+        if self.is_simulated() {
+            return Err(
+                "The developer simulation never opens a real Microsoft browser page. Use the simulated approval controls."
+                    .to_owned(),
+            );
+        }
         let address = self
             .owner
             .0
@@ -576,7 +711,11 @@ pub fn open_minecraft_download() -> Result<(), String> {
 }
 
 fn run(core: &Core, root: Option<&Path>, client_id: Uuid) {
-    let vault = root.map(|root| Vault::new(root, client_id));
+    let vault = root.map(|root| match &core.backend {
+        Backend::Real => Vault::new(root, client_id),
+        #[cfg(feature = "dev-simulation")]
+        Backend::Simulated(_) | Backend::SimulatedUnavailable => Vault::simulated(root, client_id),
+    });
     let vault = vault.as_ref();
     loop {
         let ticket = {
@@ -592,7 +731,7 @@ fn run(core: &Core, root: Option<&Path>, client_id: Uuid) {
             state.pending.take().expect("worker has a queued operation")
         };
         let refresh = |token: &str| {
-            DeviceClient::new(client_id)
+            core.device_client(client_id)
                 .and_then(|client| client.refresh(token, || !core.state().current(ticket)))
         };
         match ticket.job {
@@ -646,7 +785,7 @@ fn sign_in(core: &Core, ticket: Ticket, client_id: Uuid, vault: Option<&Vault>) 
         if cancelled() {
             return Err(AccountError::Cancelled);
         }
-        let client = DeviceClient::new(client_id)?;
+        let client = core.device_client(client_id)?;
         let mut login = client.begin(cancelled)?;
         {
             let mut state = core.state();
@@ -660,7 +799,12 @@ fn sign_in(core: &Core, ticket: Ticket, client_id: Uuid, vault: Option<&Vault>) 
                 code: challenge.user_code.clone(),
             });
             state.status = AccountState::AwaitingBrowser;
-            state.message = "Open the browser and enter this code to authorize Carbon.".into();
+            state.message = if core.is_simulated() {
+                "Simulated authorization is pending. Use the approval controls in this dialog; no browser or real code is used."
+                    .into()
+            } else {
+                "Open the browser and enter this code to authorize Carbon.".into()
+            };
         }
         loop {
             match client.poll(&mut login, cancelled)? {
@@ -711,6 +855,11 @@ fn publish(
     state.entitlement_denials.remove(&id);
     state.live.insert(id, account);
     let status = state.stable_status();
+    let message = if core.is_simulated() {
+        "Synthetic test account verified."
+    } else {
+        message
+    };
     state.finish(status, message);
 }
 
@@ -909,7 +1058,12 @@ fn remove(core: &Core, ticket: Ticket, id: Uuid, vault: Option<&Vault>) {
                     .or_else(|| state.live.keys().next().copied());
             }
             let status = state.stable_status();
-            state.finish(status, ACCOUNT_REMOVED);
+            let message = if core.is_simulated() {
+                "The synthetic test account was removed from Carbon Desktop."
+            } else {
+                ACCOUNT_REMOVED
+            };
+            state.finish(status, message);
         }
         Err(()) => {
             state.retry_removals.insert(id);
