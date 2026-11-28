@@ -72,6 +72,14 @@ pub(crate) fn prepare(root: &Path) -> Result<Session> {
     gate(true, true, cfg!(debug_assertions), Some(root))?;
     let guarded = dev_fixtures::guard(root)?;
     let account_root = guarded.path.join(ACCOUNT_DIR);
+    if let Ok(metadata) = fs::symlink_metadata(&account_root)
+        && (linked(&metadata) || !metadata.is_dir())
+    {
+        bail!(
+            "The developer account root {} must be a plain directory, not a link or file.",
+            account_root.display()
+        );
+    }
     fs::create_dir_all(&account_root).with_context(|| {
         format!(
             "Create the developer account root {}",
@@ -138,6 +146,17 @@ pub(crate) fn prepare(root: &Path) -> Result<Session> {
     })
 }
 
+fn linked(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    metadata.is_symlink()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +184,13 @@ mod tests {
                 .entitlement(carbon_account::simulation::Persona::Forest)
                 == carbon_account::simulation::EntitlementState::Granted
         );
+    }
+
+    #[test]
+    fn a_non_directory_account_root_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(ACCOUNT_DIR), b"not a directory").unwrap();
+        assert!(prepare(root.path()).is_err());
     }
 
     #[test]
