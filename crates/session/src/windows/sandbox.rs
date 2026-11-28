@@ -48,12 +48,18 @@ fn hr(value: i32) -> io::Result<()> {
     }
 }
 
+/// One owned Win32 handle. A run's job additionally owns the completion port
+/// that receives the boundary's own notifications, so refusing a further
+/// process is an observed OS event rather than an inference.
 #[derive(Debug)]
-pub(super) struct Handle(HANDLE);
+pub(super) struct Handle(HANDLE, Option<HANDLE>);
 impl Drop for Handle {
     fn drop(&mut self) {
         unsafe {
             CloseHandle(self.0);
+            if let Some(events) = self.1 {
+                CloseHandle(events);
+            }
         }
     }
 }
@@ -175,7 +181,7 @@ fn token_data(process: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec
     unsafe {
         let mut token = null_mut();
         win(OpenProcessToken(process, TOKEN_QUERY, &mut token))?;
-        let token = Handle(token);
+        let token = Handle(token, None);
         let mut bytes = 0;
         GetTokenInformation(token.0, class, null_mut(), 0, &mut bytes);
         if bytes == 0 {
@@ -428,8 +434,8 @@ pub(super) fn launch(
             &mut info,
         ))?;
         observation.boundary_empty = false;
-        let process = Handle(info.hProcess);
-        let thread = Handle(info.hThread);
+        let process = Handle(info.hProcess, None);
+        let thread = Handle(info.hThread, None);
         if run.stopped() {
             // A stop accepted before process creation must not let the payload
             // run: the suspended root is now a member of that stopped job.

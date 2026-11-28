@@ -149,6 +149,17 @@ pub enum RunEnd {
     Unsettled,
 }
 
+/// The resource limit a run's OS boundary enforced against its payload. Every
+/// value is redacted: it names the kind of limit, never a path or an identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResourceLimit {
+    /// The boundary refused a further process because the run's qualified
+    /// active-process limit was already reached. The payload that asked for it
+    /// saw the OS refuse the request; the run itself keeps its existing members.
+    ActiveProcess,
+}
+
 /// The terminal record for one protected run. It is retained in memory for a
 /// bounded window after [`RunPhase::Finished`] so a late observer can learn the
 /// outcome without reading a path, process ID or account identity.
@@ -162,6 +173,10 @@ pub struct RunOutcome {
     /// was retired, `Some(false)` when members remained and closing the boundary
     /// destroyed them, and `None` when that observation failed.
     pub drained: Option<bool>,
+    /// `Some` when the run's OS boundary refused an additional process during
+    /// the run, so the record explains a payload that could not start a helper
+    /// instead of leaving that refusal unobserved.
+    pub resource_limit: Option<ResourceLimit>,
 }
 
 /// One observed change for a subscribed run. State updates arrive in phase

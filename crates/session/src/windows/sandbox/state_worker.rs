@@ -158,7 +158,7 @@ fn run_worker(profile: &Profile, code: &Path, state: &Path, retired: bool) -> io
     let directory = wide(working);
     // Handles and attribute storage remain live for the native process calls.
     unsafe {
-        let job = Handle(CreateJobObjectW(null(), null()));
+        let job = Handle(CreateJobObjectW(null(), null()), None);
         win(i32::from(!job.0.is_null()))?;
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags =
@@ -196,8 +196,8 @@ fn run_worker(profile: &Profile, code: &Path, state: &Path, retired: bool) -> io
             &startup.StartupInfo,
             &mut info,
         ))?;
-        let process = Handle(info.hProcess);
-        let thread = Handle(info.hThread);
+        let process = Handle(info.hProcess, None);
+        let thread = Handle(info.hThread, None);
         let outcome = (|| {
             check_token(process.0, profile.sid)?;
             let mut assigned = 0;

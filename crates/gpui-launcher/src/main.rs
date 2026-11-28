@@ -383,6 +383,9 @@ fn end_label(outcome: &carbon_session::RunOutcome) -> String {
         }
         _ => {}
     }
+    if outcome.resource_limit.is_some() {
+        text.push_str(" Its process boundary refused a process the sample tried to start.");
+    }
     text
 }
 
@@ -2253,6 +2256,7 @@ mod tests {
             instance,
             end: RunEnd::StopRequested,
             drained: Some(true),
+            resource_limit: None,
         })));
         let terminal = sample.status();
         assert_eq!(
@@ -2288,6 +2292,7 @@ mod tests {
             instance: Uuid::new_v4(),
             end,
             drained,
+            resource_limit: None,
         };
         assert_eq!(
             end_label(&outcome(RunEnd::Completed, Some(true))),
@@ -2321,6 +2326,18 @@ mod tests {
             end_label(&outcome(RunEnd::Unsettled, None)),
             "The protected sample ended without a confirmed outcome."
         );
+        // A boundary refusal is named without exposing the payload or its paths.
+        let refused = RunOutcome {
+            run: Uuid::new_v4(),
+            instance: Uuid::new_v4(),
+            end: RunEnd::Completed,
+            drained: Some(true),
+            resource_limit: Some(carbon_session::ResourceLimit::ActiveProcess),
+        };
+        assert_eq!(
+            end_label(&refused),
+            "The protected sample completed. Its process boundary refused a process the sample tried to start."
+        );
     }
 
     #[test]
@@ -2333,6 +2350,7 @@ mod tests {
             instance,
             end,
             drained,
+            resource_limit: None,
         };
         let settled = |outcome| SampleRun {
             run: Some(run),

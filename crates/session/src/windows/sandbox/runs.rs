@@ -7,7 +7,10 @@
 //! cannot affect a later run B or another instance's run.
 use super::job;
 use super::Handle;
-use crate::{RunControlError, RunEnd, RunOutcome, RunPhase, RunState, RunSubscription, RunUpdate};
+use crate::{
+    ResourceLimit, RunControlError, RunEnd, RunOutcome, RunPhase, RunState, RunSubscription,
+    RunUpdate,
+};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
@@ -44,6 +47,8 @@ struct Status {
     /// The root exited on its own but reported a non-zero status after the
     /// completion claim had been made, so the record must not claim a sample.
     failed: bool,
+    /// The boundary reported that its qualified limit refused a further process.
+    resource_limit: Option<ResourceLimit>,
     /// The owner has retired the run; no stop may claim it any more.
     retired: bool,
 }
@@ -231,6 +236,12 @@ impl Drop for RunGuard {
         let mut directory = entries();
         let mut status = lock_status(&self.entry);
         status.retired = true;
+        // Every notification the boundary posted before it was retired is read
+        // here, so a payload whose helper the limit refused is explained in the
+        // record even though the refusal happened while it ran.
+        if let Some(limit) = job::refusal(&self.entry.job) {
+            status.resource_limit = Some(limit);
+        }
         let drained = job::is_empty(&self.entry.job).ok();
         let end = if status.unsettled || drained != Some(true) {
             // A failed observation or a boundary that still held members means
@@ -256,6 +267,7 @@ impl Drop for RunGuard {
             instance: self.entry.instance,
             end,
             drained,
+            resource_limit: status.resource_limit,
         };
         // Retain and notify while the entry is still in the directory and the
         // status lock proves it is live, so a subscriber that races removal
@@ -283,6 +295,7 @@ pub(super) fn register(run: Uuid, instance: Uuid, job: Arc<Handle>) -> RunGuard 
             unsettled: false,
             forced: false,
             failed: false,
+            resource_limit: None,
             retired: false,
         }),
         job,
@@ -913,6 +926,43 @@ mod tests {
     }
 
     #[test]
+    fn a_boundary_refusal_is_retained_in_the_redacted_record() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::refusing_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        drop(guard);
+        let record = outcome(run).unwrap();
+        assert_eq!(record.end, RunEnd::Completed);
+        assert_eq!(record.drained, Some(true));
+        assert_eq!(record.resource_limit, Some(ResourceLimit::ActiveProcess));
+    }
+
+    #[test]
+    fn a_run_without_a_refusal_carries_no_limit_reason() {
+        let root = tempfile::tempdir().unwrap();
+        let run = Uuid::new_v4();
+        let guard = register(
+            run,
+            instance(),
+            job::test_boundary(run, root.path()).unwrap(),
+        );
+        guard.running();
+        fs::write(root.path().join("finish"), []).unwrap();
+        wait_drained(run);
+        assert!(guard.finish());
+        drop(guard);
+        assert_eq!(outcome(run).unwrap().resource_limit, None);
+    }
+
+    #[test]
     fn a_dropped_subscriber_does_not_disturb_the_run() {
         let root = tempfile::tempdir().unwrap();
         let run = Uuid::new_v4();
@@ -951,6 +1001,7 @@ mod tests {
                     instance: Uuid::new_v4(),
                     end: RunEnd::Completed,
                     drained: Some(true),
+                    resource_limit: None,
                 },
             );
         }
@@ -966,6 +1017,7 @@ mod tests {
                 instance: Uuid::new_v4(),
                 end: RunEnd::StopRequested,
                 drained: Some(false),
+                resource_limit: None,
             },
         );
         assert_eq!(outcomes.len(), RETAINED_OUTCOMES);
@@ -1101,6 +1153,7 @@ mod tests {
                 instance,
                 end: RunEnd::StopRequested,
                 drained: Some(true),
+                resource_limit: None,
             })
             .unwrap(),
             serde_json::json!({
@@ -1108,6 +1161,25 @@ mod tests {
                 "instance": instance.to_string(),
                 "end": "stopRequested",
                 "drained": true,
+                "resourceLimit": null,
+            })
+        );
+        // The refusal is redacted to its kind, never the payload that asked.
+        assert_eq!(
+            serde_json::to_value(RunOutcome {
+                run,
+                instance,
+                end: RunEnd::Completed,
+                drained: Some(true),
+                resource_limit: Some(ResourceLimit::ActiveProcess),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "run": run.to_string(),
+                "instance": instance.to_string(),
+                "end": "completed",
+                "drained": true,
+                "resourceLimit": "activeProcess",
             })
         );
     }
