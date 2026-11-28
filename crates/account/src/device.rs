@@ -92,6 +92,11 @@ impl DeviceLogin {
     pub fn challenge(&self) -> &DeviceChallenge {
         &self.challenge
     }
+
+    #[cfg(all(test, feature = "dev-simulation"))]
+    pub(crate) fn poll_now(&mut self) {
+        self.next_poll = Instant::now();
+    }
 }
 
 pub enum DevicePoll {
@@ -145,7 +150,7 @@ impl AuthenticatedAccount {
 
 pub struct DeviceClient {
     client_id: Uuid,
-    transport: Http,
+    transport: Box<dyn Transport>,
 }
 
 impl DeviceClient {
@@ -156,12 +161,28 @@ impl DeviceClient {
         }
         Ok(Self {
             client_id,
-            transport: Http::new()?,
+            transport: Box::new(Http::new()?),
+        })
+    }
+
+    /// Use an in-process transport. The developer simulation is the only caller
+    /// in shipped code; it never creates a network client.
+    #[cfg(feature = "dev-simulation")]
+    pub(crate) fn with_transport(
+        client_id: Uuid,
+        transport: impl Transport + 'static,
+    ) -> Result<Self, AccountError> {
+        if client_id.is_nil() {
+            return Err(AccountError::InvalidRegistration);
+        }
+        Ok(Self {
+            client_id,
+            transport: Box::new(transport),
         })
     }
 
     pub fn begin(&self, cancelled: impl Fn() -> bool) -> Result<DeviceLogin, AccountError> {
-        Flow::new(&self.transport, &Instant::now, &cancelled).begin(self.client_id)
+        Flow::new(self.transport.as_ref(), &Instant::now, &cancelled).begin(self.client_id)
     }
 
     /// Returns promptly until the provider's polling delay has elapsed. A due poll can block
@@ -171,7 +192,7 @@ impl DeviceClient {
         login: &mut DeviceLogin,
         cancelled: impl Fn() -> bool,
     ) -> Result<DevicePoll, AccountError> {
-        Flow::new(&self.transport, &Instant::now, &cancelled).poll(self.client_id, login)
+        Flow::new(self.transport.as_ref(), &Instant::now, &cancelled).poll(self.client_id, login)
     }
 
     /// Obtain a fresh provider response and recheck entitlement/profile before returning.
@@ -180,7 +201,8 @@ impl DeviceClient {
         refresh_token: &str,
         cancelled: impl Fn() -> bool,
     ) -> Result<AuthenticatedAccount, AccountError> {
-        Flow::new(&self.transport, &Instant::now, &cancelled).refresh(self.client_id, refresh_token)
+        Flow::new(self.transport.as_ref(), &Instant::now, &cancelled)
+            .refresh(self.client_id, refresh_token)
     }
 }
 

@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 mod accessibility;
+mod account_mode;
 mod account_panel;
 mod artwork;
 mod data;
+#[cfg(feature = "dev-account-simulation")]
+mod dev_account_simulation;
 mod dev_fixtures;
 mod home_playback;
 #[cfg(windows)]
@@ -19,6 +22,7 @@ mod shell;
 mod theme;
 mod view;
 
+use account_mode::AccountMode;
 use anyhow::Context as _;
 use carbon_profiles::Profile;
 use carbon_store::{Action, InstanceId, InstanceView, Snapshot};
@@ -482,6 +486,7 @@ impl Launcher {
         root: DataRoot,
         readiness: (Instant, Option<PathBuf>),
         start: Surface,
+        account_mode: AccountMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -550,7 +555,7 @@ impl Launcher {
             was_narrow = narrow;
         })
         .detach();
-        let account = cx.new(|_| account_panel::AccountPanel::new(&root.path));
+        let account = cx.new(|_| account_mode.panel(&root.path));
         cx.observe(&account, |_, _, cx| cx.notify()).detach();
         account.update(cx, account_panel::AccountPanel::refresh);
         cx.observe_window_activation(window, |this, window, cx| {
@@ -2001,6 +2006,27 @@ fn argument_value(
     })
 }
 
+#[cfg(feature = "dev-account-simulation")]
+fn simulated_account_mode(root: &std::path::Path) -> anyhow::Result<AccountMode> {
+    let session = dev_account_simulation::prepare(root)?;
+    Ok(AccountMode::simulated(session))
+}
+
+#[cfg(not(feature = "dev-account-simulation"))]
+fn simulated_account_mode(_: &std::path::Path) -> anyhow::Result<AccountMode> {
+    anyhow::bail!(
+        "--dev-account-simulation requires a build with the non-default dev-account-simulation feature."
+    )
+}
+
+fn account_mode_for(simulation: bool, root: &std::path::Path) -> anyhow::Result<AccountMode> {
+    if simulation {
+        simulated_account_mode(root)
+    } else {
+        Ok(AccountMode::production())
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     shell::configure_renderer();
@@ -2017,6 +2043,7 @@ fn main() -> anyhow::Result<()> {
     let fixture_set = argument_value(&args, "--seed-fixtures")?;
     let reset_fixtures = args.iter().any(|a| a == "--reset-fixtures");
     let seed_only = args.iter().any(|a| a == "--seed-only");
+    let dev_account_simulation = args.iter().any(|a| a == "--dev-account-simulation");
     if reset_fixtures && fixture_set.is_none() {
         anyhow::bail!("--reset-fixtures requires --seed-fixtures <default|empty|large|faults>.");
     }
@@ -2028,11 +2055,26 @@ fn main() -> anyhow::Result<()> {
             "--fixture-root and --seed-fixtures are separate from --comparison-review, --temporary-review and --seed-review."
         );
     }
+    if dev_account_simulation {
+        if comparison || temporary || seed {
+            anyhow::bail!(
+                "--dev-account-simulation is separate from --comparison-review, --temporary-review and --seed-review."
+            );
+        }
+        if seed_only {
+            anyhow::bail!("--dev-account-simulation requires opening the window, not --seed-only.");
+        }
+        if fixture_set.is_none() && fixture_root.is_none() {
+            anyhow::bail!(
+                "--dev-account-simulation requires an explicit --fixture-root (for example a seeded dev-fixtures set)."
+            );
+        }
+    }
     // Capture-only: allow window resizing for deterministic screenshot capture.
     // Must never be set by an installed build. Requires explicit --fixture-root.
     let screenshot_mode = fixture_root.is_some()
         && std::env::var_os("CARBON_README_SCREENSHOT").is_some_and(|value| value == "1");
-    let (data, start) = if let Some(set) = fixture_set {
+    let (data, start, account_mode) = if let Some(set) = fixture_set {
         let set = dev_fixtures::Set::parse(
             set.to_str()
                 .context("--seed-fixtures must be a UTF-8 set name")?,
@@ -2051,6 +2093,7 @@ fn main() -> anyhow::Result<()> {
         if seed_only {
             return Ok(());
         }
+        let account_mode = account_mode_for(dev_account_simulation, &root)?;
         (
             DataRoot::at(root),
             if set.starts_in_library() {
@@ -2058,6 +2101,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 Surface::Home
             },
+            account_mode,
         )
     } else if let Some(root) = fixture_root {
         let root = dev_fixtures::guard(&root)?.path;
@@ -2066,7 +2110,8 @@ fn main() -> anyhow::Result<()> {
         } else {
             Surface::Home
         };
-        (DataRoot::at(root), start)
+        let account_mode = account_mode_for(dev_account_simulation, &root)?;
+        (DataRoot::at(root), start, account_mode)
     } else {
         // The seeded comparison launch is the direct, automation-friendly Library
         // entry. Ordinary launches open Home first and keep Library one tab away.
@@ -2075,7 +2120,11 @@ fn main() -> anyhow::Result<()> {
         } else {
             Surface::Home
         };
-        (DataRoot::open(temporary, seed, comparison)?, start)
+        (
+            DataRoot::open(temporary, seed, comparison)?,
+            start,
+            AccountMode::production(),
+        )
     };
     let app = Application::new().with_assets(icons::Assets);
     app.run(move |cx: &mut App| {
@@ -2127,7 +2176,7 @@ fn main() -> anyhow::Result<()> {
                 let view = cx.new(|cx| {
                     #[cfg(target_os = "linux")]
                     shell::keep_main_windowed(window, fitted_size, cx);
-                    Launcher::new(data, (began, ready_file), start, window, cx)
+                    Launcher::new(data, (began, ready_file), start, account_mode, window, cx)
                 });
                 let weak = view.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
@@ -2149,6 +2198,14 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(feature = "dev-account-simulation"))]
+    #[test]
+    fn simulated_account_mode_is_refused_without_the_feature() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(account_mode_for(true, root.path()).is_err());
+        assert!(account_mode_for(false, root.path()).is_ok());
+    }
 
     #[test]
     fn owned_sample_runs_keep_other_instances_untouched() {

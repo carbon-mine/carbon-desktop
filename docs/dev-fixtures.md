@@ -36,6 +36,19 @@ add a row there and the matching table row below when a new UI state needs cover
 .\target\debug\carbon-desktop-gpui.exe --seed-fixtures default --reset-fixtures
 ```
 
+The same guarded root can host the opt-in [developer account simulation](dev-account-simulation.md):
+
+```powershell
+# Debug/test build with the non-default feature; synthetic accounts only.
+cargo build --locked -p carbon-desktop-gpui --features dev-account-simulation
+.\target\debug\carbon-desktop-gpui.exe --seed-fixtures default `
+  --fixture-root "$env:LOCALAPPDATA\CarbonDesktopGpui\dev-fixtures\default" `
+  --dev-account-simulation
+```
+
+The account simulation writes only under `dev-account-simulation/` in that root
+and never reads the ordinary library, real app registration or OS vault.
+
 The default roots are `%LOCALAPPDATA%\CarbonDesktopGpui\dev-fixtures\<set>` on Windows and
 `$XDG_DATA_HOME/carbon-desktop-gpui/dev-fixtures/<set>` (or `~/.local/share/...`) on Linux. They are
 siblings of the ordinary `library-v1` root, never that root. `--fixture-root` must be absolute.

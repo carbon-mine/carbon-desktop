@@ -16,6 +16,7 @@ fn isolated() -> Accounts {
             registration: Some(CLIENT),
             state: Mutex::new(State::new()),
             changed: Condvar::new(),
+            backend: Backend::Real,
         }))),
         root: None,
         compiled: Some(CLIENT),
@@ -557,6 +558,128 @@ fn failed_vault_removals_preserve_denials_and_block_only_affected_slots() {
     );
     assert_eq!(accounts.snapshot().removal_retry, Some(FOREST));
     assert_eq!(accounts.play_blocker(mode), PlayBlocker::EntitlementDenied);
+}
+
+#[cfg(feature = "dev-simulation")]
+#[test]
+fn simulated_accounts_ignore_real_client_settings_and_stay_on_the_test_store() {
+    use crate::simulation::Simulation;
+
+    let root = tempfile::tempdir().unwrap();
+    let stored = Uuid::from_u128(9);
+    client::store(root.path(), stored).unwrap();
+    let accounts = Accounts::simulated(root.path(), Simulation::new());
+    wait_for(&accounts, |view| view.state == AccountState::SignedOut);
+    assert!(accounts.is_simulated());
+    assert!(!accounts.custom_client_allowed());
+    assert!(!accounts.custom_client_configured());
+    assert!(!accounts.custom_client_pending_restart());
+    assert_eq!(
+        accounts.owner.0.registration,
+        Some(crate::simulation::CLIENT_ID)
+    );
+    assert!(accounts.set_custom_client(&stored.to_string()).is_err());
+    assert!(accounts.clear_custom_client().is_err());
+    assert_eq!(client::load(root.path()), Some(stored));
+}
+
+#[cfg(feature = "dev-simulation")]
+fn wait_for(accounts: &Accounts, predicate: impl Fn(&AccountView) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        if predicate(&accounts.snapshot()) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the simulated account state: {:?} {}",
+            accounts.snapshot().state,
+            accounts.snapshot().message
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[cfg(feature = "dev-simulation")]
+#[test]
+fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
+    use crate::simulation::{EntitlementState, Persona, Simulation};
+
+    let root = tempfile::tempdir().unwrap();
+    let simulation = Simulation::new();
+    let accounts = Accounts::simulated(root.path(), simulation.clone());
+    wait_for(&accounts, |view| view.state == AccountState::SignedOut);
+
+    accounts.begin();
+    wait_for(&accounts, |view| {
+        view.state == AccountState::AwaitingBrowser
+    });
+    assert_eq!(simulation.pending_persona(), Some(Persona::Forest));
+    assert!(simulation.approve());
+    wait_for(&accounts, |view| view.state == AccountState::SignedIn);
+    assert_eq!(
+        accounts.snapshot().active_account,
+        Some(Persona::Forest.profile_id())
+    );
+    assert!(
+        root.path().join("synthetic-credentials.json").is_file(),
+        "the simulation keeps credentials in its test root, not the OS vault"
+    );
+
+    simulation.set_next_persona(Persona::Coast);
+    accounts.begin();
+    wait_for(&accounts, |view| {
+        view.state == AccountState::AwaitingBrowser
+    });
+    assert!(simulation.approve());
+    wait_for(&accounts, |view| {
+        view.state == AccountState::SignedIn
+            && view.active_account == Some(Persona::Coast.profile_id())
+    });
+    assert_eq!(accounts.snapshot().accounts.len(), 2);
+
+    accounts.switch(Persona::Forest.profile_id());
+    wait_for(&accounts, |view| {
+        view.state == AccountState::SignedIn
+            && view.active_account == Some(Persona::Forest.profile_id())
+    });
+
+    assert!(matches!(
+        accounts.prepare_launch(PlayMode::OfflineSinglePlayer, None),
+        Err(PlayBlocker::OfflinePolicyUnavailable)
+    ));
+    assert!(matches!(
+        accounts.prepare_launch(PlayMode::OnlineMultiplayer, None),
+        Err(PlayBlocker::OnlineSessionUnavailable)
+    ));
+
+    drop(accounts);
+    let restarted = Accounts::simulated(root.path(), simulation.clone());
+    wait_for(&restarted, |view| {
+        view.state == AccountState::SignedIn
+            && view.active_account == Some(Persona::Forest.profile_id())
+    });
+    assert_eq!(restarted.snapshot().accounts.len(), 2);
+
+    simulation.set_entitlement(Persona::Forest, EntitlementState::Denied);
+    restarted.refresh_selected();
+    wait_for(&restarted, |view| view.state == AccountState::Error);
+    assert!(matches!(
+        restarted.play_blocker(PlayMode::OfflineSinglePlayer),
+        PlayBlocker::EntitlementDenied
+    ));
+
+    restarted.sign_out_account(Persona::Coast.profile_id());
+    wait_for(&restarted, |view| {
+        view.accounts
+            .iter()
+            .all(|account| account.id != Persona::Coast.profile_id())
+    });
+    assert!(restarted
+        .snapshot()
+        .accounts
+        .iter()
+        .any(|account| account.id == Persona::Forest.profile_id()));
 }
 
 #[test]

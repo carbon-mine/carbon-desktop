@@ -2,6 +2,8 @@
 use crate::MinecraftProfile;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "dev-simulation")]
+use std::collections::BTreeMap;
 use std::{
     fs::{self, File, TryLockError},
     io::{self, Read},
@@ -115,6 +117,18 @@ impl Vault {
             root: root.to_owned(),
             client_id,
             credentials: Box::new(NativeCredentials),
+        }
+    }
+
+    /// Test-only credential backend. It never reaches the OS store and lives
+    /// beside the guarded development fixture root. Tokens it holds are
+    /// synthetic and have no provider or launch authority.
+    #[cfg(feature = "dev-simulation")]
+    pub(super) fn simulated(root: &Path, client_id: Uuid) -> Self {
+        Self {
+            root: root.to_owned(),
+            client_id,
+            credentials: Box::new(SimulatedCredentials::new(root)),
         }
     }
 
@@ -332,6 +346,109 @@ impl Credentials for NativeCredentials {
     }
     fn clear(&self, _: &str) -> Result<(), ()> {
         Err(())
+    }
+}
+
+#[cfg(feature = "dev-simulation")]
+const SIMULATED_CREDENTIALS_FILE: &str = "synthetic-credentials.json";
+#[cfg(feature = "dev-simulation")]
+const SIMULATED_CREDENTIALS_KIND: &str = "carbon-desktop-dev-account-simulation";
+#[cfg(feature = "dev-simulation")]
+const SIMULATED_CREDENTIALS_LIMIT: u64 = 256 * 1024;
+
+#[cfg(feature = "dev-simulation")]
+fn simulated_kind() -> String {
+    SIMULATED_CREDENTIALS_KIND.to_owned()
+}
+
+#[cfg(feature = "dev-simulation")]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SimulatedCredentialFile {
+    #[serde(default = "simulated_kind")]
+    kind: String,
+    #[serde(default)]
+    credentials: BTreeMap<String, String>,
+}
+
+/// File-backed synthetic credentials used only by the developer simulation.
+/// The file is inside the guarded fixture root and is never the OS vault.
+#[cfg(feature = "dev-simulation")]
+struct SimulatedCredentials {
+    path: PathBuf,
+}
+
+#[cfg(feature = "dev-simulation")]
+impl SimulatedCredentials {
+    fn new(root: &Path) -> Self {
+        Self {
+            path: root.join(SIMULATED_CREDENTIALS_FILE),
+        }
+    }
+
+    fn load(&self) -> Result<SimulatedCredentialFile, ()> {
+        let metadata = match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(SimulatedCredentialFile {
+                    kind: simulated_kind(),
+                    credentials: BTreeMap::new(),
+                });
+            }
+            Err(_) => return Err(()),
+        };
+        if !metadata.is_file()
+            || metadata.is_symlink()
+            || metadata.len() > SIMULATED_CREDENTIALS_LIMIT
+        {
+            return Err(());
+        }
+        let bytes = fs::read(&self.path).map_err(|_| ())?;
+        if bytes.len() as u64 > SIMULATED_CREDENTIALS_LIMIT {
+            return Err(());
+        }
+        let file: SimulatedCredentialFile = serde_json::from_slice(&bytes).map_err(|_| ())?;
+        if file.kind != SIMULATED_CREDENTIALS_KIND {
+            return Err(());
+        }
+        Ok(file)
+    }
+
+    fn store(&self, mut file: SimulatedCredentialFile) -> Result<(), ()> {
+        file.kind = simulated_kind();
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|_| ())?;
+        }
+        let bytes = serde_json::to_vec(&file).map_err(|_| ())?;
+        if bytes.len() as u64 > SIMULATED_CREDENTIALS_LIMIT {
+            return Err(());
+        }
+        fs::write(&self.path, bytes).map_err(|_| ())
+    }
+}
+
+#[cfg(feature = "dev-simulation")]
+impl Credentials for SimulatedCredentials {
+    fn read(&self, slot: &str) -> Result<Option<Secret>, ()> {
+        Ok(self
+            .load()?
+            .credentials
+            .get(slot)
+            .map(|token| Secret::new(token.clone())))
+    }
+
+    fn write(&self, slot: &str, token: &str) -> Result<(), ()> {
+        let mut file = self.load()?;
+        file.credentials.insert(slot.into(), token.into());
+        self.store(file)
+    }
+
+    fn clear(&self, slot: &str) -> Result<(), ()> {
+        let mut file = self.load()?;
+        if file.credentials.remove(slot).is_some() {
+            self.store(file)?;
+        }
+        Ok(())
     }
 }
 

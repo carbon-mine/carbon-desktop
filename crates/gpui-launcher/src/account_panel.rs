@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use carbon_account::desktop::{AccountState, AccountSummary, AccountView, Accounts};
+#[cfg(feature = "dev-account-simulation")]
+use carbon_account::simulation::{EntitlementState, Persona, SimulationPhase};
 use gpui::Context;
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
@@ -18,7 +20,16 @@ pub struct AccountPanel {
 
 impl AccountPanel {
     pub fn new(root: &Path) -> Self {
-        let service = Accounts::new(root);
+        Self::with_service(Accounts::new(root))
+    }
+
+    /// The real panel and lifecycle with the deterministic developer provider.
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn new_simulated(root: &Path, simulation: carbon_account::simulation::Simulation) -> Self {
+        Self::with_service(Accounts::simulated(root, simulation))
+    }
+
+    fn with_service(service: Accounts) -> Self {
         let snapshot = service.snapshot();
         let client_configured = service.custom_client_configured();
         let client_pending_restart = service.custom_client_pending_restart();
@@ -171,6 +182,103 @@ impl AccountPanel {
         self.client_configured
     }
 
+    /// True when this panel runs the opt-in developer provider.
+    pub fn is_simulated(&self) -> bool {
+        self.service.is_simulated()
+    }
+
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn simulation_persona(&self) -> Persona {
+        self.service
+            .simulation()
+            .map(|simulation| simulation.next_persona())
+            .unwrap_or(Persona::Forest)
+    }
+
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn simulation_phase(&self) -> SimulationPhase {
+        self.service
+            .simulation()
+            .map(|simulation| simulation.phase())
+            .unwrap_or(SimulationPhase::Idle)
+    }
+
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn simulation_entitlement(&self, persona: Persona) -> EntitlementState {
+        self.service
+            .simulation()
+            .map(|simulation| simulation.entitlement(persona))
+            .unwrap_or(EntitlementState::Granted)
+    }
+
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn set_simulation_persona(&mut self, persona: Persona, cx: &mut Context<Self>) {
+        if let Some(simulation) = self.service.simulation() {
+            simulation.set_next_persona(persona);
+        }
+        cx.notify();
+    }
+
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn simulation_approve(&mut self, cx: &mut Context<Self>) -> bool {
+        let approved = self
+            .service
+            .simulation()
+            .is_some_and(|simulation| simulation.approve());
+        self.refresh(cx);
+        approved
+    }
+
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn simulation_decline(&mut self, cx: &mut Context<Self>) -> bool {
+        let declined = self
+            .service
+            .simulation()
+            .is_some_and(|simulation| simulation.decline());
+        self.refresh(cx);
+        declined
+    }
+
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn simulation_expire(&mut self, cx: &mut Context<Self>) -> bool {
+        let expired = self
+            .service
+            .simulation()
+            .is_some_and(|simulation| simulation.expire());
+        self.refresh(cx);
+        expired
+    }
+
+    /// Change the next persona's entitlement. When that persona is the active
+    /// account, refresh through the ordinary verification job immediately.
+    #[cfg(feature = "dev-account-simulation")]
+    pub fn simulation_set_entitlement(
+        &mut self,
+        entitlement: EntitlementState,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(persona) = self
+            .service
+            .simulation()
+            .map(|simulation| simulation.next_persona())
+        else {
+            return;
+        };
+        if let Some(simulation) = self.service.simulation() {
+            simulation.set_entitlement(persona, entitlement);
+        }
+        if self
+            .snapshot
+            .active_account
+            .and_then(Persona::from_profile_id)
+            == Some(persona)
+            && self.can_check()
+        {
+            self.service.refresh_selected();
+        }
+        self.refresh(cx);
+    }
+
     /// The stored opt-in differs from the registration this process is using.
     pub fn custom_client_pending_restart(&self) -> bool {
         self.client_pending_restart
@@ -269,7 +377,15 @@ impl AccountPanel {
     }
 
     pub fn play_hint(&self) -> &'static str {
-        if self.client_pending_restart {
+        if self.is_simulated() {
+            if self.signed_in() {
+                "This test account is signed in. Protected game launch is unavailable in this build."
+            } else if self.active_account().is_some() {
+                "Verify the active test account. Protected game launch is unavailable in this build."
+            } else {
+                "Sign in to check a test account. Protected game launch is unavailable in this build."
+            }
+        } else if self.client_pending_restart {
             "Restart Carbon Desktop before using Minecraft accounts. Protected game launch is unavailable in this build."
         } else if self.unavailable() {
             "Minecraft account sign-in is not configured. Open account setup or use the Minecraft Launcher."
@@ -286,6 +402,18 @@ impl AccountPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "dev-account-simulation")]
+    #[test]
+    fn a_simulated_panel_is_marked_as_a_test_account_and_offers_no_client_setting() {
+        let root = tempfile::tempdir().unwrap();
+        let panel =
+            AccountPanel::new_simulated(root.path(), carbon_account::simulation::Simulation::new());
+        assert!(panel.is_simulated());
+        assert!(!panel.custom_client_allowed());
+        assert!(panel.play_hint().contains("test account"));
+        assert!(!panel.play_hint().contains("Signed in"));
+    }
 
     #[test]
     fn active_account_identity_controls_verification_and_toolbar() {

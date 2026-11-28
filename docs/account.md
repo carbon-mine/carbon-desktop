@@ -41,6 +41,8 @@ The active profile is restored and checked online on startup. Other saved profil
 
 The native vault smoke test uses a temporary app root and an isolated synthetic credential. Run it from an interactive desktop session with its credential store available using `cargo test --locked -p carbon-account native_vault_compare_replace_and_remove -- --ignored`.
 
+For a runnable developer walkthrough without an approved registration or a real account, see [Developer account simulation](dev-account-simulation.md). It keeps the real GPUI dialog and `Accounts` lifecycle, injects a deterministic in-process provider behind the existing transport seam, and fails closed outside a feature-enabled debug build with an explicit flag and a guarded fixture root. Synthetic state cannot authorize real gameplay or provider access.
+
 See [Play authorization](play-authorization.md) for the native admission contract and the remaining provider-policy and gameplay prerequisites.
 
 ## Svelte/Tauri account window

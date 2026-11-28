@@ -4,6 +4,8 @@ use crate::account_panel::AccountPanel;
 use crate::theme::{Partition, compact_action, label};
 use accesskit::Role;
 use carbon_account::desktop::{AccountState, AccountSummary};
+#[cfg(feature = "dev-account-simulation")]
+use carbon_account::simulation::{EntitlementState, Persona, SimulationPhase};
 use gpui::{
     ClipboardItem, Context, Div, ElementId, Entity, SharedString, Window, div, prelude::*, px,
 };
@@ -25,6 +27,8 @@ const CLIENT_SCOPE: [&str; 2] = [
     "Saved accounts stay with the public client ID they signed in with.",
     "They appear again when Carbon Desktop uses that public client ID.",
 ];
+#[cfg(feature = "dev-account-simulation")]
+const SIMULATION_PROVENANCE: &str = "Test account simulation. Synthetic identities only. No Microsoft, Minecraft, provider call, real credential or protected game launch is used.";
 
 pub(super) struct AccountDialog {
     pub panel: Entity<AccountPanel>,
@@ -85,11 +89,16 @@ impl Popup {
     pub(super) fn account_content(&self, account: &AccountDialog, cx: &Context<Self>) -> Div {
         let panel = account.panel.read(cx);
         let view = &panel.snapshot;
+        let simulated = panel.is_simulated();
         let confirmation = account.confirmation(cx);
         let title = if confirmation.is_some() {
             "Sign out of Minecraft?"
         } else if matches!(view.state, AccountState::AwaitingBrowser) {
-            "Continue in your browser"
+            if simulated {
+                "Approve the simulated sign-in"
+            } else {
+                "Continue in your browser"
+            }
         } else {
             "Minecraft account"
         };
@@ -146,10 +155,19 @@ impl Popup {
                 ),
             );
         }
+        #[cfg(feature = "dev-account-simulation")]
+        if simulated {
+            content = content.child(self.account_simulation_content(panel, cx));
+        }
         if matches!(view.state, AccountState::AwaitingBrowser)
             && let Some(code) = &view.user_code
         {
             let copy = code.clone();
+            let label = if simulated {
+                format!("Synthetic sign-in code {code}")
+            } else {
+                format!("Sign-in code {code}")
+            };
             content = content.child(
                 div()
                     .flex()
@@ -165,19 +183,21 @@ impl Popup {
                                 .bg(self.palette.layer)
                                 .child(code.clone()),
                             "account-device-code",
-                            format!("Sign-in code {code}"),
+                            label,
                             Role::Label,
                         ),
                     )
-                    .child(self.account_button(
-                        "account-copy-code",
-                        "Copy code",
-                        false,
-                        cx,
-                        move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
-                        },
-                    )),
+                    .when(!simulated, |row| {
+                        row.child(self.account_button(
+                            "account-copy-code",
+                            "Copy code",
+                            false,
+                            cx,
+                            move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                            },
+                        ))
+                    }),
             );
         }
         if let Some(error) = &panel.browser_error {
@@ -396,7 +416,9 @@ impl Popup {
                 "Opens the installed Minecraft Launcher on Windows when available, or the official download page.",
                 Role::Label,
             ));
-        } else if matches!(view.state, AccountState::Error) || view.accounts.is_empty() {
+        } else if !panel.is_simulated()
+            && (matches!(view.state, AccountState::Error) || view.accounts.is_empty())
+        {
             content = content.child(self.account_button_when(
                 "account-open-minecraft-launcher",
                 "Open Minecraft Launcher",
@@ -422,6 +444,128 @@ impl Popup {
         content
     }
 
+    #[cfg(feature = "dev-account-simulation")]
+    fn account_simulation_content(&self, panel: &AccountPanel, cx: &Context<Self>) -> Div {
+        let p = self.palette;
+        let persona = panel.simulation_persona();
+        let entitlement = panel.simulation_entitlement(persona);
+        let phase = panel.simulation_phase();
+        let pending = panel.pending();
+        let phase_text = match phase {
+            SimulationPhase::Idle => "No simulated sign-in is pending.",
+            SimulationPhase::AwaitingApproval => {
+                "Simulated browser step: awaiting your approval. No real browser or code is used."
+            }
+            SimulationPhase::Approved => "Simulated browser step approved.",
+            SimulationPhase::Declined => "Simulated browser step declined.",
+            SimulationPhase::Expired => "Simulated browser step expired.",
+        };
+        let entitlement_text = match entitlement {
+            EntitlementState::Granted => "Synthetic entitlement: granted.",
+            EntitlementState::Denied => "Synthetic entitlement: denied.",
+            EntitlementState::Revoked => {
+                "Synthetic refresh revocation: the next refresh is rejected."
+            }
+        };
+        let mut personas = div().flex().flex_wrap().gap_2();
+        for candidate in Persona::ALL {
+            let selected = candidate == persona;
+            let (id, name) = match candidate {
+                Persona::Forest => ("account-sim-persona-forest", "Use Forest (test)"),
+                Persona::Coast => ("account-sim-persona-coast", "Use Coast (test)"),
+            };
+            personas = personas.child(self.account_button_when(
+                id,
+                name,
+                selected,
+                pending,
+                cx,
+                move |this, _, cx| {
+                    this.update_account(cx, move |panel, cx| {
+                        panel.set_simulation_persona(candidate, cx)
+                    })
+                },
+            ));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .border_1()
+            .border_color(p.stroke)
+            .bg(p.surface)
+            .child(
+                self.accessibility.text(
+                    div()
+                        .text_sm()
+                        .text_color(p.muted)
+                        .child(SIMULATION_PROVENANCE),
+                    "account-simulation-provenance",
+                    SIMULATION_PROVENANCE,
+                    Role::Status,
+                ),
+            )
+            .child(self.accessibility.text(
+                div().text_sm().text_color(p.muted).child(format!(
+                    "Next sign-in: {} (test account). {phase_text}",
+                    persona.name()
+                )),
+                "account-simulation-phase",
+                format!(
+                    "Next sign-in: {} (test account). {phase_text}",
+                    persona.name()
+                ),
+                Role::Status,
+            ))
+            .child(personas)
+            .child(self.accessibility.text(
+                div().text_sm().text_color(p.muted).child(entitlement_text),
+                "account-simulation-entitlement",
+                entitlement_text,
+                Role::Status,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(self.account_button(
+                        "account-sim-grant",
+                        "Grant next sign-in",
+                        false,
+                        cx,
+                        |this, _, cx| {
+                            this.update_account(cx, |panel, cx| {
+                                panel.simulation_set_entitlement(EntitlementState::Granted, cx)
+                            })
+                        },
+                    ))
+                    .child(self.account_button(
+                        "account-sim-deny",
+                        "Deny next sign-in",
+                        false,
+                        cx,
+                        |this, _, cx| {
+                            this.update_account(cx, |panel, cx| {
+                                panel.simulation_set_entitlement(EntitlementState::Denied, cx)
+                            })
+                        },
+                    ))
+                    .child(self.account_button(
+                        "account-sim-revoke",
+                        "Revoke saved refresh",
+                        false,
+                        cx,
+                        |this, _, cx| {
+                            this.update_account(cx, |panel, cx| {
+                                panel.simulation_set_entitlement(EntitlementState::Revoked, cx)
+                            })
+                        },
+                    )),
+            )
+    }
+
     fn account_row(
         &self,
         account: &AccountSummary,
@@ -435,6 +579,11 @@ impl Popup {
             (true, true) => "Active · Verified",
             (true, false) => "Active · Check required",
             (false, _) => "Saved",
+        };
+        let status = if panel.is_simulated() {
+            format!("{status} · Test")
+        } else {
+            status.to_owned()
         };
         let mut controls = div().flex().flex_wrap().gap_2();
         if panel.can_check() {
@@ -499,7 +648,7 @@ impl Popup {
                     .min_w(px(120.))
                     .text_sm()
                     .child(div().font_semibold().child(account.name.clone()))
-                    .child(div().text_color(p.muted).child(status)),
+                    .child(div().text_color(p.muted).child(status.clone())),
             )
             .child(controls);
         self.accessibility.group(
@@ -649,15 +798,18 @@ impl Popup {
             ));
         }
         if panel.can_add() {
+            let begin_label = if panel.is_simulated() {
+                "Start simulated sign-in"
+            } else if !account.client_entry && !view.accounts.is_empty() {
+                "Add Microsoft account"
+            } else if matches!(view.state, AccountState::Error) {
+                "Try again"
+            } else {
+                "Sign in with Microsoft"
+            };
             return bar.child(self.account_button(
                 "account-begin",
-                if !account.client_entry && !view.accounts.is_empty() {
-                    "Add Microsoft account"
-                } else if matches!(view.state, AccountState::Error) {
-                    "Try again"
-                } else {
-                    "Sign in with Microsoft"
-                },
+                begin_label,
                 true,
                 cx,
                 |this, window, cx| {
@@ -666,7 +818,7 @@ impl Popup {
                 },
             ));
         }
-        if panel.unavailable() {
+        if panel.unavailable() && !panel.is_simulated() {
             return bar.child(self.account_button_when(
                 "account-open-minecraft-launcher",
                 "Open Minecraft Launcher",
@@ -677,13 +829,53 @@ impl Popup {
             ));
         }
         match view.state {
-            AccountState::AwaitingBrowser => bar.child(self.account_button(
-                "account-open-browser",
-                "Open Microsoft browser",
-                true,
-                cx,
-                |this, _, cx| this.update_account(cx, AccountPanel::open_browser),
-            )),
+            AccountState::AwaitingBrowser => {
+                #[cfg(feature = "dev-account-simulation")]
+                if panel.is_simulated() {
+                    return bar
+                        .child(self.account_button(
+                            "account-sim-approve",
+                            "Approve simulated sign-in",
+                            true,
+                            cx,
+                            |this, window, cx| {
+                                this.focus.focus(window);
+                                this.update_account(cx, |panel, cx| {
+                                    let _ = panel.simulation_approve(cx);
+                                });
+                            },
+                        ))
+                        .child(self.account_button(
+                            "account-sim-expire",
+                            "Expire simulated sign-in",
+                            false,
+                            cx,
+                            |this, _, cx| {
+                                this.update_account(cx, |panel, cx| {
+                                    let _ = panel.simulation_expire(cx);
+                                });
+                            },
+                        ))
+                        .child(self.account_button(
+                            "account-sim-decline",
+                            "Decline simulated sign-in",
+                            false,
+                            cx,
+                            |this, _, cx| {
+                                this.update_account(cx, |panel, cx| {
+                                    let _ = panel.simulation_decline(cx);
+                                });
+                            },
+                        ));
+                }
+                bar.child(self.account_button(
+                    "account-open-browser",
+                    "Open Microsoft browser",
+                    true,
+                    cx,
+                    |this, _, cx| this.update_account(cx, AccountPanel::open_browser),
+                ))
+            }
             _ => bar,
         }
     }
