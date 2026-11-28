@@ -1083,6 +1083,11 @@ impl Launcher {
         if surface == Surface::Library {
             self.restore_library_scroll();
         }
+        // The body is already live content; the settle only softens its first
+        // paint. An inner pane must not stack a second fade on the same change.
+        self.navigation_settle
+            .begin(Instant::now(), self.reduced_motion());
+        self.detail_settle.snap();
         cx.notify();
         window.refresh();
         true
@@ -1097,6 +1102,11 @@ impl Launcher {
         if self.surface == Surface::Library {
             self.save_library_scroll();
         }
+        let changes_surface = self.surface != entry.surface;
+        let changes_detail = self.tab != entry.tab
+            || self.personal != entry.personal
+            || self.review != entry.review
+            || self.fixture != entry.fixture;
         self.surface = entry.surface;
         self.review = entry.review;
         self.personal = entry.personal;
@@ -1111,6 +1121,13 @@ impl Launcher {
             {
                 self.load_targets(id, cx);
             }
+        }
+        if changes_surface {
+            self.navigation_settle
+                .begin(Instant::now(), self.reduced_motion());
+            self.detail_settle.snap();
+        } else if changes_detail {
+            self.begin_detail_settle();
         }
         let fallback = if entry.surface == Surface::Home {
             self.home_focus.clone()

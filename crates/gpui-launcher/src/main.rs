@@ -12,6 +12,7 @@ mod official_launcher;
 use carbon_desktop_gpui::scenery;
 mod home;
 mod icons;
+mod motion;
 mod popup;
 mod progress;
 mod shell;
@@ -448,6 +449,9 @@ struct Launcher {
     tab: Tab,
     surface: Surface,
     history: Vec<HistoryEntry>,
+    navigation_settle: motion::Settle,
+    detail_settle: motion::Settle,
+    motion_live: bool,
     artwork: artwork::HomeArtwork,
     home_order: home::HomeOrder,
     diagnostics_open: bool,
@@ -599,6 +603,9 @@ impl Launcher {
             tab: Tab::Overview,
             surface: start,
             history: Vec::new(),
+            navigation_settle: motion::Settle::new(),
+            detail_settle: motion::Settle::new(),
+            motion_live: false,
             home_order,
             artwork,
             diagnostics_open: false,
@@ -627,6 +634,8 @@ impl Launcher {
             launcher.choose_personal(id, cx);
             launcher.show_detail = false;
         }
+        // The first populated frame is content immediacy, not a transition.
+        launcher.motion_live = true;
         #[cfg(target_os = "linux")]
         progress::observe_linux_motion(cx);
         launcher
@@ -884,14 +893,33 @@ impl Launcher {
         self.load_targets(id, cx);
     }
 
+    /// Start a content settle for an explicit selection or tab change. A
+    /// top-level surface settle owns the whole body, so the inner pane snaps
+    /// rather than stacking two fades into one darker transition.
+    fn begin_detail_settle(&mut self) {
+        if !self.motion_live {
+            return;
+        }
+        let now = Instant::now();
+        if self.navigation_settle.active(now) {
+            self.detail_settle.snap();
+        } else {
+            self.detail_settle.begin(now, self.reduced_motion());
+        }
+    }
+
     fn choose_personal(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.personal != Some(id) || self.review {
+        let changes_detail = self.personal != Some(id) || self.review;
+        if changes_detail {
             self.tab = Tab::Overview;
             self.diagnostics_open = false;
         }
         self.personal = Some(id);
         self.review = false;
         self.show_detail = true;
+        if changes_detail {
+            self.begin_detail_settle();
+        }
         if !self.targets.contains_key(&id) {
             self.load_targets(id, cx);
         }
@@ -935,17 +963,24 @@ impl Launcher {
     }
 
     fn choose_fixture(&mut self, id: InstanceId) {
-        if !self.review || self.fixture != id {
+        let changes_detail = !self.review || self.fixture != id;
+        if changes_detail {
             self.tab = Tab::Overview;
         }
         self.fixture = id;
         self.review = true;
         self.show_detail = true;
         self.search_back_to_detail = false;
+        if changes_detail {
+            self.begin_detail_settle();
+        }
     }
 
     fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
-        self.tab = tab;
+        if self.tab != tab {
+            self.tab = tab;
+            self.begin_detail_settle();
+        }
         self.tab_focus[tab.index()].focus(window);
         cx.notify();
     }

@@ -21,6 +21,18 @@ pub(super) fn col() -> gpui::Div {
 pub(super) fn row() -> gpui::Div {
     div().flex().items_center()
 }
+/// Keep detail content mounted while softening only its first paint. The
+/// wrapper adds no id, focus handle or hit area, so selection, scroll and
+/// accessibility nodes are unchanged.
+fn content_fade(body: AnyElement, opacity: f32) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .when(opacity < 1.0, |wrapper| wrapper.opacity(opacity))
+        .child(body)
+        .into_any_element()
+}
 fn command_row(p: Palette) -> gpui::Div {
     row()
         .w_full()
@@ -443,6 +455,7 @@ impl Launcher {
         p: Palette,
         narrow: bool,
         stack_targets: bool,
+        detail_opacity: f32,
         cx: &Context<Self>,
     ) -> AnyElement {
         let mut pane = col()
@@ -505,7 +518,7 @@ impl Launcher {
         let pane =
             if self.review {
                 let detail = self.accessibility.group(
-                    self.fixture_detail(p, cx),
+                    self.fixture_detail(p, detail_opacity, cx),
                     format!("fixture-{:?}", self.fixture),
                     self.selected_fixture()
                         .map_or("Review fixture", |item| item.name),
@@ -514,7 +527,7 @@ impl Launcher {
                 pane.child(detail).into_any_element()
             } else if let Some(profile) = self.selected_profile() {
                 let detail = self.accessibility.group(
-                    self.personal_detail(profile, p, narrow, stack_targets, cx),
+                    self.personal_detail(profile, p, narrow, stack_targets, detail_opacity, cx),
                     format!("profile-{}", profile.id),
                     &profile.name,
                     Role::Group,
@@ -567,6 +580,7 @@ impl Launcher {
         p: Palette,
         narrow: bool,
         stack_targets: bool,
+        detail_opacity: f32,
         cx: &Context<Self>,
     ) -> AnyElement {
         let setup = self.setup.get(&profile.id);
@@ -1174,7 +1188,7 @@ impl Launcher {
                 self.tab == Tab::Overview && profile.server_address.is_some(),
                 |detail| detail.child(self.server_details(profile, p, cx)),
             )
-            .child(body)
+            .child(content_fade(body, detail_opacity))
             .when(self.tab == Tab::Settings, |detail| {
                 detail.child(self.server_details(profile, p, cx))
             })
@@ -1780,7 +1794,7 @@ impl Launcher {
         self.accessibility
             .group(strip, "workspace-tabs", "Workspace sections", Role::TabList)
     }
-    fn fixture_detail(&self, p: Palette, cx: &Context<Self>) -> AnyElement {
+    fn fixture_detail(&self, p: Palette, detail_opacity: f32, cx: &Context<Self>) -> AnyElement {
         let disabled = self.fixture_busy() || self.fixture_issue.is_some();
         let Some(item) = self.selected_fixture() else {
             return col()
@@ -1943,7 +1957,7 @@ impl Launcher {
                     ))),
             )
             .child(self.workspace_tabs(&[Tab::Overview, Tab::Storage, Tab::Settings], p, cx))
-            .child(body)
+            .child(content_fade(body.into_any_element(), detail_opacity))
             .into_any_element()
     }
 }
@@ -1951,6 +1965,16 @@ impl Launcher {
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_home_artwork(self.surface == super::Surface::Home, window, cx);
+        let now = Instant::now();
+        // Read the platform signal only while a cue is moving. Idle paints and
+        // theme swaps never poll it and never request an extra frame.
+        let moving = self.navigation_settle.active(now) || self.detail_settle.active(now);
+        let reduced = moving && self.reduced_motion();
+        let (navigation_opacity, navigation_frame) = self.navigation_settle.sample(now, reduced);
+        let (detail_opacity, detail_frame) = self.detail_settle.sample(now, reduced);
+        if navigation_frame || detail_frame {
+            window.request_animation_frame();
+        }
         let p = Palette::read(self.preference, window.appearance());
         if self.applied_dark != Some(p.dark) {
             self.applied_dark = Some(p.dark);
@@ -2029,11 +2053,23 @@ impl Render for Launcher {
                         p,
                         narrow,
                         narrow || f32::from(window.viewport_size().width) - self.rail_width < 620.,
+                        detail_opacity,
                         cx,
                     ))
                 })
                 .into_any_element()
         };
+        // The destination body stays mounted and interactive throughout; this
+        // wrapper only softens its first paint after an explicit switch.
+        let body = div()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .when(navigation_opacity < 1.0, |body| {
+                body.opacity(navigation_opacity)
+            })
+            .child(body)
+            .into_any_element();
         let frame = col()
             .id("launcher-frame")
             .size_full()
