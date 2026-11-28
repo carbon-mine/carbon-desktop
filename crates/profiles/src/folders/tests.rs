@@ -148,21 +148,21 @@ fn saved_folder_json_uses_stable_typed_kinds_and_scopes() {
     assert!(stored["revision"].is_string());
     let folders = stored["folders"].as_array().unwrap();
     assert_eq!(folders.len(), 2);
-    let local = folders
+    let local_json = folders
         .iter()
         .find(|folder| folder["label"] == "Local")
         .unwrap();
-    assert_eq!(local["scope"], "instances");
-    assert_eq!(local["members"][0]["kind"], "instance");
-    assert_eq!(local["members"][0]["id"], id.to_string());
-    let adventure = folders
+    assert_eq!(local_json["scope"], "instances");
+    assert_eq!(local_json["members"][0]["kind"], "instance");
+    assert_eq!(local_json["members"][0]["id"], id.to_string());
+    let adventure_json = folders
         .iter()
         .find(|folder| folder["label"] == "Adventure")
         .unwrap();
-    assert_eq!(adventure["scope"], "worlds");
-    assert_eq!(adventure["members"][0]["kind"], "world");
-    assert_eq!(adventure["members"][0]["instance"], id.to_string());
-    assert_eq!(adventure["members"][0]["directory"], "Home");
+    assert_eq!(adventure_json["scope"], "worlds");
+    assert_eq!(adventure_json["members"][0]["kind"], "world");
+    assert_eq!(adventure_json["members"][0]["instance"], id.to_string());
+    assert_eq!(adventure_json["members"][0]["directory"], "Home");
     let adventure_view = filled
         .folders
         .iter()
@@ -565,6 +565,33 @@ fn stale_writes_and_untrusted_folder_files_fail_closed() {
                 "label": "Wrong scope",
                 "scope": "worlds",
                 "members": [{"kind": "instance", "id": id.to_string()}]
+            }]
+        }))
+        .unwrap(),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "revision": null,
+            "folders": [{
+                "id": Uuid::new_v4().to_string(),
+                "label": "Extra member field",
+                "scope": "instances",
+                "members": [{"kind": "instance", "id": id.to_string(), "extra": 1}]
+            }]
+        }))
+        .unwrap(),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "revision": null,
+            "folders": [{
+                "id": Uuid::new_v4().to_string(),
+                "label": "Mixed member shape",
+                "scope": "worlds",
+                "members": [{
+                    "kind": "world",
+                    "id": id.to_string(),
+                    "instance": id.to_string(),
+                    "directory": "Home"
+                }]
             }]
         }))
         .unwrap(),

@@ -10,7 +10,7 @@ use crate::{
     targets::{save_presence, valid_label, SavePresence},
     validate_target_label, Library,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -37,11 +37,42 @@ pub enum FolderScope {
 
 /// A typed reference to an existing library item. A world uses the shared
 /// composite identity: backing instance UUID plus the exact save directory.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FolderMember {
     Instance { id: Uuid },
     World { instance: Uuid, directory: String },
+}
+
+/// Serde's internally tagged enums ignore unknown fields, so a member is read
+/// through this strict shape before it can reach validation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawMember {
+    kind: String,
+    #[serde(default)]
+    id: Option<Uuid>,
+    #[serde(default)]
+    instance: Option<Uuid>,
+    #[serde(default)]
+    directory: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for FolderMember {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawMember::deserialize(deserializer)?;
+        match (raw.kind.as_str(), raw.id, raw.instance, raw.directory) {
+            ("instance", Some(id), None, None) => Ok(Self::Instance { id }),
+            ("world", None, Some(instance), Some(directory)) => Ok(Self::World {
+                instance,
+                directory,
+            }),
+            ("instance" | "world", ..) => {
+                Err(de::Error::custom("Folder members have unexpected fields."))
+            }
+            (kind, ..) => Err(de::Error::unknown_variant(kind, &["instance", "world"])),
+        }
+    }
 }
 
 impl FolderMember {
