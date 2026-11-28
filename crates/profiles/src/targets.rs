@@ -80,7 +80,7 @@ struct Preferences {
     world_labels: BTreeMap<String, String>,
 }
 
-fn valid_label(label: &str, max: usize) -> bool {
+pub(crate) fn valid_label(label: &str, max: usize) -> bool {
     (1..=max).contains(&label.chars().count())
         && !label.chars().any(|ch| ch.is_control() || matches!(ch,
             '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
@@ -202,6 +202,23 @@ impl WorldScan {
             present,
             issue: Some(issue.into()),
         }
+    }
+}
+
+/// Observe one instance's saves directory without following links. Folder
+/// resolution uses the same scan as the launch-target chooser.
+#[derive(Clone, Debug)]
+pub(crate) struct SavePresence {
+    pub(crate) present: HashSet<String>,
+    /// False when at least one entry could not be inspected safely.
+    pub(crate) complete: bool,
+}
+
+pub(crate) fn save_presence(root: &Path, id: Uuid) -> SavePresence {
+    let scan = inventory(root, id);
+    SavePresence {
+        present: scan.present,
+        complete: scan.issue.is_none(),
     }
 }
 

@@ -1,11 +1,16 @@
 //! Personal vanilla launch preferences. Profile display names never become paths.
 mod folder;
+mod folders;
 pub mod icons;
 mod server;
 mod storage;
 mod targets;
 pub mod world_preview;
 pub use folder::open_game_folder;
+pub use folders::{
+    change_folders, folders, FolderAction, FolderEntry, FolderMember, FolderScope, FolderSnapshot,
+    FolderView, MemberResolution,
+};
 pub use server::{
     server_profile, set_server_address, ServerAddress, ServerBindingUpdate, ServerJoinReadiness,
 };
