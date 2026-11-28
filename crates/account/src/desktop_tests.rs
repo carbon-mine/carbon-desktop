@@ -616,6 +616,14 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
     });
     assert_eq!(simulation.pending_persona(), Some(Persona::Forest));
     assert!(
+        accounts
+            .snapshot()
+            .message
+            .contains("Simulated authorization"),
+        "the pending step must not ask for a real browser"
+    );
+    assert!(!accounts.snapshot().message.contains("Open the browser"));
+    assert!(
         accounts.open_browser().is_err(),
         "the simulated service must reject a real browser action"
     );
@@ -624,6 +632,10 @@ fn simulated_accounts_sign_in_switch_restore_deny_and_remove() {
     assert_eq!(
         accounts.snapshot().active_account,
         Some(Persona::Forest.profile_id())
+    );
+    assert_eq!(
+        accounts.snapshot().message,
+        "Synthetic test account verified."
     );
     assert!(
         root.path().join("synthetic-credentials.json").is_file(),

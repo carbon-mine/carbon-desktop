@@ -303,6 +303,17 @@ impl Core {
         }
     }
 
+    fn is_simulated(&self) -> bool {
+        #[cfg(feature = "dev-simulation")]
+        {
+            matches!(self.backend, Backend::Simulated(_))
+        }
+        #[cfg(not(feature = "dev-simulation"))]
+        {
+            false
+        }
+    }
+
     fn complete(&self, ticket: Ticket, status: AccountState, message: impl Into<String>) {
         let mut state = self.state();
         if state.current(ticket) {
@@ -756,7 +767,12 @@ fn sign_in(core: &Core, ticket: Ticket, client_id: Uuid, vault: Option<&Vault>) 
                 code: challenge.user_code.clone(),
             });
             state.status = AccountState::AwaitingBrowser;
-            state.message = "Open the browser and enter this code to authorize Carbon.".into();
+            state.message = if core.is_simulated() {
+                "Simulated authorization is pending. Use the approval controls in this dialog; no browser or real code is used."
+                    .into()
+            } else {
+                "Open the browser and enter this code to authorize Carbon.".into()
+            };
         }
         loop {
             match client.poll(&mut login, cancelled)? {
@@ -807,6 +823,11 @@ fn publish(
     state.entitlement_denials.remove(&id);
     state.live.insert(id, account);
     let status = state.stable_status();
+    let message = if core.is_simulated() {
+        "Synthetic test account verified."
+    } else {
+        message
+    };
     state.finish(status, message);
 }
 
@@ -1005,7 +1026,12 @@ fn remove(core: &Core, ticket: Ticket, id: Uuid, vault: Option<&Vault>) {
                     .or_else(|| state.live.keys().next().copied());
             }
             let status = state.stable_status();
-            state.finish(status, ACCOUNT_REMOVED);
+            let message = if core.is_simulated() {
+                "The synthetic test account was removed from Carbon Desktop."
+            } else {
+                ACCOUNT_REMOVED
+            };
+            state.finish(status, message);
         }
         Err(()) => {
             state.retry_removals.insert(id);
