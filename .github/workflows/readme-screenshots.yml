@@ -130,19 +130,6 @@ jobs:
           }
           Write-Host "Verified $($ids.Count) screenshots"
 
-      - name: Prepare Pages artifact
-        if: steps.meta.outputs.should_deploy == 'true'
-        shell: pwsh
-        run: |
-          $src = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
-          $site = Join-Path $env:RUNNER_TEMP 'readme-screenshots-site'
-          if (Test-Path $site) { Remove-Item -Recurse -Force $site }
-          New-Item -ItemType Directory -Force -Path $site | Out-Null
-          Copy-Item -LiteralPath (Join-Path $src '*.png') -Destination $site
-          $images = @(Get-ChildItem -LiteralPath $site -File)
-          if ($images.Count -eq 0) { throw 'No screenshot images found for Pages artifact' }
-          if ($images | Where-Object { $_.Extension -ne '.png' }) { throw 'Pages artifact must be image-only' }
-
       - name: Upload screenshot artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -150,45 +137,3 @@ jobs:
           path: ${{ runner.temp }}/readme-screenshots
           if-no-files-found: error
           retention-days: 14
-
-      - name: Upload Pages artifact
-        if: steps.meta.outputs.should_deploy == 'true'
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: ${{ runner.temp }}/readme-screenshots-site
-
-  deploy:
-    name: Deploy README screenshots to GitHub Pages
-    needs: capture
-    if: needs.capture.outputs.should_deploy == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    concurrency:
-      group: readme-screenshots-pages
-      cancel-in-progress: false
-    steps:
-      - name: Verify capture SHA is still tip of origin/main
-        shell: bash
-        env:
-          CAPTURE_SHA: ${{ needs.capture.outputs.capture_sha }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          tip="$(git ls-remote "https://github.com/${REPO}.git" refs/heads/main | cut -f1)"
-          if [[ "$CAPTURE_SHA" != "$tip" ]]; then
-            echo "::error::Capture SHA $CAPTURE_SHA is not tip of origin/main ($tip); refusing deploy."
-            exit 1
-          fi
-
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
