@@ -12,9 +12,9 @@
   </p>
 </div>
 
-![Carbon Desktop library showing local instances in a wide window](docs/images/gpui-library.png)
+![Carbon Desktop library showing local instances in a wide window](https://carbon-mine.github.io/carbon-desktop/library-wide.png)
 
-*A wide library view in the GPUI edition. Automated capture is wired for GitHub Pages publishing from protected main; the bundled `docs/images/gpui-library.png` image is the rendered image until the first public publish is verified and README URLs are switched in a follow-up.*
+*A wide library view in the GPUI edition, captured automatically from the latest protected `main` build. See [README screenshots](docs/readme-screenshots/README.md) for the pipeline, and the published `manifest.json` for the capture commit it came from.*
 
 ## What you can do
 
@@ -25,8 +25,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/images/gpui-narrow-library.png" width="390" alt="Carbon Desktop library list in a compact window"></td>
-    <td><img src="docs/images/gpui-narrow-instance.png" width="390" alt="Carbon Desktop selected instance details in a compact window"></td>
+    <td><img src="https://carbon-mine.github.io/carbon-desktop/library-compact.png" width="390" alt="Carbon Desktop library list in a compact window"></td>
+    <td><img src="https://carbon-mine.github.io/carbon-desktop/instance-compact.png" width="390" alt="Carbon Desktop selected instance details in a compact window"></td>
   </tr>
   <tr>
     <td align="center">Search and select an instance.</td>
@@ -34,7 +34,7 @@
   </tr>
 </table>
 
-*Compact screenshots use the bundled `docs/images/gpui-narrow-library.png` and `docs/images/gpui-narrow-instance.png` images until the first GitHub Pages publish is verified and README URLs are switched in a follow-up.*
+*Compact screenshots are captured from the same protected `main` build, with the previously bundled `docs/images/gpui-*.png` screenshots kept in the repository if the published images are unavailable.*
 
 ## Quick start
 
