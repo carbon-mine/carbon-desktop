@@ -1,0 +1,39 @@
+diff --git a/crates/gpui-launcher/src/main.rs b/crates/gpui-launcher/src/main.rs
+index b32c915..337b092 100644
+--- a/crates/gpui-launcher/src/main.rs
++++ b/crates/gpui-launcher/src/main.rs
+@@ -229,7 +229,11 @@ impl Launcher {
+             }
+         })
+         .detach();
+-        let preference = shell::preference(&root.path);
++        let preference = if std::env::var_os("CARBON_SURFACE_STUDY").is_some() {
++            Preference::Dark
++        } else {
++            shell::preference(&root.path)
++        };
+         #[cfg(windows)]
+         let native_menu = shell::NativeMenu::install(window, cx, preference);
+         #[cfg(windows)]
+diff --git a/crates/gpui-launcher/src/theme.rs b/crates/gpui-launcher/src/theme.rs
+index 0ece3b2..3e3f4dd 100644
+--- a/crates/gpui-launcher/src/theme.rs
++++ b/crates/gpui-launcher/src/theme.rs
+@@ -240,6 +240,17 @@ impl Palette {
+         if !self.dark || crate::shell::high_contrast() {
+             return gpui::solid_background(self.layer);
+         }
++        match std::env::var("CARBON_SURFACE_STUDY").as_deref() {
++            Ok("flat") => return gpui::solid_background(self.layer),
++            Ok("subtle") => {
++                return linear_gradient(
++                    180.,
++                    linear_color_stop(rgb(0x2f2f2f), 0.),
++                    linear_color_stop(self.layer, 0.28),
++                );
++            }
++            _ => {}
++        }
+         // A quiet neutral falloff at the head of the workspace, from the Carbon landing palette.
+         linear_gradient(
+             180.,
