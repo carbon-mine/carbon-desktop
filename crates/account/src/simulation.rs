@@ -16,6 +16,7 @@ use serde_json::json;
 use std::{
     collections::BTreeMap,
     fs,
+    io::Write,
     path::Path,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
@@ -81,7 +82,7 @@ pub fn root_is_marked(root: &Path) -> bool {
 pub fn mark_root(root: &Path) -> Result<(), String> {
     match read_root_marker(root) {
         Ok(_) => Ok(()),
-        Err(()) if !root.join(ROOT_MARKER_FILE).exists() => {
+        Err(()) => {
             let marker = RootMarker {
                 version: ROOT_MARKER_VERSION,
                 kind: ROOT_MARKER_KIND.to_owned(),
@@ -89,11 +90,18 @@ pub fn mark_root(root: &Path) -> Result<(), String> {
             };
             let bytes = serde_json::to_vec_pretty(&marker)
                 .map_err(|_| "The developer account marker could not be serialized.".to_owned())?;
-            fs::write(root.join(ROOT_MARKER_FILE), bytes)
+            let path = root.join(ROOT_MARKER_FILE);
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|_| {
+                    "The developer account marker exists but is unreadable or unsupported."
+                        .to_owned()
+                })?;
+            file.write_all(&bytes)
+                .and_then(|()| file.sync_all())
                 .map_err(|_| "The developer account marker could not be written.".to_owned())
-        }
-        Err(()) => {
-            Err("The developer account root has an unreadable or unsupported marker.".to_owned())
         }
     }
 }

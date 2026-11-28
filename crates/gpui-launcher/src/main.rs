@@ -2007,15 +2007,20 @@ fn argument_value(
 }
 
 #[cfg(feature = "dev-account-simulation")]
-fn simulation_startup_precheck() -> anyhow::Result<()> {
+fn simulation_startup_precheck(fixture_root: Option<&std::path::Path>) -> anyhow::Result<()> {
     if !cfg!(debug_assertions) {
         anyhow::bail!("--dev-account-simulation is restricted to a debug or test build.");
+    }
+    if fixture_root.is_none() {
+        anyhow::bail!(
+            "--dev-account-simulation requires an explicit --fixture-root; implicit default fixture roots are only for ordinary fixture seeding."
+        );
     }
     Ok(())
 }
 
 #[cfg(not(feature = "dev-account-simulation"))]
-fn simulation_startup_precheck() -> anyhow::Result<()> {
+fn simulation_startup_precheck(_: Option<&std::path::Path>) -> anyhow::Result<()> {
     anyhow::bail!(
         "--dev-account-simulation requires a build with the non-default dev-account-simulation feature."
     )
@@ -2071,7 +2076,7 @@ fn main() -> anyhow::Result<()> {
         );
     }
     if dev_account_simulation {
-        simulation_startup_precheck()?;
+        simulation_startup_precheck(fixture_root.as_deref())?;
         if comparison || temporary || seed {
             anyhow::bail!(
                 "--dev-account-simulation is separate from --comparison-review, --temporary-review and --seed-review."
@@ -2079,11 +2084,6 @@ fn main() -> anyhow::Result<()> {
         }
         if seed_only {
             anyhow::bail!("--dev-account-simulation requires opening the window, not --seed-only.");
-        }
-        if fixture_set.is_none() && fixture_root.is_none() {
-            anyhow::bail!(
-                "--dev-account-simulation requires an explicit --fixture-root (for example a seeded dev-fixtures set)."
-            );
         }
     }
     // Capture-only: allow window resizing for deterministic screenshot capture.
@@ -2221,6 +2221,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         assert!(account_mode_for(true, root.path()).is_err());
         assert!(account_mode_for(false, root.path()).is_ok());
+    }
+
+    #[test]
+    fn simulated_startup_rejects_a_missing_explicit_root() {
+        assert!(simulation_startup_precheck(None).is_err());
     }
 
     #[test]
