@@ -392,6 +392,12 @@ impl Accounts {
         self.custom_client_allowed() && self.root.as_deref().and_then(client::load).is_some()
     }
 
+    /// The stored opt-in differs from the registration used by the running worker.
+    pub fn custom_client_pending_restart(&self) -> bool {
+        self.compiled.is_none()
+            && self.root.as_deref().and_then(client::load) != self.owner.0.registration
+    }
+
     /// Validate and persist only a public application ID. Errors never echo input.
     pub fn set_custom_client(&self, value: &str) -> Result<(), String> {
         let root = self
@@ -542,11 +548,6 @@ fn configured_client() -> Option<Uuid> {
     option_env!("CARBON_MICROSOFT_CLIENT_ID")
         .and_then(|value| Uuid::parse_str(value).ok())
         .filter(|id| !id.is_nil())
-}
-
-/// Reports whether this build or the app-owned per-install setting has a public client ID.
-pub fn sign_in_configured(root: &Path) -> bool {
-    resolve_client(configured_client(), client::load(root)).is_some()
 }
 
 fn resolve_client(

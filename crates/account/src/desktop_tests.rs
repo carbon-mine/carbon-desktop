@@ -72,6 +72,7 @@ fn custom_client_is_validated_persisted_and_used_after_restart() {
         !no_config.custom_client_active(),
         "a restart applies the setting"
     );
+    assert!(no_config.custom_client_pending_restart());
     drop(no_config);
 
     let restarted = Accounts::start(Some(root.path()), None);
@@ -79,6 +80,7 @@ fn custom_client_is_validated_persisted_and_used_after_restart() {
     assert_eq!(restarted.source, Some(RegistrationSource::Custom));
     assert!(restarted.custom_client_active());
     assert!(restarted.custom_client_configured());
+    assert!(!restarted.custom_client_pending_restart());
 
     restarted.clear_custom_client().unwrap();
     assert!(client::load(root.path()).is_none());
@@ -87,11 +89,13 @@ fn custom_client_is_validated_persisted_and_used_after_restart() {
         restarted.custom_client_active(),
         "the running worker keeps its original registration until restart"
     );
+    assert!(restarted.custom_client_pending_restart());
     drop(restarted);
 
     let cleared = Accounts::start(Some(root.path()), None);
     assert_eq!(cleared.owner.0.registration, None);
     assert_eq!(cleared.snapshot().state, AccountState::Unavailable);
+    assert!(!cleared.custom_client_pending_restart());
 }
 
 #[test]

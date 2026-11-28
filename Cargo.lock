@@ -995,7 +995,6 @@ dependencies = [
 name = "carbon-setup"
 version = "0.0.0"
 dependencies = [
- "carbon-account",
  "carbon-profiles",
  "carbon-runtime",
  "carbon-session",

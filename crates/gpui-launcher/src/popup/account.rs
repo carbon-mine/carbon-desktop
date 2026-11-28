@@ -16,7 +16,9 @@ use uuid::Uuid;
 const CLIENT_HELP: &str = "Enter a public client ID you control that Minecraft approved for sign-in from this Carbon Desktop deployment. This is a public application ID, not a client secret or token.";
 const CLIENT_CONFIRM: &str = "I confirm this public client ID is mine and is approved for Minecraft sign-in from this deployment.";
 const CLIENT_RESTART: &str =
-    "A per-install public client ID is saved. Restart Carbon Desktop to apply a change.";
+    "A per-install public client ID is saved. Restart Carbon Desktop to apply it.";
+const CLIENT_CLEARED_RESTART: &str =
+    "The per-install public client ID was removed. Restart Carbon Desktop to stop using it.";
 
 pub(super) struct AccountDialog {
     pub panel: Entity<AccountPanel>,
@@ -296,13 +298,20 @@ impl Popup {
                             this.open_client_entry(window, cx)
                         }),
                     );
-                if has_setting {
+                if panel.custom_client_pending_restart() {
+                    let restart = if has_setting {
+                        CLIENT_RESTART
+                    } else {
+                        CLIENT_CLEARED_RESTART
+                    };
                     content = content.child(self.accessibility.text(
-                        div().text_sm().text_color(p.muted).child(CLIENT_RESTART),
+                        div().text_sm().text_color(p.muted).child(restart),
                         "account-client-restart",
-                        CLIENT_RESTART,
+                        restart,
                         Role::Status,
                     ));
+                }
+                if has_setting {
                     content = content.child(self.account_button(
                         "account-client-clear",
                         "Clear approved client ID",
@@ -327,13 +336,14 @@ impl Popup {
             );
         }
         if panel.unavailable() {
-            content = content.child(self.accessibility.text(
-                div()
-                    .text_sm()
-                    .text_color(self.palette.muted)
-                    .child("Opens the installed Minecraft Launcher, or the official download page if it is not installed."),
+            content = content.child(
+                self.accessibility.text(
+                    div()
+                        .text_sm()
+                        .text_color(self.palette.muted)
+                        .child("Opens the installed Minecraft Launcher on Windows when available, or the official download page."),
                 "account-launcher-fallback",
-                "Opens the installed Minecraft Launcher, or the official download page if it is not installed.",
+                "Opens the installed Minecraft Launcher on Windows when available, or the official download page.",
                 Role::Label,
             ));
         } else if matches!(view.state, AccountState::Error) || view.accounts.is_empty() {

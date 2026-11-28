@@ -102,11 +102,7 @@ pub fn report(root: &Path, meta: carbon_vanilla::PreparedVersion) -> Result<Setu
     if client_file.version != meta.version {
         return Err("The selected version changed. Recheck setup.".into());
     }
-    let mut blocked_reasons = Vec::new();
-    if !carbon_account::desktop::sign_in_configured(root) {
-        blocked_reasons.push("Minecraft account sign-in is not configured for this build.");
-    }
-    blocked_reasons.push("Protected Minecraft launch is unavailable in this build.");
+    let blocked_reasons = vec!["Protected Minecraft launch is unavailable in this build."];
     let game_files_cached = carbon_vanilla::has_game_install(root, meta.profile_id)?;
     let game_files_prepared =
         game_files_cached && carbon_vanilla::has_instance_view(root, meta.profile_id)?;

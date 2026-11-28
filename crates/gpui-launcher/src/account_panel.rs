@@ -137,6 +137,10 @@ impl AccountPanel {
         self.service.custom_client_configured()
     }
 
+    pub fn custom_client_pending_restart(&self) -> bool {
+        self.service.custom_client_pending_restart()
+    }
+
     pub fn set_custom_client(&self, value: &str) -> Result<(), String> {
         self.service.set_custom_client(value)
     }
@@ -301,10 +305,12 @@ mod tests {
             !panel.custom_client_active(),
             "a restart applies the setting"
         );
+        assert!(panel.custom_client_pending_restart());
         assert_eq!(panel.toolbar_label(), "Minecraft account");
 
         panel.clear_custom_client().unwrap();
         assert!(!panel.custom_client_configured());
         assert!(!panel.custom_client_active());
+        assert!(!panel.custom_client_pending_restart());
     }
 }

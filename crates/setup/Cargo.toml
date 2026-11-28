@@ -5,7 +5,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-carbon-account = { path = "../account" }
 carbon-profiles = { path = "../profiles" }
 carbon-runtime = { path = "../runtime" }
 carbon-session = { path = "../session" }
