@@ -670,9 +670,13 @@ impl Launcher {
     }
     fn switch_view(&mut self, review: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.show_surface(Surface::Library, window, cx);
+        let changes_detail = self.review != review;
         self.tab = Tab::Overview;
         self.review = review;
         self.show_detail = false;
+        if changes_detail {
+            self.begin_detail_settle();
+        }
         self.search_back_to_detail = false;
         self.search
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -917,9 +921,6 @@ impl Launcher {
         self.personal = Some(id);
         self.review = false;
         self.show_detail = true;
-        if changes_detail {
-            self.begin_detail_settle();
-        }
         if !self.targets.contains_key(&id) {
             self.load_targets(id, cx);
         }

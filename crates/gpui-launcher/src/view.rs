@@ -1970,6 +1970,11 @@ impl Render for Launcher {
         // theme swaps never poll it and never request an extra frame.
         let moving = self.navigation_settle.active(now) || self.detail_settle.active(now);
         let reduced = moving && self.reduced_motion();
+        if reduced {
+            // Finish in place so later paints stop polling the platform signal.
+            self.navigation_settle.snap();
+            self.detail_settle.snap();
+        }
         let (navigation_opacity, navigation_frame) = self.navigation_settle.sample(now, reduced);
         let (detail_opacity, detail_frame) = self.detail_settle.sample(now, reduced);
         if navigation_frame || detail_frame {

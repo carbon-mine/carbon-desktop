@@ -17,8 +17,9 @@ pub(crate) const SETTLE: Duration = Duration::from_millis(83);
 /// this window stays instant and extends the window.
 const REPEAT_QUIET: Duration = Duration::from_millis(250);
 /// The softest incoming content becomes. Content is always readable and
-/// interactive, so there is no empty staging frame.
-const MIN_OPACITY: f32 = 0.6;
+/// interactive, so there is no empty staging frame. The floor stays high
+/// enough to preserve focus-ring and muted-text contrast at every sample.
+const MIN_OPACITY: f32 = 0.85;
 
 #[derive(Clone, Copy, Debug)]
 struct Fade {

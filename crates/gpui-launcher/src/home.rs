@@ -1043,8 +1043,15 @@ impl Launcher {
         }
     }
 
+    /// Select an instance from an explicit user action. Background reloads and
+    /// save completions use `choose_personal` directly so data arrival never
+    /// starts a transition.
     pub(super) fn select_personal(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let changes_detail = self.personal != Some(id) || self.review;
         self.choose_personal(id, cx);
+        if changes_detail {
+            self.begin_detail_settle();
+        }
         self.remember_recent(id);
     }
 
