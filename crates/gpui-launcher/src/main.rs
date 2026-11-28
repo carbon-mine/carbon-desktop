@@ -2063,6 +2063,7 @@ fn main() -> anyhow::Result<()> {
         let (initial, display_id) = shell::initial_bounds(&data.path, cx);
         #[cfg(target_os = "linux")]
         let fitted_size = initial.get_bounds().size;
+        let screenshot_mode = std::env::var_os("CARBON_README_SCREENSHOT").is_some();
         cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
@@ -2071,8 +2072,12 @@ fn main() -> anyhow::Result<()> {
                 }),
                 window_bounds: Some(initial),
                 display_id,
-                is_resizable: false,
-                window_min_size: Some(initial.get_bounds().size),
+                is_resizable: screenshot_mode,
+                window_min_size: if screenshot_mode {
+                    None
+                } else {
+                    Some(initial.get_bounds().size)
+                },
                 window_decorations: Some(WindowDecorations::Server),
                 app_id: Some("dev.carbonmine.gpui".into()),
                 show: !cfg!(windows),

@@ -12,9 +12,12 @@
   </p>
 </div>
 
-![Carbon Desktop on Windows with a 100-instance library, a selected Vanilla survival instance, and its Review install action](docs/images/gpui-library.png)
+<picture>
+  <source srcset="https://carbon-mine.github.io/carbon-desktop/library-wide.png">
+  <img src="docs/images/gpui-library.png" alt="Carbon Desktop library showing local instances in a wide window">
+</picture>
 
-*A disposable library in the GPUI edition. The selected instance shows its Minecraft version, Java requirement, and next setup action.*
+*A wide library view in the GPUI edition. The automated screenshot is published from protected main; the bundled `docs/images/gpui-library.png` image is the documented fallback until the first public publish is verified.*
 
 ## What you can do
 
@@ -25,14 +28,26 @@
 
 <table>
   <tr>
-    <td><img src="docs/images/gpui-narrow-library.png" width="390" alt="A narrow Carbon Desktop window showing search and the populated local instance list"></td>
-    <td><img src="docs/images/gpui-narrow-instance.png" width="390" alt="The same narrow window showing the selected Vanilla survival instance, Back to library, and Review install"></td>
+    <td>
+      <picture>
+        <source srcset="https://carbon-mine.github.io/carbon-desktop/library-compact.png">
+        <img src="docs/images/gpui-narrow-library.png" width="390" alt="Carbon Desktop library list in a compact window">
+      </picture>
+    </td>
+    <td>
+      <picture>
+        <source srcset="https://carbon-mine.github.io/carbon-desktop/instance-compact.png">
+        <img src="docs/images/gpui-narrow-instance.png" width="390" alt="Carbon Desktop selected instance details in a compact window">
+      </picture>
+    </td>
   </tr>
   <tr>
     <td align="center">Search and select an instance.</td>
     <td align="center">Review setup in the selected instance.</td>
   </tr>
 </table>
+
+*Compact screenshots are published from protected main to GitHub Pages; the bundled `docs/images/gpui-narrow-library.png` and `docs/images/gpui-narrow-instance.png` images remain the documented fallback until the first public publish is verified.*
 
 ## Quick start
 

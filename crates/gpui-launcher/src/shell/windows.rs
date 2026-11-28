@@ -29,6 +29,9 @@ pub fn configure_renderer() {
 /// Suppress native size/maximize commands for the main HWND. The creation
 /// style already omits resize borders. Move and minimize keep normal handling.
 pub(super) fn configure_fixed_window(window: &Window) {
+    if std::env::var_os("CARBON_README_SCREENSHOT").is_some() {
+        return;
+    }
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::{
         Shell::{DefSubclassProc, SetWindowSubclass},

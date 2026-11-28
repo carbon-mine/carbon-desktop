@@ -1,0 +1,194 @@
+name: README screenshots
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/readme-screenshots.yml
+      - scripts/capture-readme-screenshots.ps1
+      - docs/readme-screenshots/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/readme-screenshots.yml
+      - scripts/capture-readme-screenshots.ps1
+      - docs/readme-screenshots/**
+  workflow_run:
+    workflows: [Desktop CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readme-screenshots-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  capture:
+    name: Capture README screenshots
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.1-x86_64-pc-windows-msvc
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: always
+      CAPTURE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+    outputs:
+      capture_sha: ${{ steps.meta.outputs.capture_sha }}
+      should_deploy: ${{ steps.meta.outputs.should_deploy }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ env.CAPTURE_SHA }}
+
+      - name: Record capture metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+        run: |
+          set -euo pipefail
+          echo "capture_sha=$CAPTURE_SHA" >> "$GITHUB_OUTPUT"
+          should_deploy=false
+          if [[ "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
+            should_deploy=true
+          elif [[ "$EVENT_NAME" == "workflow_run" && "$HEAD_BRANCH" == "main" ]]; then
+            should_deploy=true
+          fi
+          if [[ "$EVENT_NAME" == "pull_request" && "$PR_HEAD_REPO" != "$REPO" ]]; then
+            should_deploy=false
+          fi
+          echo "should_deploy=$should_deploy" >> "$GITHUB_OUTPUT"
+
+      - name: Verify captured SHA is still tip of origin/main before deploy
+        if: steps.meta.outputs.should_deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          tip="$(git rev-parse origin/main)"
+          if [[ "$CAPTURE_SHA" != "$tip" ]]; then
+            echo "::error::Capture SHA $CAPTURE_SHA is not tip of origin/main ($tip); refusing deploy."
+            exit 1
+          fi
+
+      - name: Install the Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustc --version --verbose
+          cargo --version
+
+      - name: Build the native GPUI launcher
+        shell: bash
+        run: cargo build --locked -p carbon-desktop-gpui
+
+      - name: Capture README screenshots
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\debug\carbon-desktop-gpui.exe'
+          $out = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
+          $manifest = Join-Path $out 'manifest.json'
+          ./scripts/capture-readme-screenshots.ps1 `
+            -Executable $exe `
+            -OutputDir $out `
+            -ManifestPath $manifest `
+            -CommitSha $env:CAPTURE_SHA `
+            -SourceRef '${{ github.ref }}'
+
+      - name: Verify manifest and image files
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
+          $manifest = Get-Content -LiteralPath (Join-Path $out 'manifest.json') -Raw | ConvertFrom-Json
+          $ids = @($manifest.screenshots | ForEach-Object { $_.id })
+          $required = @('library-wide','library-compact','instance-compact')
+          foreach ($id in $required) {
+            if ($ids -notcontains $id) { throw "Missing screenshot id $id" }
+            $shot = $manifest.screenshots | Where-Object { $_.id -eq $id } | Select-Object -First 1
+            $file = Join-Path $out $shot.file
+            if (-not (Test-Path -LiteralPath $file)) { throw "Missing screenshot file $file" }
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne [string]$shot.sha256) { throw "Hash mismatch for $id" }
+            if ([int]$shot.width -lt 100 -or [int]$shot.height -lt 100) { throw "Unexpected size for $id" }
+          }
+          Write-Host "Verified $($ids.Count) screenshots"
+
+      - name: Prepare Pages artifact
+        if: steps.meta.outputs.should_deploy == 'true'
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:RUNNER_TEMP 'readme-screenshots'
+          $site = Join-Path $env:RUNNER_TEMP 'readme-screenshots-site'
+          if (Test-Path $site) { Remove-Item -Recurse -Force $site }
+          New-Item -ItemType Directory -Force -Path $site | Out-Null
+          Copy-Item -LiteralPath (Join-Path $src '*.png') -Destination $site
+          $images = @(Get-ChildItem -LiteralPath $site -File)
+          if ($images.Count -eq 0) { throw 'No screenshot images found for Pages artifact' }
+          if ($images | Where-Object { $_.Extension -ne '.png' }) { throw 'Pages artifact must be image-only' }
+
+      - name: Upload screenshot artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: readme-screenshots-${{ env.CAPTURE_SHA }}
+          path: ${{ runner.temp }}/readme-screenshots
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Pages artifact
+        if: steps.meta.outputs.should_deploy == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/readme-screenshots-site
+
+  deploy:
+    name: Deploy README screenshots to GitHub Pages
+    needs: capture
+    if: needs.capture.outputs.should_deploy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: readme-screenshots-pages
+      cancel-in-progress: false
+    steps:
+      - name: Verify capture SHA is still tip of origin/main
+        shell: bash
+        env:
+          CAPTURE_SHA: ${{ needs.capture.outputs.capture_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tip="$(git ls-remote "https://github.com/${REPO}.git" refs/heads/main | cut -f1)"
+          if [[ "$CAPTURE_SHA" != "$tip" ]]; then
+            echo "::error::Capture SHA $CAPTURE_SHA is not tip of origin/main ($tip); refusing deploy."
+            exit 1
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
