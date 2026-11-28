@@ -38,7 +38,7 @@ pub enum PlayBlocker {
 impl fmt::Display for PlayBlocker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::RegistrationRequired => "Play requires Carbon's approved Microsoft application registration.",
+            Self::RegistrationRequired => "Configure Minecraft account sign-in before playing.",
             Self::AccountChangePending => "Wait for the current Microsoft account change to finish.",
             Self::AccountRemovalPending => "Finish removing the selected Microsoft account before trying to play.",
             Self::AccountSelectionRequired => "Select your Microsoft account for Minecraft: Java Edition.",

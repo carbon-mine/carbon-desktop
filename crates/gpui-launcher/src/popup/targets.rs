@@ -502,7 +502,7 @@ impl Popup {
                 )
             });
         col.child(div().text_sm().text_color(p.muted).child(
-            "Save a world or server for this instance. Starting Minecraft with a chosen target is still in development."
+            "Save a world or server for this instance. Starting Minecraft with a chosen target is unavailable in this build."
         ))
         .when_some(dialog.message, |col, message| {
             col.child(self.accessibility.text(

@@ -8,6 +8,7 @@ pub struct AccountPanel {
     service: Accounts,
     pub snapshot: AccountView,
     pub browser_error: Option<String>,
+    pub launcher_error: Option<String>,
     dialog_visible: bool,
     monitoring: bool,
 }
@@ -20,6 +21,7 @@ impl AccountPanel {
             service,
             snapshot,
             browser_error: None,
+            launcher_error: None,
             dialog_visible: false,
             monitoring: false,
         }
@@ -30,6 +32,7 @@ impl AccountPanel {
         if self.snapshot != snapshot {
             self.snapshot = snapshot;
             self.browser_error = None;
+            self.launcher_error = None;
             cx.notify();
         }
         if !self.monitoring && self.needs_poll() {
@@ -109,6 +112,31 @@ impl AccountPanel {
         }
     }
 
+    pub fn open_minecraft_download(&mut self, cx: &mut Context<Self>) {
+        self.launcher_error = carbon_account::desktop::open_minecraft_download().err();
+        cx.notify();
+    }
+
+    pub fn custom_client_allowed(&self) -> bool {
+        self.service.custom_client_allowed()
+    }
+
+    pub fn custom_client_active(&self) -> bool {
+        self.service.custom_client_active()
+    }
+
+    pub fn custom_client_configured(&self) -> bool {
+        self.service.custom_client_configured()
+    }
+
+    pub fn set_custom_client(&self, value: &str) -> Result<(), String> {
+        self.service.set_custom_client(value)
+    }
+
+    pub fn clear_custom_client(&self) -> Result<(), String> {
+        self.service.clear_custom_client()
+    }
+
     pub fn signed_in(&self) -> bool {
         self.active_account().is_some_and(|active| active.verified)
     }
@@ -136,12 +164,10 @@ impl AccountPanel {
     }
 
     pub fn toolbar_label(&self) -> &'static str {
-        if self.unavailable() {
-            "Microsoft account"
-        } else if !self.snapshot.accounts.is_empty() || self.pending() {
+        if self.unavailable() || !self.snapshot.accounts.is_empty() || self.pending() {
             "Minecraft account"
         } else {
-            "Sign in with Microsoft"
+            "Sign in"
         }
     }
 
@@ -165,13 +191,13 @@ impl AccountPanel {
 
     pub fn play_hint(&self) -> &'static str {
         if self.unavailable() {
-            "Microsoft sign-in is unavailable. Protected game launch is still in development."
+            "Minecraft account sign-in is not configured. Open account setup or use the Minecraft Launcher."
         } else if self.signed_in() {
-            "This account is signed in. Protected game launch is still in development."
+            "This account is signed in. Protected game launch is unavailable in this build."
         } else if self.active_account().is_some() {
-            "Verify the active Microsoft account. Protected game launch is still in development."
+            "Verify the active Minecraft account. Protected game launch is unavailable in this build."
         } else {
-            "Sign in with Microsoft to check this account. Protected game launch is still in development."
+            "Sign in to check this Minecraft account. Protected game launch is unavailable in this build."
         }
     }
 }
@@ -233,14 +259,44 @@ mod tests {
 
         panel.snapshot.state = AccountState::Unavailable;
         assert!(!panel.can_check());
-        assert_eq!(panel.toolbar_label(), "Microsoft account");
+        assert_eq!(panel.toolbar_label(), "Minecraft account");
         assert!(
             panel
                 .play_hint()
-                .starts_with("Microsoft sign-in is unavailable")
+                .starts_with("Minecraft account sign-in is not configured")
         );
         panel.snapshot.active_account = Some(Uuid::new_v4());
         assert!(panel.active_account().is_none());
         assert!(!panel.signed_in());
+    }
+
+    #[test]
+    fn custom_client_setting_stays_local_and_clears_without_an_account_vault() {
+        let root = tempfile::tempdir().unwrap();
+        let panel = AccountPanel::new(root.path());
+        assert!(
+            panel.custom_client_allowed(),
+            "this test build has no compiled client configuration"
+        );
+        assert!(!panel.custom_client_configured());
+        assert!(!panel.custom_client_active());
+
+        let error = panel.set_custom_client("not-a-uuid").unwrap_err();
+        assert_eq!(error, "Enter a public client ID as a UUID.");
+        assert!(!error.contains("not-a-uuid"));
+        assert!(!panel.custom_client_configured());
+
+        let client = Uuid::new_v4();
+        panel.set_custom_client(&client.to_string()).unwrap();
+        assert!(panel.custom_client_configured());
+        assert!(
+            !panel.custom_client_active(),
+            "a restart applies the setting"
+        );
+        assert_eq!(panel.toolbar_label(), "Minecraft account");
+
+        panel.clear_custom_client().unwrap();
+        assert!(!panel.custom_client_configured());
+        assert!(!panel.custom_client_active());
     }
 }

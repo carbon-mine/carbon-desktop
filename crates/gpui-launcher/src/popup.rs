@@ -124,8 +124,7 @@ pub fn open(launcher: &mut Launcher, kind: Kind, window: &mut Window, cx: &mut C
         Kind::HomeTargets(_) => (432., 320.),
         Kind::Scenery(_) => (432., 296.),
         Kind::ImportPack(..) => (425., 340.),
-        Kind::Account(panel) if panel.read(cx).unavailable() => (244., 214.),
-        Kind::Account(_) => (430., 280.),
+        Kind::Account(_) => (470., 360.),
         Kind::CloseGuard => (360., 186.),
     };
     let bounds = Bounds::centered_at(window.bounds().center(), size(width, px(height)));
@@ -313,7 +312,12 @@ impl Popup {
             }
             Kind::Account(panel) => {
                 focus.focus(window);
-                (None, None, None, Some(AccountDialog::new(panel, cx)))
+                (
+                    None,
+                    None,
+                    None,
+                    Some(AccountDialog::new(panel, window, cx)),
+                )
             }
             Kind::CloseGuard => {
                 focus.focus(window);

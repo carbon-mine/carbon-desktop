@@ -204,7 +204,7 @@ impl Accessibility {
         node.set_label(label.into());
         if let Some(selected) = selected {
             node.set_selected(selected);
-            if role == Role::RadioButton {
+            if matches!(role, Role::RadioButton | Role::CheckBox) {
                 node.set_toggled(Toggled::from(selected));
             }
         }

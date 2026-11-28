@@ -177,7 +177,7 @@ impl ServerJoinReadiness {
         match self {
             Self::NoServer => "Set a server address to keep it with this instance.",
             Self::UnqualifiedPack => "Join server is unavailable. This local pack still needs supported client files or a qualified loader.",
-            Self::ProtectedLaunchUnavailable => "Join server is unavailable while protected Minecraft launch is in development.",
+            Self::ProtectedLaunchUnavailable => "Join server is unavailable while protected Minecraft launch is unavailable.",
         }
     }
 }

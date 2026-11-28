@@ -1,4 +1,5 @@
 use crate::{
+    client,
     play::{self, Clock, Installation, LaunchDecision, PlayBlocker, PlayMode, Selection},
     vault::{SavedAccounts, Secret, Vault, ACCOUNT_LIMIT},
     AccountError, AuthenticatedAccount, DeviceClient, DevicePoll,
@@ -6,7 +7,7 @@ use crate::{
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread,
     time::{Duration, Instant},
@@ -48,6 +49,15 @@ pub struct AccountView {
 #[derive(Clone)]
 pub struct Accounts {
     owner: Arc<Owner>,
+    root: Option<PathBuf>,
+    compiled: Option<Uuid>,
+    source: Option<RegistrationSource>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RegistrationSource {
+    Compiled,
+    Custom,
 }
 
 struct Owner(Arc<Core>);
@@ -313,15 +323,20 @@ impl Accounts {
         Self::start(None, configured_client())
     }
 
-    fn start(root: Option<&Path>, client_id: Option<Uuid>) -> Self {
+    fn start(root: Option<&Path>, compiled: Option<Uuid>) -> Self {
+        let root = root.map(Path::to_path_buf);
+        let custom = root.as_deref().and_then(client::load);
+        let selection = resolve_client(compiled, custom);
+        let client_id = selection.map(|(client_id, _)| client_id);
+        let source = selection.map(|(_, source)| source);
         let mut state = State::new();
         match client_id {
             None => state.finish(
                 AccountState::Unavailable,
-                "Microsoft sign-in requires Carbon's approved application registration.",
+                "Minecraft account sign-in is not configured. Use account setup or the Minecraft Launcher.",
             ),
             Some(_) if root.is_some() => {
-                state.schedule(Job::Restore, "Checking for saved Microsoft accounts.")
+                state.schedule(Job::Restore, "Checking for saved Minecraft accounts.")
             }
             Some(_) => {}
         };
@@ -333,25 +348,76 @@ impl Accounts {
         });
         if let Some(client_id) = client_id {
             let worker = Arc::clone(&core);
-            let root = root.map(Path::to_path_buf);
+            let worker_root = root.clone();
             if thread::Builder::new()
                 .name("carbon-accounts".into())
-                .spawn(move || run(&worker, root.as_deref(), client_id))
+                .spawn(move || run(&worker, worker_root.as_deref(), client_id))
                 .is_err()
             {
                 core.state().finish(
                     AccountState::Unavailable,
-                    "The Microsoft sign-in worker could not start.",
+                    "The sign-in worker could not start.",
                 );
             }
         }
         Self {
             owner: Arc::new(Owner(core)),
+            root,
+            compiled: compiled.filter(|client_id| !client_id.is_nil()),
+            source,
         }
     }
 
     pub fn snapshot(&self) -> AccountView {
         self.owner.0.state().view()
+    }
+
+    /// A compiled Carbon configuration always takes precedence over local opt-in.
+    pub fn compiled_client_configured(&self) -> bool {
+        self.compiled.is_some()
+    }
+
+    /// Per-install configuration is offered only when this build has no compiled ID.
+    pub fn custom_client_allowed(&self) -> bool {
+        self.compiled.is_none() && self.root.is_some()
+    }
+
+    /// The worker currently running in this process was started from the local setting.
+    pub fn custom_client_active(&self) -> bool {
+        self.source == Some(RegistrationSource::Custom)
+    }
+
+    /// A public ID is stored for the next launch. This does not imply it is in use yet.
+    pub fn custom_client_configured(&self) -> bool {
+        self.custom_client_allowed() && self.root.as_deref().and_then(client::load).is_some()
+    }
+
+    /// Validate and persist only a public application ID. Errors never echo input.
+    pub fn set_custom_client(&self, value: &str) -> Result<(), String> {
+        let root = self
+            .root
+            .as_deref()
+            .ok_or_else(|| "This session does not keep per-install account settings.".to_owned())?;
+        if self.compiled.is_some() {
+            return Err("This build already has a compiled client configuration.".to_owned());
+        }
+        let client_id = Uuid::parse_str(value.trim())
+            .map_err(|_| "Enter a public client ID as a UUID.".to_owned())?;
+        if client_id.is_nil() {
+            return Err("Enter a non-zero public client ID.".to_owned());
+        }
+        client::store(root, client_id)
+            .map_err(|_| "The public client ID could not be saved.".to_owned())
+    }
+
+    /// Forget the local opt-in without touching profiles, saves or vault entries.
+    pub fn clear_custom_client(&self) -> Result<(), String> {
+        let root = self
+            .root
+            .as_deref()
+            .ok_or_else(|| "This session does not keep per-install account settings.".to_owned())?;
+        client::clear(root)
+            .map_err(|_| "The per-install client setting could not be cleared.".to_owned())
     }
 
     /// Reports a fixed, redacted reason for this build's unavailable play mode.
@@ -476,6 +542,28 @@ fn configured_client() -> Option<Uuid> {
     option_env!("CARBON_MICROSOFT_CLIENT_ID")
         .and_then(|value| Uuid::parse_str(value).ok())
         .filter(|id| !id.is_nil())
+}
+
+fn resolve_client(
+    compiled: Option<Uuid>,
+    custom: Option<Uuid>,
+) -> Option<(Uuid, RegistrationSource)> {
+    compiled
+        .filter(|client_id| !client_id.is_nil())
+        .map(|client_id| (client_id, RegistrationSource::Compiled))
+        .or_else(|| {
+            custom
+                .filter(|client_id| !client_id.is_nil())
+                .map(|client_id| (client_id, RegistrationSource::Custom))
+        })
+}
+
+pub(crate) const MINECRAFT_DOWNLOAD_URL: &str = "https://www.minecraft.net/en-us/download";
+
+/// Open only the official Minecraft download page on explicit user action.
+pub fn open_minecraft_download() -> Result<(), String> {
+    open::that_detached(MINECRAFT_DOWNLOAD_URL)
+        .map_err(|_| "The system browser could not open the Minecraft download page.".to_owned())
 }
 
 fn run(core: &Core, root: Option<&Path>, client_id: Uuid) {
