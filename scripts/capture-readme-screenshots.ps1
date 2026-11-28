@@ -341,6 +341,28 @@ function Find-UiaElementLike([System.Windows.Automation.AutomationElement]$Root,
     return $null
 }
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CarbonCaptureMouse {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+    public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+}
+'@ -ErrorAction SilentlyContinue
+
+function Click-UiaCenter([System.Windows.Automation.AutomationElement]$Element) {
+    if ($null -eq $Element) { throw 'Cannot click null UIA element' }
+    $r = $Element.Current.BoundingRectangle
+    $x = [int]($r.X + ($r.Width / 2))
+    $y = [int]($r.Y + ($r.Height / 2))
+    [void][CarbonCaptureMouse]::SetCursorPos($x, $y)
+    Start-Sleep -Milliseconds 60
+    [CarbonCaptureMouse]::mouse_event([CarbonCaptureMouse]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
+    [CarbonCaptureMouse]::mouse_event([CarbonCaptureMouse]::MOUSEEVENTF_LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
+}
+
 function Invoke-UiaElement([System.Windows.Automation.AutomationElement]$Element) {
     if ($null -eq $Element) { throw 'Cannot invoke null UIA element' }
     $invokeRef = $null
@@ -355,8 +377,7 @@ function Invoke-UiaElement([System.Windows.Automation.AutomationElement]$Element
         $p.Select()
         return
     }
-    try { $Element.SetFocus() } catch { }
-    throw "Element '$($Element.Current.Name)' has no Invoke or SelectionItem pattern"
+    Click-UiaCenter $Element
 }
 
 function Wait-UiaName([System.Windows.Automation.AutomationElement]$Root, [string]$Name, [int]$TimeoutSeconds = 30) {
@@ -378,6 +399,8 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ("carbon-readme-screenshots-" + [Gu
 $fixtureRoot = Join-Path $work 'fixture-root'
 $readyFile = Join-Path $work 'ready.txt'
 [IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+# Force deterministic dark appearance in the disposable fixture root only.
+Set-Content -LiteralPath (Join-Path $fixtureRoot 'shell-appearance.json') -Value '"dark"' -Encoding utf8
 
 $process = $null
 try {
@@ -479,31 +502,46 @@ try {
         }
     }
 
-    # instance-compact: select a known instance in compact view.
+    # instance-compact: select a known instance in compact view and assert detail pane.
     Capture-State -Id 'instance-compact' -Alt 'Carbon Desktop selected instance details in a compact window' -Width 520 -Height 900 -Prepare {
         $library = Find-UiaElement $root 'Library'
-        if ($null -ne $library) { Invoke-UiaElement $library; Start-Sleep -Milliseconds 300 }
-        # Prefer Vanilla survival row if present; otherwise first instance-like element.
-        $target = Find-UiaElement $root 'Vanilla survival'
-        if ($null -eq $target) {
-            # Try to find by common profile names in default fixtures.
-            foreach ($name in @('Vanilla survival, 26.3', 'Vanilla survival')) {
-                $target = Find-UiaElement $root $name
-                if ($target) { break }
-            }
-        }
-        if ($null -eq $target) {
-            # Fallback: click any element whose name contains "Vanilla survival".
-            $all = $root.FindAll($scope::Descendants, $conditionTrue)
-            for ($i = 0; $i -lt $all.Count; $i++) {
-                $n = $all.Item($i).Current.Name
-                if ($n -and $n -like '*Vanilla survival*') { $target = $all.Item($i); break }
-            }
+        if ($null -eq $library) { $library = Find-UiaElementLike $root '*Library*' }
+        if ($null -ne $library) { Invoke-UiaElement $library; Start-Sleep -Milliseconds 400 }
+        $back = Find-UiaElementLike $root '*Back to library*'
+        if ($null -ne $back) { Invoke-UiaElement $back; Start-Sleep -Milliseconds 400 }
+
+        $target = $null
+        $all = $root.FindAll($scope::Descendants, $conditionTrue)
+        for ($i = 0; $i -lt $all.Count; $i++) {
+            $n = $all.Item($i).Current.Name
+            if ($n -and $n -like '*Vanilla survival*') { $target = $all.Item($i); break }
         }
         if ($null -eq $target) { throw 'Could not find Vanilla survival instance for instance-compact capture' }
-        Invoke-UiaElement $target
-        Start-Sleep -Milliseconds 700
+
+        $invoked = $false
+        try { Invoke-UiaElement $target; $invoked = $true } catch { }
+        Start-Sleep -Milliseconds 500
+        $detail = Find-UiaElementLike $root '*Back to library*'
+        if ($null -eq $detail) {
+            # Fallback: click the element center to drive single-pane navigation.
+            Click-UiaCenter $target
+            Start-Sleep -Milliseconds 700
+            $detail = Find-UiaElementLike $root '*Back to library*'
+        }
+        if ($null -eq $detail) {
+            throw "instance-compact: expected detail view ('Back to library') after selecting instance; invoked=$invoked"
+        }
     }
+
+    # Reject duplicate screens (guards against stale/wrong-state captures).
+    $hashes = @($captures | ForEach-Object { [string]$_.sha256 })
+    $unique = @($hashes | Select-Object -Unique)
+    if ($unique.Count -ne $hashes.Count) {
+        throw "Duplicate screenshot hashes detected: $($hashes -join ', ')"
+    }
+    $detailShot = $captures | Where-Object { $_.id -eq 'instance-compact' } | Select-Object -First 1
+    if ($null -eq $detailShot) { throw 'Missing instance-compact capture' }
+    $detailShot['detailControlVerified'] = 'Back to library'
 
     $shots = @()
     foreach ($c in $captures) { $shots += $c }
@@ -513,6 +551,7 @@ try {
     $manifest['commit'] = [string]$CommitSha
     $manifest['sourceRef'] = [string]$SourceRef
     $manifest['repository'] = 'carbon-mine/carbon-desktop'
+    $manifest['appearance'] = 'dark'
     $manifest['executable'] = [string]$exe
     $manifest['seed'] = [ordered]@{
         fixtures = 'default'

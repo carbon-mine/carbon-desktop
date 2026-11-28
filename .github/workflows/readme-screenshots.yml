@@ -42,7 +42,7 @@ jobs:
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: always
-      CAPTURE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      CAPTURE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || (github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha) }}
     outputs:
       capture_sha: ${{ steps.meta.outputs.capture_sha }}
       should_deploy: ${{ steps.meta.outputs.should_deploy }}
